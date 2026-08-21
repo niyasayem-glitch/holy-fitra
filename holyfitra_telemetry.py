@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -53,6 +54,56 @@ def read_events(root: Path, limit: int = 500) -> list[dict[str, Any]]:
     except OSError:
         return []
     return events
+
+
+@dataclass
+class TelemetryCursor:
+    path: Path | None = None
+    offset: int = 0
+    partial: bytes = b""
+    events: list[dict[str, Any]] | None = None
+
+    def read_new(self, root: Path, limit: int = 500) -> list[dict[str, Any]]:
+        path = telemetry_path(root)
+        if self.path != path:
+            self.path = path
+            self.offset = 0
+            self.partial = b""
+            self.events = []
+        if not path.is_file():
+            return list(self.events or [])
+        try:
+            size = path.stat().st_size
+            if size < self.offset:
+                self.offset = 0
+                self.partial = b""
+                self.events = []
+            with path.open("rb") as handle:
+                handle.seek(self.offset)
+                raw = handle.read()
+                end_offset = handle.tell()
+        except OSError:
+            return list(self.events or [])
+        chunk = self.partial + raw
+        newline = chunk.rfind(b"\n")
+        if newline < 0:
+            self.partial = chunk
+            self.offset = end_offset
+            return list(self.events or [])
+        complete = chunk[: newline + 1].splitlines()
+        self.partial = chunk[newline + 1 :]
+        for line in complete:
+            try:
+                value = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                continue
+            if isinstance(value, dict):
+                if self.events is None:
+                    self.events = []
+                self.events.append(value)
+        self.offset = end_offset
+        self.events = (self.events or [])[-limit:]
+        return list(self.events)
 
 
 def summarize_events(events: list[dict[str, Any]]) -> dict[str, Any]:

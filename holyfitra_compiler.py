@@ -29,9 +29,16 @@ import sys
 import tempfile
 import time
 import tomllib
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
+
+
+_MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
+_MEMORY_COMPILE_CACHE_LIMIT = 32
+_EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, set[str]]]] = OrderedDict()
+_EFFECT_GRAPH_CACHE_LIMIT = 64
 
 
 class HolyFitraError(Exception):
@@ -424,6 +431,14 @@ def _direct_calls_block(statements: tuple[Statement, ...]) -> set[str]:
 
 
 def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    try:
+        cache_key: object = hash(program)
+    except TypeError:
+        cache_key = id(program)
+    cached = _EFFECT_GRAPH_CACHE.get(cache_key)
+    if cached is not None:
+        _EFFECT_GRAPH_CACHE.move_to_end(cache_key)
+        return cached
     functions = {function.name: function for function in program.functions}
     direct = {name: _direct_calls_block(function.body) for name, function in functions.items()}
     for name, calls in direct.items():
@@ -448,7 +463,12 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
 
     for name in functions:
         closure(name)
-    return direct, memo
+    result = (direct, memo)
+    _EFFECT_GRAPH_CACHE[cache_key] = result
+    _EFFECT_GRAPH_CACHE.move_to_end(cache_key)
+    while len(_EFFECT_GRAPH_CACHE) > _EFFECT_GRAPH_CACHE_LIMIT:
+        _EFFECT_GRAPH_CACHE.popitem(last=False)
+    return result
 
 
 def _function_map(program: Program) -> dict[str, Function]:
@@ -735,16 +755,26 @@ def compile_native_file(source_path: Path, cache_dir: Path | None = None, target
     source = source_path.read_text(encoding="utf-8")
     cache_identity = source + "\\0" + (target or "x86_64-pc-linux-gnu")
     digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
+    memory_cached = _MEMORY_COMPILE_CACHE.get(digest)
+    if memory_cached is not None:
+        _MEMORY_COMPILE_CACHE.move_to_end(digest)
+        return memory_cached[0], memory_cached[1], digest
     if cache_dir is None:
         cache_dir = source_path.parent / ".holyfitra" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{digest}.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        return parse_native(source), cached["llvm"], digest
-    program = parse_native(source)
-    llvm = emit_llvm(program, target)
-    cache_path.write_text(json.dumps({"digest": digest, "llvm": llvm}, sort_keys=True), encoding="utf-8")
+        program = parse_native(source)
+        llvm = cached["llvm"]
+    else:
+        program = parse_native(source)
+        llvm = emit_llvm(program, target)
+        cache_path.write_text(json.dumps({"digest": digest, "llvm": llvm}, sort_keys=True), encoding="utf-8")
+    _MEMORY_COMPILE_CACHE[digest] = (program, llvm)
+    _MEMORY_COMPILE_CACHE.move_to_end(digest)
+    while len(_MEMORY_COMPILE_CACHE) > _MEMORY_COMPILE_CACHE_LIMIT:
+        _MEMORY_COMPILE_CACHE.popitem(last=False)
     return program, llvm, digest
 
 

@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_telemetry import read_events, record_event, summarize_events
+from holyfitra_telemetry import TelemetryCursor, read_events, record_event, summarize_events, telemetry_path
 from holyfitra_tui import CursesApp, Workspace
 
 
@@ -23,6 +23,24 @@ class HolyFitraDashboardTests(unittest.TestCase):
             self.assertEqual(summary["compile"]["hit_rate"], 0.5)
             self.assertEqual(summary["quantization"]["precision"], "int4")
             self.assertTrue(summary["quantization"]["proof_verified"])
+
+    def test_incremental_cursor_handles_appends_partial_lines_and_truncation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = telemetry_path(root)
+            path.parent.mkdir(parents=True)
+            path.write_text('{"event":"compile","cache_hit":true}\n', encoding="utf-8")
+            cursor = TelemetryCursor()
+            self.assertEqual(len(cursor.read_new(root)), 1)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write('{"event":"quantization","precision":"int4"}')
+            self.assertEqual(len(cursor.read_new(root)), 1)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write('\n')
+            self.assertEqual(len(cursor.read_new(root)), 2)
+            path.write_text('{"event":"compile","cache_hit":false}\n', encoding="utf-8")
+            self.assertEqual(len(cursor.read_new(root)), 1)
+            self.assertFalse(cursor.read_new(root)[0]["cache_hit"])
 
     def test_source_directory_events_roll_up_to_project_root(self):
         with tempfile.TemporaryDirectory() as temporary:

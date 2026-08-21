@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import asdict, dataclass
+from functools import lru_cache
 from typing import Any
 
 import numpy as np
@@ -92,6 +93,7 @@ def select_matrix(
     raise RuntimeError(f"no precision candidate passed quality gates for {model}:{layer}")
 
 
+@lru_cache(maxsize=8)
 def demo() -> dict[str, Any]:
     rng = np.random.default_rng(7)
     weight = rng.normal(0.0, 0.2, size=(16, 16)).astype(np.float32)

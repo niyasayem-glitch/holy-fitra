@@ -27,6 +27,8 @@ class Workspace:
     status: str = "ready"
     last_result: dict[str, object] | None = None
     telemetry: dict[str, object] = field(default_factory=dict)
+    telemetry_events: list[dict[str, object]] = field(default_factory=list)
+    telemetry_cursor: object | None = None
 
     @classmethod
     def open(cls, path: Path) -> "Workspace":
@@ -61,8 +63,11 @@ class Workspace:
             return path.as_posix()
 
     def refresh_telemetry(self) -> dict[str, object]:
-        from holyfitra_telemetry import read_events, summarize_events
-        self.telemetry = summarize_events(read_events(self.root))
+        from holyfitra_telemetry import TelemetryCursor, summarize_events
+        if self.telemetry_cursor is None:
+            self.telemetry_cursor = TelemetryCursor()
+        self.telemetry_events = self.telemetry_cursor.read_new(self.root)
+        self.telemetry = summarize_events(self.telemetry_events)
         return self.telemetry
 
     def inspect(self) -> dict[str, object]:
