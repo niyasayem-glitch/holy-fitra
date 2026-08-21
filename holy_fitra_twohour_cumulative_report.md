@@ -227,3 +227,22 @@ This is a foundational correctness improvement for self-hosting and AI-native sa
 | No-Python bootstrap gate | Passed; includes native and AArch64 short-circuit fixtures |
 
 The validation host is x86-64. The AArch64 checks validate generated objects only; no physical Android execution, thermal, latency, battery, or throughput claim is made. The next highest-leverage path is a bounded byte-buffer/string-builder ABI, followed by a self-hosted symbol table, type checker, and canonical LLVM emitter.
+
+## Real-language foundation wave retained
+
+Holy Fitra’s Python-hosted native language now supports ordinary mutable control flow beyond the original syntax-demo subset. The frontend parses `var` bindings, assignments, and `while` loops; validation tracks lexical block scopes, rejects same-scope duplicate declarations, rejects assignment to immutable `let` values, checks assignment types, validates loop conditions, and preserves definite-return analysis.
+
+The native LLVM emitter now lowers locals and parameters into typed stack slots, emits loads and stores for names and assignments, emits explicit while-loop CFGs, and lowers native `&&`/`||` through short-circuit branches and `phi i1` values. This gives the ordinary language real state mutation and iterative control flow while preserving the fail-closed semantics of the earlier Stage-0 implementation.
+
+| Validation | Result |
+|---|---:|
+| Focused native compiler suite | Passed; 24 tests, 0 failures |
+| Complete Python suite in current checkout | Passed; 132 tests, 0 failures |
+| Termux-compatible host gate | Passed; 129 tests |
+| Native mutable loop execution | Passed; countdown program exits 0 |
+| Immutable assignment rejection | Passed; type/semantic error is fail-closed |
+| Native short-circuit IR | Passed; explicit `phi i1`, no eager logical instruction |
+
+The current checkout’s test discovery reports 132 Python tests; earlier cumulative milestones may contain larger historical counts from additional suites. The validation host is x86-64. AArch64 checks remain artifact validation only, with no physical Android execution or device-performance claim.
+
+This is a real-language foundation wave, not yet the self-hosted compiler fixed point. The next implementation target is the self-hosted semantic core: token metadata, AST arena, deterministic symbols/scopes, canonical type IDs, and typed HIR snapshots.

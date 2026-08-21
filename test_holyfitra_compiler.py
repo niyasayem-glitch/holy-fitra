@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, compile_native_file, emit_llvm, init_project, load_project, parse_native, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, compile_native_file, emit_llvm, init_project, load_project, parse_native, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -297,6 +297,47 @@ fn infer(x: Tensor<[1, 4], f16, device=neon>) -> Tensor<[1, 4], f16> {
             result = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "check", str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(json.loads(result.stdout)["valid"])
+
+    def test_mutable_assignment_and_while_compile_and_run(self):
+        source = """
+module loop_test
+fn countdown() -> i32 {
+    var x: i32 = 3
+    while x > 0 {
+        x = x - 1
+    }
+    return x
+}
+fn main() -> i32 { return countdown() }
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source_path = directory / "loop_test.hf"
+            source_path.write_text(source, encoding="utf-8")
+            output = directory / "loop_test"
+            build(source_path, output)
+            run = subprocess.run([str(output)], capture_output=True, text=True, timeout=5)
+            self.assertEqual(run.returncode, 0)
+
+    def test_assignment_to_let_is_rejected(self):
+        source = "fn main() -> i32 { let x: i32 = 1 x = 2 return x }"
+        with self.assertRaisesRegex(HolyFitraError, "cannot assign to immutable value"):
+            validate_native(parse_native(source))
+
+    def test_native_short_circuit_emits_cfg_phi(self):
+        source = """
+module short_circuit_native
+fn rhs() -> bool { return true }
+fn main() -> i32 {
+    if false && rhs() { return 1 }
+    if true || rhs() { return 0 }
+    return 2
+}
+"""
+        llvm = emit_llvm(parse_native(source))
+        self.assertIn("phi i1", llvm)
+        self.assertNotIn(" = and i1 ", llvm)
+        self.assertNotIn(" = or i1 ", llvm)
 
 
 if __name__ == "__main__":

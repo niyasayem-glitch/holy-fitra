@@ -106,6 +106,14 @@ class LetStmt:
     type: Type | None
     value: Expr
     line: int
+    mutable: bool = False
+
+
+@dataclass(frozen=True)
+class AssignStmt:
+    name: str
+    value: Expr
+    line: int
 
 
 @dataclass(frozen=True)
@@ -122,7 +130,14 @@ class IfStmt:
     line: int
 
 
-Statement = LetStmt | ReturnStmt | IfStmt
+@dataclass(frozen=True)
+class WhileStmt:
+    condition: Expr
+    body: tuple[Statement, ...]
+    line: int
+
+
+Statement = LetStmt | AssignStmt | ReturnStmt | IfStmt | WhileStmt
 
 
 @dataclass(frozen=True)
@@ -355,6 +370,10 @@ class Parser:
         return Type(token.text, mode)
 
     def parse_statement(self) -> Statement:
+        if self.accept("IDENT", "while"):
+            line = self.tokens[self.index - 1].line
+            condition = self.parse_expression()
+            return WhileStmt(condition, self.parse_block(), line)
         if self.accept("IDENT", "if"):
             line = self.tokens[self.index - 1].line
             condition = self.parse_expression()
@@ -363,7 +382,13 @@ class Parser:
             if self.accept("IDENT", "else"):
                 else_body = self.parse_block()
             return IfStmt(condition, then_body, else_body, line)
-        if self.accept("IDENT", "let") or self.accept("IDENT", "var"):
+        let_token = self.accept("IDENT", "let")
+        mutable = False
+        if let_token is None:
+            var_token = self.accept("IDENT", "var")
+            if var_token is not None:
+                mutable = True
+        if let_token is not None or mutable:
             name = self.expect("IDENT")
             declared_type = None
             if self.accept("PUNCT", ":"):
@@ -371,7 +396,15 @@ class Parser:
             self.expect("OP", "=")
             value = self.parse_expression()
             self.accept("PUNCT", ";")
-            return LetStmt(name.text, declared_type, value, name.line)
+            return LetStmt(name.text, declared_type, value, name.line, mutable)
+        if self.current.kind == "IDENT" and self.index + 1 < len(self.tokens):
+            next_token = self.tokens[self.index + 1]
+            if next_token.kind == "OP" and next_token.text == "=":
+                name = self.advance()
+                self.advance()
+                value = self.parse_expression()
+                self.accept("PUNCT", ";")
+                return AssignStmt(name.text, value, name.line)
         if self.accept("IDENT", "return"):
             line = self.tokens[self.index - 1].line
             if self.current.kind == "PUNCT" and self.current.text in {";", "}"}:
@@ -454,7 +487,7 @@ def _direct_calls_expression(expr: Expr) -> set[str]:
 def _direct_calls_block(statements: tuple[Statement, ...]) -> set[str]:
     calls: set[str] = set()
     for statement in statements:
-        if isinstance(statement, LetStmt):
+        if isinstance(statement, (LetStmt, AssignStmt)):
             calls.update(_direct_calls_expression(statement.value))
         elif isinstance(statement, ReturnStmt) and statement.value is not None:
             calls.update(_direct_calls_expression(statement.value))
@@ -462,6 +495,9 @@ def _direct_calls_block(statements: tuple[Statement, ...]) -> set[str]:
             calls.update(_direct_calls_expression(statement.condition))
             calls.update(_direct_calls_block(statement.then_body))
             calls.update(_direct_calls_block(statement.else_body))
+        elif isinstance(statement, WhileStmt):
+            calls.update(_direct_calls_expression(statement.condition))
+            calls.update(_direct_calls_block(statement.body))
     return calls
 
 
@@ -639,15 +675,35 @@ def validate_native(program: Program) -> None:
                     raise HolyFitraError(f"hybrid function {function.name} returns {previous.name}, expected {function.return_type.name}")
             continue
         variables = dict(function.parameters)
+        mutable_parameters = {name for name, type_ in function.parameters if type_.mode == "borrow_mut"}
 
-        def validate_block(statements: tuple[Statement, ...], scope: dict[str, Type]) -> bool:
+        def validate_block(
+            statements: tuple[Statement, ...],
+            scope: dict[str, Type],
+            mutable_names: set[str],
+            declared_names: set[str],
+        ) -> bool:
             guaranteed_return = False
             for statement in statements:
                 if isinstance(statement, LetStmt):
+                    if statement.name in declared_names:
+                        raise HolyFitraError(f"duplicate declaration {statement.name}")
                     actual = _infer_expression(statement.value, scope, functions)
                     if statement.type is not None and not _same_value_type(actual, statement.type):
                         raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
                     scope[statement.name] = statement.type or actual
+                    declared_names.add(statement.name)
+                    if statement.mutable:
+                        mutable_names.add(statement.name)
+                elif isinstance(statement, AssignStmt):
+                    if statement.name not in scope:
+                        raise HolyFitraError(f"unknown value {statement.name}")
+                    if statement.name not in mutable_names:
+                        raise HolyFitraError(f"cannot assign to immutable value {statement.name}")
+                    actual = _infer_expression(statement.value, scope, functions)
+                    expected = scope[statement.name]
+                    if not _same_value_type(actual, expected):
+                        raise HolyFitraError(f"assignment to {statement.name} requires {expected.name}, got {actual.name}")
                 elif isinstance(statement, ReturnStmt):
                     guaranteed_return = True
                     if function.return_type.name == "void":
@@ -663,14 +719,20 @@ def validate_native(program: Program) -> None:
                     condition_type = _infer_expression(statement.condition, scope, functions)
                     if condition_type.name != "bool":
                         raise HolyFitraError("if condition must be bool")
-                    then_return = validate_block(statement.then_body, dict(scope))
-                    else_return = bool(statement.else_body) and validate_block(statement.else_body, dict(scope))
+                    then_return = validate_block(statement.then_body, dict(scope), set(mutable_names), set())
+                    else_return = bool(statement.else_body) and validate_block(statement.else_body, dict(scope), set(mutable_names), set())
                     guaranteed_return = then_return and else_return
+                elif isinstance(statement, WhileStmt):
+                    condition_type = _infer_expression(statement.condition, scope, functions)
+                    if condition_type.name != "bool":
+                        raise HolyFitraError("while condition must be bool")
+                    validate_block(statement.body, dict(scope), set(mutable_names), set())
+                    guaranteed_return = False
                 if guaranteed_return:
                     break
             return guaranteed_return
 
-        guaranteed_return = validate_block(function.body, variables)
+        guaranteed_return = validate_block(function.body, variables, mutable_parameters, set(variables))
         if function.return_type.name != "void" and not guaranteed_return:
             raise HolyFitraError(f"function {function.name} does not return on every path")
 
@@ -734,7 +796,9 @@ class LLVMEmitter:
         if isinstance(expression, NameExpr):
             if expression.name not in self.variables:
                 raise HolyFitraError(f"unknown value {expression.name}")
-            return self.variables[expression.name], self.types[expression.name]
+            result = self.temp()
+            self.current_lines.append(f"  {result} = load {self.types[expression.name].llvm}, ptr {self.variables[expression.name]}")
+            return result, self.types[expression.name]
         if isinstance(expression, BinaryExpr):
             if isinstance(expression.left, (IntLiteral, BoolLiteral)) and isinstance(expression.right, (IntLiteral, BoolLiteral)):
                 left_value = expression.left.value
@@ -752,15 +816,34 @@ class LLVMEmitter:
                 if expression.operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                     outcomes = {"==": left_value == right_value, "!=": left_value != right_value, "<": left_value < right_value, "<=": left_value <= right_value, ">": left_value > right_value, ">=": left_value >= right_value, "&&": bool(left_value and right_value), "||": bool(left_value or right_value)}
                     return ("1" if outcomes[expression.operator] else "0"), Type("bool")
+            if expression.operator in {"&&", "||"}:
+                left, left_type = self.emit_expr(expression.left)
+                if left_type.name != "bool":
+                    raise HolyFitraError(f"logical operator {expression.operator} requires bool operands")
+                rhs_label = self.block("bool_rhs")
+                short_label = self.block("bool_short")
+                merge_label = self.block("bool_merge")
+                result = self.temp()
+                if expression.operator == "&&":
+                    self.current_lines.append(f"  br i1 {left}, label %{rhs_label}, label %{short_label}")
+                    short_value = "0"
+                else:
+                    self.current_lines.append(f"  br i1 {left}, label %{short_label}, label %{rhs_label}")
+                    short_value = "1"
+                self.current_lines.append(f"{rhs_label}:")
+                right, right_type = self.emit_expr(expression.right)
+                if right_type.name != "bool":
+                    raise HolyFitraError(f"logical operator {expression.operator} requires bool operands")
+                self.current_lines.append(f"  br label %{merge_label}")
+                self.current_lines.append(f"{short_label}:")
+                self.current_lines.append(f"  br label %{merge_label}")
+                self.current_lines.append(f"{merge_label}:")
+                self.current_lines.append(f"  {result} = phi i1 [ {right}, %{rhs_label} ], [ {short_value}, %{short_label} ]")
+                return result, Type("bool")
             left, type_ = self.emit_expr(expression.left)
             right, right_type = self.emit_expr(expression.right)
             if not _same_value_type(type_, right_type):
                 raise HolyFitraError("binary operands have different types")
-            if expression.operator in {"&&", "||"}:
-                opcode = "and" if expression.operator == "&&" else "or"
-                result = self.temp()
-                self.current_lines.append(f"  {result} = {opcode} i1 {left}, {right}")
-                return result, Type("bool")
             if expression.operator in {"==", "!=", "<", "<=", ">", ">="}:
                 predicates = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
                 result = self.temp()
@@ -788,7 +871,7 @@ class LLVMEmitter:
         self.counter = 0
         self.block_counter = 0
         self.terminated = False
-        self.variables = {name: f"%{name}" for name, _ in function.parameters}
+        self.variables = {name: f"%{name}.addr" for name, _ in function.parameters}
         self.types = dict(function.parameters)
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
         return_type = "void" if function.return_type.name == "void" else function.return_type.llvm
@@ -804,6 +887,9 @@ class LLVMEmitter:
             hybrid_comment = "; hybrid: none"
         lines = [effect_comment, ownership_comment, task_comment, hybrid_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
+        for name, type_ in function.parameters:
+            lines.append(f"  %{name}.addr = alloca {type_.llvm}")
+            lines.append(f"  store {type_.llvm} %{name}, ptr %{name}.addr")
         if function.hybrid is not None:
             current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
             if function.hybrid.strategy == "parallel":
@@ -832,8 +918,20 @@ class LLVMEmitter:
                 break
             if isinstance(statement, LetStmt):
                 value, value_type = self.emit_expr(statement.value)
-                self.variables[statement.name] = value
-                self.types[statement.name] = statement.type or value_type
+                local_type = statement.type or value_type
+                address = f"%{statement.name}.addr.{self.counter}"
+                self.current_lines.append(f"  {address} = alloca {local_type.llvm}")
+                self.current_lines.append(f"  store {local_type.llvm} {value}, ptr {address}")
+                self.variables[statement.name] = address
+                self.types[statement.name] = local_type
+            elif isinstance(statement, AssignStmt):
+                if statement.name not in self.variables:
+                    raise HolyFitraError(f"unknown value {statement.name}")
+                value, value_type = self.emit_expr(statement.value)
+                expected = self.types[statement.name]
+                if not _same_value_type(value_type, expected):
+                    raise HolyFitraError(f"assignment to {statement.name} requires {expected.name}, got {value_type.name}")
+                self.current_lines.append(f"  store {expected.llvm} {value}, ptr {self.variables[statement.name]}")
             elif isinstance(statement, ReturnStmt):
                 if statement.value is None:
                     self.current_lines.append("  ret void")
@@ -842,6 +940,30 @@ class LLVMEmitter:
                     self.current_lines.append(f"  ret {value_type.llvm} {value}")
                 self.terminated = True
                 block_terminated = True
+            elif isinstance(statement, WhileStmt):
+                head_label = self.block("while_head")
+                body_label = self.block("while_body")
+                exit_label = self.block("while_exit")
+                self.current_lines.append(f"  br label %{head_label}")
+                self.current_lines.append(f"{head_label}:")
+                condition, condition_type = self.emit_expr(statement.condition)
+                if condition_type.name != "bool":
+                    raise HolyFitraError("while condition must be bool")
+                self.current_lines.append(f"  br i1 {condition}, label %{body_label}, label %{exit_label}")
+                self.current_lines.append(f"{body_label}:")
+                saved_variables = self.variables
+                saved_types = self.types
+                self.variables = dict(saved_variables)
+                self.types = dict(saved_types)
+                self.terminated = False
+                body_terminated = self.emit_block(statement.body)
+                if not body_terminated:
+                    self.current_lines.append(f"  br label %{head_label}")
+                self.current_lines.append(f"{exit_label}:")
+                self.variables = saved_variables
+                self.types = saved_types
+                self.terminated = False
+                block_terminated = False
             elif isinstance(statement, IfStmt):
                 condition, condition_type = self.emit_expr(statement.condition)
                 if condition_type.name != "bool":
