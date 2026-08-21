@@ -145,3 +145,17 @@ The `bootstrap/io.hf` fixture passed native execution with exit code 2 after all
 The Stage-0 compiler now propagates source spans through lexer tokens and AST nodes, stores structured diagnostics with stable family codes and optional notes, and renders source excerpts with caret markers. The negative fixtures cover HF3001 type mismatch, HF1001 parser syntax failure, and HF2001 unknown-name resolution. The full bootstrap gate passed all scalar, aggregate, I/O, sanitizer, AArch64 object, Python-free, and diagnostic checks; the Termux-compatible host gate passed **129 tests**.
 
 This remains a no-Python Stage-0 substrate milestone. The diagnostics are sufficient for compiler-core source parsing and later symbol/type errors, but notes, multi-span suggestions, Unicode display-width handling, and full self-hosted compiler integration remain future improvements.
+
+## Self-hosted frontend verification
+
+The self-hosting sequence now includes a real Holy Fitra lexer and recursive-descent parser in `bootstrap/selfhost_frontend.hf`. The Stage-0 C++17 seed compiles it to LLVM IR, links it with the dependency-free runtime, and executes it against `bootstrap/aggregates.hf`. The parser covers the current bootstrap grammar needed by the aggregate fixture, including modules, structs, fixed arrays, functions, declarations, literals, aggregate constructors, calls, indexing, field access, control flow, and expressions.
+
+The observed SIGABRT was isolated to eager Boolean evaluation in the seed language: the lexer evaluated a string-byte access at the keyword's end boundary even when the boundary predicate was false. Replacing that expression with nested bounds-guarded control flow removed the abort. Additional seed-compatible parser changes removed unsupported `break`, accepted the fixture's module syntax, and added fixed-array and aggregate/postfix expression parsing.
+
+The focused native checks passed: self-hosted frontend exit code 0, sanitized native execution, and a non-empty 20,488-byte `aarch64-linux-android21` object. The complete applicable Python suite passed **168 tests with 0 failures**, the Termux-compatible host gate passed **129 tests**, and the updated no-Python bootstrap gate passed scalar, control-flow, aggregate, I/O, diagnostics, sanitizer, AArch64, and Python-free checks.
+
+Validation was performed on the x86-64 sandbox. AArch64 object generation is artifact validation only; no physical Android execution, Android latency, thermal, battery, or throughput measurement is claimed. Leak detection was disabled only for the self-hosted frontend sanitizer because the current seed/runtime ABI has no source-buffer release primitive; AddressSanitizer and UBSan bounds and undefined-behavior checks remained enabled.
+
+## Self-hosted frontend retention decision
+
+**Retain.** The frontend is now a working Holy Fitra source program compiled by the no-Python seed, and the exact runtime abort has a documented root-cause fix with regression coverage. The next self-hosting candidates are a Holy Fitra type checker, LLVM emitter, compiler entry point, and Stage-1 fixed-point rebuild.

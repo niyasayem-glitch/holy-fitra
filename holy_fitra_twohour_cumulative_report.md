@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `fdab6e6` on `master`, containing the rich source-span diagnostics milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `c3cca10` on `master`, containing the self-hosted lexer and parser frontend milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -191,3 +191,22 @@ The no-Python Stage-0 compiler now carries `SourceSpan` records through tokens, 
 Negative fixtures verify type mismatch, unexpected syntax, and unknown-name diagnostics. The observed type diagnostic includes the source line and caret, for example `bootstrap/invalid_type.hf:4:9: error[HF3001]`, followed by the highlighted source. The full bootstrap gate passed scalar, aggregate, source-I/O, runtime sanitizer, diagnostic, AArch64 object, and Python-free checks. The complete Termux-compatible host gate passed **129 tests**.
 
 Validation was performed on x86-64. AArch64 object generation and cross-compilation validate artifacts only; no physical Android execution, performance, thermal, battery, latency, or throughput claim is made. This milestone improves compiler diagnostics but does not yet constitute a fully self-hosted compiler. The milestone commit is `fdab6e6`.
+
+## Self-hosted frontend milestone retained
+
+The no-Python bootstrap path now contains `bootstrap/selfhost_frontend.hf`, a Holy Fitra lexer and recursive-descent parser compiled by the C++17 Stage-0 seed. The frontend tokenizes the supported source grammar and parses modules, structs, fixed arrays, functions, declarations, literals, aggregate constructors, calls, indexing, field access, control flow, and expressions. The bootstrap gate now compiles and executes this frontend against `bootstrap/aggregates.hf`, which exits successfully.
+
+The runtime abort was traced to eager evaluation of the seed language's Boolean operators. The keyword-boundary expression evaluated `hf_string_byte32(source, pos + word_length)` even when `pos + word_length == length`, causing a fail-closed bounds abort at a valid end-of-input boundary. Nested control flow now guards that byte access. The frontend also uses seed-compatible flat punctuation dispatch, supports optional module semicolons, parses fixed-array types, and handles aggregate-literal/postfix expressions without unsupported `break` statements.
+
+| Validation | Result |
+|---|---|
+| Native self-hosted frontend execution | Passed; exit code 0 on x86-64 sandbox |
+| Self-hosted frontend ASAN/UBSan execution | Passed; leak detection disabled only for the intentionally retained source buffer, with bounds/undefined-behavior checks enabled |
+| AArch64 Android-target LLVM object | Passed; non-empty 20,488-byte object generated |
+| Full Python regression suite | Passed; 168 tests, 0 failures |
+| Termux-compatible host gate | Passed; 129 tests |
+| No-Python bootstrap gate | Passed; scalar, control, aggregate, I/O, diagnostics, sanitizer, AArch64, and Python-free checks |
+
+The sandbox validation host is x86-64. AArch64 LLVM lowering and object emission validate generated artifacts only; no physical Android execution, thermal measurement, device latency, battery, or throughput claim is made. This milestone advances self-hosting but is not yet a fully self-compiled fixed-point compiler: the Holy Fitra type checker, LLVM emitter, and Stage-1 self-rebuild remain future work.
+
+The milestone is retained because the fix removes the observed runtime abort without weakening fail-closed runtime bounds, and every applicable regression and native gate passed.

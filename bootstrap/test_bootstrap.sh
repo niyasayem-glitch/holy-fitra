@@ -32,6 +32,20 @@ aggregate_status=$?
 set -e
 test "$aggregate_status" -eq 42
 
+"$BUILD" "$ROOT/bootstrap/selfhost_frontend.hf" -o "$WORK/selfhost_frontend.ll"
+clang -O2 "$WORK/selfhost_frontend.ll" "$ROOT/bootstrap/holyfitra_runtime.c" -o "$WORK/selfhost_frontend"
+set +e
+(cd "$ROOT" && "$WORK/selfhost_frontend")
+selfhost_frontend_status=$?
+set -e
+test "$selfhost_frontend_status" -eq 0
+clang -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
+  "$WORK/selfhost_frontend.ll" "$ROOT/bootstrap/holyfitra_runtime.c" -o "$WORK/selfhost_frontend_san"
+(cd "$ROOT" && ASAN_OPTIONS=detect_leaks=0:halt_on_error=1 UBSAN_OPTIONS=halt_on_error=1 "$WORK/selfhost_frontend_san")
+"$BUILD" --target=aarch64-linux-android21 "$ROOT/bootstrap/selfhost_frontend.hf" -o "$WORK/selfhost_frontend.aarch64.ll"
+clang --target=aarch64-linux-android21 -c "$WORK/selfhost_frontend.aarch64.ll" -o "$WORK/selfhost_frontend.aarch64.o"
+test -s "$WORK/selfhost_frontend.aarch64.o"
+
 "$BUILD" "$ROOT/bootstrap/io.hf" -o "$WORK/io.ll"
 clang -O2 "$WORK/io.ll" "$ROOT/bootstrap/holyfitra_runtime.c" -o "$WORK/io"
 set +e
@@ -79,4 +93,4 @@ grep -F "unknown value" "$WORK/invalid_name.err" >/dev/null
 # Verify the seed command itself works without Python in PATH or environment.
 env -i PATH="$(dirname "$(command -v clang)"):$(dirname "$(command -v clang++)"):/usr/bin:/bin" HOME="$WORK/home" "$BUILD" --help >/dev/null
 
-printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_diagnostics=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")"
+printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_selfhost_frontend=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_diagnostics=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\\nbootstrap_selfhost_aarch64_object_bytes=%s\\nbootstrap_python_free_help=passed\\n' "$(stat -c%s "$WORK/hello.aarch64.o")" "$(stat -c%s "$WORK/selfhost_frontend.aarch64.o")"

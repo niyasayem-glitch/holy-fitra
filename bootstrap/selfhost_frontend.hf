@@ -1,0 +1,407 @@
+module selfhost_frontend
+
+fn is_space(ch: i32) -> bool {
+    return ch == 32 || ch == 9 || ch == 10 || ch == 13
+}
+
+fn is_digit(ch: i32) -> bool {
+    return ch >= 48 && ch <= 57
+}
+
+fn is_ident_start(ch: i32) -> bool {
+    return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95
+}
+
+fn is_ident_continue(ch: i32) -> bool {
+    return is_ident_start(ch) || is_digit(ch)
+}
+
+fn keyword_kind(source: string, pos: i32, length: i32, word: string, kind: i32) -> bool {
+    let word_length: i32 = hf_string_len32(word)
+    if pos + word_length > length {
+        return false
+    }
+    if pos + word_length < length {
+        if is_ident_continue(hf_string_byte32(source, pos + word_length)) {
+            return false
+        }
+    }
+    var i: i32 = 0
+    var same: bool = true
+    while i < word_length {
+        if hf_string_byte32(source, pos + i) != hf_string_byte32(word, i) {
+            same = false
+        }
+        i = i + 1
+    }
+    return same
+}
+
+fn keyword_at(source: string, pos: i32, length: i32) -> i32 {
+    if keyword_kind(source, pos, length, "module", 10) { return 10 }
+    if keyword_kind(source, pos, length, "struct", 11) { return 11 }
+    if keyword_kind(source, pos, length, "fn", 12) { return 12 }
+    if keyword_kind(source, pos, length, "return", 13) { return 13 }
+    if keyword_kind(source, pos, length, "if", 14) { return 14 }
+    if keyword_kind(source, pos, length, "else", 15) { return 15 }
+    if keyword_kind(source, pos, length, "while", 16) { return 16 }
+    if keyword_kind(source, pos, length, "true", 17) { return 17 }
+    if keyword_kind(source, pos, length, "false", 18) { return 18 }
+    if keyword_kind(source, pos, length, "let", 19) { return 19 }
+    if keyword_kind(source, pos, length, "var", 20) { return 20 }
+    if keyword_kind(source, pos, length, "i32", 21) { return 21 }
+    if keyword_kind(source, pos, length, "i64", 22) { return 22 }
+    if keyword_kind(source, pos, length, "bool", 23) { return 23 }
+    if keyword_kind(source, pos, length, "void", 24) { return 24 }
+    if keyword_kind(source, pos, length, "string", 25) { return 25 }
+    if keyword_kind(source, pos, length, "dyn", 26) { return 26 }
+    return 100
+}
+
+fn keyword_length(kind: i32) -> i32 {
+    if kind == 10 { return 6 }
+    if kind == 11 { return 6 }
+    if kind == 12 { return 2 }
+    if kind == 13 { return 6 }
+    if kind == 14 { return 2 }
+    if kind == 15 { return 4 }
+    if kind == 16 { return 5 }
+    if kind == 17 { return 4 }
+    if kind == 18 { return 5 }
+    if kind == 19 { return 3 }
+    if kind == 20 { return 3 }
+    if kind == 21 { return 3 }
+    if kind == 22 { return 3 }
+    if kind == 23 { return 4 }
+    if kind == 24 { return 4 }
+    if kind == 25 { return 6 }
+    if kind == 26 { return 3 }
+    return 0
+}
+
+fn push_token(tokens: dyn<i32>, kind: i32) -> bool {
+    return hf_dyn_i32_push(tokens, kind)
+}
+
+fn single_kind(ch: i32) -> i32 {
+    if ch == 58 { return 40 }
+    if ch == 59 { return 41 }
+    if ch == 40 { return 42 }
+    if ch == 41 { return 43 }
+    if ch == 123 { return 44 }
+    if ch == 125 { return 45 }
+    if ch == 91 { return 46 }
+    if ch == 93 { return 47 }
+    if ch == 44 { return 48 }
+    if ch == 46 { return 49 }
+    if ch == 60 { return 50 }
+    if ch == 62 { return 51 }
+    if ch == 61 { return 60 }
+    if ch == 43 { return 61 }
+    if ch == 45 { return 62 }
+    if ch == 42 { return 63 }
+    if ch == 47 { return 64 }
+    if ch == 33 { return 65 }
+    return -1
+}
+
+fn lex(source: string) -> dyn<i32> {
+    let tokens: dyn<i32> = hf_dyn_i32_new(4096)
+    let length: i32 = hf_string_len32(source)
+    var pos: i32 = 0
+    while pos < length {
+        let ch: i32 = hf_string_byte32(source, pos)
+        if is_space(ch) {
+            pos = pos + 1
+        } else {
+            if ch == 35 {
+                while pos < length && hf_string_byte32(source, pos) != 10 { pos = pos + 1 }
+            } else {
+                let keyword: i32 = keyword_at(source, pos, length)
+                if keyword != 100 {
+                    push_token(tokens, keyword)
+                    pos = pos + keyword_length(keyword)
+                } else {
+                    if is_digit(ch) {
+                        push_token(tokens, 101)
+                        while pos < length && is_digit(hf_string_byte32(source, pos)) { pos = pos + 1 }
+                    } else {
+                        if is_ident_start(ch) {
+                            push_token(tokens, 100)
+                            pos = pos + 1
+                            while pos < length && is_ident_continue(hf_string_byte32(source, pos)) { pos = pos + 1 }
+                        } else {
+                            if ch == 34 {
+                                push_token(tokens, 102)
+                                pos = pos + 1
+                                while pos < length && hf_string_byte32(source, pos) != 34 { pos = pos + 1 }
+                                if pos < length { pos = pos + 1 }
+                            } else {
+                                if ch == 45 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 62 {
+                                    push_token(tokens, 8)
+                                    pos = pos + 2
+                                } else {
+                                    if ch == 61 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 61 {
+                                        push_token(tokens, 66)
+                                        pos = pos + 2
+                                    } else {
+                                        if ch == 33 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 61 {
+                                            push_token(tokens, 67)
+                                            pos = pos + 2
+                                        } else {
+                                            if ch == 60 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 61 {
+                                                push_token(tokens, 68)
+                                                pos = pos + 2
+                                            } else {
+                                                if ch == 62 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 61 {
+                                                    push_token(tokens, 69)
+                                                    pos = pos + 2
+                                                } else {
+                                                    if ch == 38 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 38 {
+                                                        push_token(tokens, 70)
+                                                        pos = pos + 2
+                                                    } else {
+                                                        if ch == 124 && pos + 1 < length && hf_string_byte32(source, pos + 1) == 124 {
+                                                            push_token(tokens, 71)
+                                                            pos = pos + 2
+                                                        } else {
+                                                            let single: i32 = single_kind(ch)
+                                                            if single >= 0 { push_token(tokens, single); pos = pos + 1 }
+                                                            else { pos = pos + 1 }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    push_token(tokens, 0)
+    return tokens
+}
+
+fn token_at(tokens: dyn<i32>, pos: i32) -> i32 {
+    if pos < 0 || pos >= hf_dyn_i32_len32(tokens) { return 0 }
+    return hf_dyn_i32_get32(tokens, pos)
+}
+
+fn accept(tokens: dyn<i32>, pos: dyn<i32>, kind: i32) -> bool {
+    let current: i32 = hf_dyn_i32_get32(pos, 0)
+    if token_at(tokens, current) == kind {
+        hf_dyn_i32_set32(pos, 0, current + 1)
+        return true
+    }
+    return false
+}
+
+fn expect(tokens: dyn<i32>, pos: dyn<i32>, kind: i32) -> bool {
+    return accept(tokens, pos, kind)
+}
+
+fn parse_type(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    let kind: i32 = token_at(tokens, hf_dyn_i32_get32(pos, 0))
+    if kind == 21 || kind == 22 || kind == 23 || kind == 24 || kind == 25 || kind == 100 { hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1); return true }
+    if kind == 46 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !expect(tokens, pos, 101) { return false }
+        if !expect(tokens, pos, 47) { return false }
+        return parse_type(tokens, pos)
+    }
+    if kind == 26 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !expect(tokens, pos, 50) { return false }
+        if !parse_type(tokens, pos) { return false }
+        return expect(tokens, pos, 51)
+    }
+    return false
+}
+
+fn parse_primary(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    let kind: i32 = token_at(tokens, hf_dyn_i32_get32(pos, 0))
+    if kind == 101 || kind == 102 || kind == 17 || kind == 18 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        return true
+    }
+    if kind == 46 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !accept(tokens, pos, 47) {
+            if !parse_expression(tokens, pos) { return false }
+            while accept(tokens, pos, 48) {
+                if !parse_expression(tokens, pos) { return false }
+            }
+            if !expect(tokens, pos, 47) { return false }
+        }
+        return true
+    }
+    if kind == 100 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if accept(tokens, pos, 44) {
+            while token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 45 && token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 0 {
+                if !expect(tokens, pos, 100) { return false }
+                if !expect(tokens, pos, 40) { return false }
+                if !parse_expression(tokens, pos) { return false }
+                if !accept(tokens, pos, 48) { return expect(tokens, pos, 45) }
+            }
+            return expect(tokens, pos, 45)
+        }
+        if accept(tokens, pos, 42) {
+            if !accept(tokens, pos, 43) {
+                if !parse_expression(tokens, pos) { return false }
+                while accept(tokens, pos, 48) {
+                    if !parse_expression(tokens, pos) { return false }
+                }
+                if !expect(tokens, pos, 43) { return false }
+            }
+        }
+        var done: bool = false
+        while !done {
+            if accept(tokens, pos, 46) {
+                if !parse_expression(tokens, pos) { return false }
+                if !expect(tokens, pos, 47) { return false }
+            } else {
+                if accept(tokens, pos, 49) {
+                    if !expect(tokens, pos, 100) { return false }
+                } else {
+                    done = true
+                }
+            }
+        }
+        return true
+    }
+    if accept(tokens, pos, 42) {
+        if !parse_expression(tokens, pos) { return false }
+        return expect(tokens, pos, 43)
+    }
+    return false
+}
+
+fn parse_unary(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    let kind: i32 = token_at(tokens, hf_dyn_i32_get32(pos, 0))
+    if kind == 62 || kind == 65 { hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1); return parse_unary(tokens, pos) }
+    return parse_primary(tokens, pos)
+}
+
+fn is_binary(kind: i32) -> bool {
+    return kind == 61 || kind == 62 || kind == 63 || kind == 64 || kind == 66 || kind == 67 || kind == 68 || kind == 69 || kind == 70 || kind == 71
+}
+
+fn parse_expression(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    if !parse_unary(tokens, pos) { return false }
+    while is_binary(token_at(tokens, hf_dyn_i32_get32(pos, 0))) {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !parse_unary(tokens, pos) { return false }
+    }
+    return true
+}
+
+fn parse_block(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    if !expect(tokens, pos, 44) { return false }
+    while token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 45 && token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 0 {
+        if !parse_statement(tokens, pos) { return false }
+    }
+    return expect(tokens, pos, 45)
+}
+
+fn parse_statement(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    let current: i32 = token_at(tokens, hf_dyn_i32_get32(pos, 0))
+    if current == 19 || current == 20 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !expect(tokens, pos, 100) { return false }
+        if accept(tokens, pos, 40) { if !parse_type(tokens, pos) { return false } }
+        if !expect(tokens, pos, 60) { return false }
+        if !parse_expression(tokens, pos) { return false }
+        accept(tokens, pos, 41)
+        return true
+    }
+    if current == 13 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 41 && token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 45 { if !parse_expression(tokens, pos) { return false } }
+        accept(tokens, pos, 41)
+        return true
+    }
+    if current == 14 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !parse_expression(tokens, pos) { return false }
+        if !parse_block(tokens, pos) { return false }
+        if accept(tokens, pos, 15) { if !parse_block(tokens, pos) { return false } }
+        return true
+    }
+    if current == 16 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 1)
+        if !parse_expression(tokens, pos) { return false }
+        return parse_block(tokens, pos)
+    }
+    if current == 100 && token_at(tokens, hf_dyn_i32_get32(pos, 0) + 1) == 60 {
+        hf_dyn_i32_set32(pos, 0, hf_dyn_i32_get32(pos, 0) + 2)
+        if !parse_expression(tokens, pos) { return false }
+        accept(tokens, pos, 41)
+        return true
+    }
+    if !parse_expression(tokens, pos) { return false }
+    accept(tokens, pos, 41)
+    return true
+}
+
+fn parse_struct(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    if !expect(tokens, pos, 11) { return false }
+    if !expect(tokens, pos, 100) { return false }
+    if !expect(tokens, pos, 44) { return false }
+    while token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 45 && token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 0 {
+        if !expect(tokens, pos, 100) { return false }
+        if !expect(tokens, pos, 40) { return false }
+        if !parse_type(tokens, pos) { return false }
+        accept(tokens, pos, 41)
+        accept(tokens, pos, 48)
+    }
+    return expect(tokens, pos, 45)
+}
+
+fn parse_function(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    if !expect(tokens, pos, 12) { return false }
+    if !expect(tokens, pos, 100) { return false }
+    if !expect(tokens, pos, 42) { return false }
+    if !accept(tokens, pos, 43) {
+        var done: bool = false
+        while !done {
+            if !expect(tokens, pos, 100) { return false }
+            if !expect(tokens, pos, 40) { return false }
+            if !parse_type(tokens, pos) { return false }
+            if accept(tokens, pos, 43) { done = true }
+            else { if !expect(tokens, pos, 48) { return false } }
+        }
+    }
+    if !expect(tokens, pos, 8) { return false }
+    if !parse_type(tokens, pos) { return false }
+    return parse_block(tokens, pos)
+}
+
+fn parse_program(tokens: dyn<i32>, pos: dyn<i32>) -> bool {
+    if accept(tokens, pos, 10) {
+        if !expect(tokens, pos, 100) { return false }
+        accept(tokens, pos, 41)
+    }
+    while token_at(tokens, hf_dyn_i32_get32(pos, 0)) != 0 {
+        let kind: i32 = token_at(tokens, hf_dyn_i32_get32(pos, 0))
+        if kind == 11 { if !parse_struct(tokens, pos) { return false } }
+        else { if kind == 12 { if !parse_function(tokens, pos) { return false } } else { return false } }
+    }
+    return true
+}
+
+fn main() -> i32 {
+    let source: string = hf_read_text("bootstrap/aggregates.hf")
+    let tokens: dyn<i32> = lex(source)
+    let cursor: dyn<i32> = hf_dyn_i32_new(1)
+    hf_dyn_i32_push(cursor, 0)
+    let parsed: bool = parse_program(tokens, cursor)
+    hf_dyn_i32_free(tokens)
+    hf_dyn_i32_free(cursor)
+    if parsed { return 0 }
+    return 2
+}

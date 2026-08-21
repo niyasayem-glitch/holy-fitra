@@ -59,6 +59,35 @@ void hf_dyn_i32_free(void *opaque) {
     free(array);
 }
 
+int32_t hf_dyn_i32_len32(void *opaque) {
+    uint64_t length = hf_dyn_i32_len(opaque);
+    if (length > INT32_MAX) hf_abort_invalid();
+    return (int32_t)length;
+}
+
+int32_t hf_dyn_i32_get32(void *opaque, int32_t index) {
+    if (index < 0) hf_abort_invalid();
+    return hf_dyn_i32_get(opaque, (uint64_t)index);
+}
+
+void hf_dyn_i32_set32(void *opaque, int32_t index, int32_t value) {
+    HF_DynI32 *array = (HF_DynI32 *)opaque;
+    if (!array || !array->data || index < 0 || (uint64_t)index >= array->size) hf_abort_invalid();
+    array->data[index] = value;
+}
+
+int32_t hf_string_len32(const char *text) {
+    if (!text) return 0;
+    size_t length = strlen(text);
+    if (length > INT32_MAX) hf_abort_invalid();
+    return (int32_t)length;
+}
+
+int32_t hf_string_byte32(const char *text, int32_t index) {
+    if (!text || index < 0 || (size_t)index >= strlen(text)) hf_abort_invalid();
+    return (unsigned char)text[index];
+}
+
 void *hf_file_open(const char *path) {
     if (!path || path[0] == '\0') return NULL;
     return (void *)fopen(path, "rb");
