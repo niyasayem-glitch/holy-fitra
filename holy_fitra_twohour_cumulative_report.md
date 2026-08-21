@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `2c2906a` on `master` before the current tiered-residency milestone is published.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `d3b7dfa` on `master` before the current AI-system milestone is published.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -21,7 +21,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | RL 1 | Bounded REINFORCE controller for dynamic cache thresholds and large-batch bonus | 116 tests; Termux/native/sanitizer gates; live policy updates over actual QuantizedMatrix traces; policy checkpoint round-trip | `8d8d2dd` |
 | Round 13 | Software unified-memory arena, zero-copy Tensor views, and reference-counted physical alias accounting | 121 tests; Termux/native/sanitizer gates; 1,048,576-byte alias remains one physical allocation; released storage reused | `367e022` |
 | Round 14 | Content-addressed shared inference tensors with copy-on-write training materialization | 126 tests; Termux/native/sanitizer gates; duplicate 1,048,576-byte weights use 1,048,576 physical bytes | `2c2906a` |
-| Round 15 | Pressure-aware tiered residency with hot/pinned/lease protection | 131 tests; Termux/native/sanitizer gates; 1,024 physical bytes reclaimed under critical pressure | Pending |
+| Round 15 | Pressure-aware tiered residency with hot/pinned/lease protection | 131 tests; Termux/native/sanitizer gates; 1,024 physical bytes reclaimed under critical pressure | `d3b7dfa` |
+| AI System 1 | Evidence-grounded local agent with vector retrieval, uncertainty ledger, capability-scoped tools, bounded execution, and audit trace | 137 tests; Termux/native/sanitizer gates; unauthorized tool denied; retrieve→tool trace; 0.051086 ms local benchmark | Pending |
 
 ## Rejected work
 
@@ -29,7 +30,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **131 tests with 0 failures**.
+The current full applicable Python suite passes **137 tests with 0 failures**.
  Termux-compatible host validation passes compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. ASAN/UBSAN validation passes for the ragged scheduler executable and sanitized NibbleFlow shared-library build.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
@@ -37,6 +38,10 @@ The sandbox host is x86-64. AArch64 object emission and cross-compilation are va
 ## Loop policy
 
 Every candidate is evaluated against complete regression tests and applicable native gates. A candidate is retained only when it passes semantic and safety checks and does not introduce a measured regression. Quantization proof gates, evidence monotonicity, capability authorization, speculative-cache safety, and Android fallback contracts remain enforced.
+
+## AI-system milestone retained
+
+Holy Fitra now provides a deterministic local evidence-grounded agent layer: vector retrieval, provenance-bearing facts/claims/predictions, monotonic evidence updates, capability-scoped and argument-validated tools, bounded plans, cancellation, and audit traces. It is intentionally not authorized to perform unconstrained external side effects.
 
 ## Round 15 tiered-residency milestone retained
 
