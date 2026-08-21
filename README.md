@@ -146,6 +146,42 @@ fn main() -> i32 {
 
 Supported effect names are `io`, `network`, `tool`, `model`, `memory`, `thermal`, `random`, and `unsafe`. Unknown or duplicate effects are rejected. Effects are preserved in compiler diagnostics and LLVM metadata; later compiler phases will enforce effect capability propagation across call graphs.
 
+## Ownership and AI safety contracts
+
+Holy Fitra now exposes explicit ownership modes for function parameters:
+
+```holyfitra
+fn inspect(x: borrow i32) -> i32 {
+    return x
+}
+
+fn update(x: borrow_mut i32) -> i32 {
+    return x + 1
+}
+```
+
+The available modes are `owned`, `borrow`, `borrow_mut`, and `shared`. The compiler rejects multiple `borrow_mut` parameters in one function and preserves ownership metadata in diagnostics and LLVM comments. This is the first layer of a future lifetime checker for tensor buffers, KV caches, consent tokens, and native request handles.
+
+Structured task metadata can be attached to a function:
+
+```holyfitra
+fn decode(x: borrow i32) -> i32 effects [model, memory] task [async, priority=5, deadline_ms=50, capacity=4, supervised] {
+    return x
+}
+```
+
+Task metadata is explicit and bounded. It records asynchronous intent, priority, deadline, capacity, cancellation, and supervision policy without creating hidden threads. The compiler validates positive capacity/deadlines and emits the metadata for later lowering into the Android scheduler and structured runtime.
+
+The runtime contract layer is available through:
+
+```bash
+holyfitra contracts
+```
+
+It validates `Option`/`Result` exclusivity, ownership generations, bounded task specifications, supervisor child uniqueness, cancellation/deadline metadata, uncertainty evidence provenance, and int4 kernel proof requirements. It also emits deterministic kernel specialization identities for operation, dtype, device, layout, shape, proof, and fallback precision. The implementation is in `holyfitra_contracts.py` and is intentionally deterministic: it does not create hidden threads, access the network, or execute models.
+
+Native function checking now computes a call graph and transitive effect closure. If `decode` declares `[model, memory]`, every safe caller must also declare those effects; `unsafe` is the explicit escape hatch. The JSON output includes `call_graph` and `effective_effects`, making safety review inspectable in the TUI, REPL, and CI.
+
 ## Tensor, capability, and HyperIR planning
 
 ```holyfitra

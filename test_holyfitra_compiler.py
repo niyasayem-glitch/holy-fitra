@@ -88,7 +88,7 @@ fn main() -> i32 {
         source = (
             'module effect_test\n'
             'fn infer() -> i32 effects [model, memory] { return 7 }\n'
-            'fn main() -> i32 { return infer() }\n'
+            'fn main() -> i32 effects [model, memory] { return infer() }\n'
         )
         program = parse_native(source)
         validate_native(program)
@@ -97,6 +97,31 @@ fn main() -> i32 {
 
     def test_unknown_effect_is_rejected(self):
         source = 'module effect_test\nfn main() -> i32 effects [telepathy] { return 0 }\n'
+        with self.assertRaises(HolyFitraError):
+            validate_native(parse_native(source))
+
+    def test_ownership_and_task_annotations_are_preserved(self):
+        source = (
+            'module contracts_test\n'
+            'fn decode(x: borrow i32) -> i32 effects [model] task [async, priority=5, deadline_ms=50, capacity=4, supervised] {\n'
+            '    return x\n'
+            '}\n'
+            'fn main() -> i32 effects [model] { return decode(7) }\n'
+        )
+        program = parse_native(source)
+        validate_native(program)
+        function = program.functions[0]
+        self.assertEqual(function.parameters[0][1].mode, 'borrow')
+        self.assertTrue(function.task.async_)
+        self.assertEqual(function.task.priority, 5)
+        self.assertEqual(function.task.capacity, 4)
+        self.assertTrue(function.task.supervised)
+        llvm = emit_llvm(program)
+        self.assertIn('; ownership: x:borrow', llvm)
+        self.assertIn('; task:', llvm)
+
+    def test_multiple_mutable_borrows_are_rejected(self):
+        source = 'module bad\nfn main(a: borrow_mut i32, b: borrow_mut i32) -> i32 { return a }\n'
         with self.assertRaises(HolyFitraError):
             validate_native(parse_native(source))
 

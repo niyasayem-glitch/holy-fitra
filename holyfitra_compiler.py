@@ -48,6 +48,7 @@ class Token:
 @dataclass(frozen=True)
 class Type:
     name: str
+    mode: str = "owned"
 
     @property
     def llvm(self) -> str:
@@ -116,6 +117,16 @@ Statement = LetStmt | ReturnStmt | IfStmt
 
 
 @dataclass(frozen=True)
+class TaskMetadata:
+    async_: bool = False
+    priority: int = 0
+    deadline_ms: int | None = None
+    capacity: int = 1
+    cancelable: bool = True
+    supervised: bool = False
+
+
+@dataclass(frozen=True)
 class Function:
     name: str
     parameters: tuple[tuple[str, Type], ...]
@@ -123,6 +134,7 @@ class Function:
     body: tuple[Statement, ...]
     line: int
     effects: tuple[str, ...] = ()
+    task: TaskMetadata | None = None
 
 
 @dataclass(frozen=True)
@@ -251,8 +263,37 @@ class Parser:
                     if self.accept("PUNCT", "]"):
                         break
                     self.expect("PUNCT", ",")
+        task = None
+        if self.accept("IDENT", "task"):
+            values: dict[str, object] = {}
+            self.expect("PUNCT", "[")
+            if not self.accept("PUNCT", "]"):
+                while True:
+                    key = self.expect("IDENT").text
+                    value: object = True
+                    if self.accept("OP", "="):
+                        if self.current.kind == "INT":
+                            value = int(self.advance().text)
+                        else:
+                            value = self.expect("IDENT").text == "true"
+                    values[key] = value
+                    if self.accept("PUNCT", "]"):
+                        break
+                    self.expect("PUNCT", ",")
+            allowed = {"async", "priority", "deadline_ms", "capacity", "cancelable", "supervised"}
+            unknown = set(values) - allowed
+            if unknown:
+                raise HolyFitraError(f"unknown task metadata: {', '.join(sorted(unknown))}")
+            task = TaskMetadata(
+                async_=bool(values.get("async", False)),
+                priority=int(values.get("priority", 0)),
+                deadline_ms=int(values["deadline_ms"]) if "deadline_ms" in values else None,
+                capacity=int(values.get("capacity", 1)),
+                cancelable=bool(values.get("cancelable", True)),
+                supervised=bool(values.get("supervised", False)),
+            )
         body = self.parse_block()
-        return Function(name_token.text, tuple(parameters), return_type, body, name_token.line, tuple(effects))
+        return Function(name_token.text, tuple(parameters), return_type, body, name_token.line, tuple(effects), task)
 
     def parse_block(self) -> tuple[Statement, ...]:
         self.expect("PUNCT", "{")
@@ -264,8 +305,11 @@ class Parser:
         return tuple(body)
 
     def parse_type(self) -> Type:
+        mode = "owned"
+        if self.current.kind == "IDENT" and self.current.text in {"owned", "borrow", "borrow_mut", "shared"}:
+            mode = self.advance().text
         token = self.expect("IDENT")
-        return Type(token.text)
+        return Type(token.text, mode)
 
     def parse_statement(self) -> Statement:
         if self.accept("IDENT", "if"):
@@ -349,6 +393,63 @@ def parse_native(source: str) -> Program:
     return Parser(lex(source)).parse()
 
 
+def _same_value_type(left: Type, right: Type) -> bool:
+    return left.name == right.name
+
+
+def _direct_calls_expression(expr: Expr) -> set[str]:
+    if isinstance(expr, CallExpr):
+        calls = {expr.name}
+        for argument in expr.arguments:
+            calls.update(_direct_calls_expression(argument))
+        return calls
+    if isinstance(expr, BinaryExpr):
+        return _direct_calls_expression(expr.left) | _direct_calls_expression(expr.right)
+    return set()
+
+
+def _direct_calls_block(statements: tuple[Statement, ...]) -> set[str]:
+    calls: set[str] = set()
+    for statement in statements:
+        if isinstance(statement, LetStmt):
+            calls.update(_direct_calls_expression(statement.value))
+        elif isinstance(statement, ReturnStmt) and statement.value is not None:
+            calls.update(_direct_calls_expression(statement.value))
+        elif isinstance(statement, IfStmt):
+            calls.update(_direct_calls_expression(statement.condition))
+            calls.update(_direct_calls_block(statement.then_body))
+            calls.update(_direct_calls_block(statement.else_body))
+    return calls
+
+
+def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str, set[str]]]:
+    functions = {function.name: function for function in program.functions}
+    direct = {name: _direct_calls_block(function.body) for name, function in functions.items()}
+    for name, calls in direct.items():
+        unknown = calls - functions.keys()
+        if unknown:
+            raise HolyFitraError(f"function {name} calls unknown functions: {', '.join(sorted(unknown))}")
+    memo: dict[str, set[str]] = {}
+    active: set[str] = set()
+
+    def closure(name: str) -> set[str]:
+        if name in memo:
+            return set(memo[name])
+        if name in active:
+            return set()
+        active.add(name)
+        result = set(functions[name].effects)
+        for callee in direct[name]:
+            result.update(closure(callee))
+        active.remove(name)
+        memo[name] = result
+        return set(result)
+
+    for name in functions:
+        closure(name)
+    return direct, memo
+
+
 def _function_map(program: Program) -> dict[str, Function]:
     functions: dict[str, Function] = {}
     for function in program.functions:
@@ -370,7 +471,7 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
     if isinstance(expr, BinaryExpr):
         left = _infer_expression(expr.left, variables, functions)
         right = _infer_expression(expr.right, variables, functions)
-        if left != right:
+        if not _same_value_type(left, right):
             raise HolyFitraError(f"operator {expr.operator} requires matching types, got {left.name} and {right.name}")
         if expr.operator in {"&&", "||"}:
             if left.name != "bool":
@@ -391,7 +492,7 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
             raise HolyFitraError(f"function {expr.name} expects {len(function.parameters)} arguments")
         for argument, (_, parameter_type) in zip(expr.arguments, function.parameters):
             actual = _infer_expression(argument, variables, functions)
-            if actual != parameter_type:
+            if not _same_value_type(actual, parameter_type):
                 raise HolyFitraError(f"argument to {expr.name} requires {parameter_type.name}, got {actual.name}")
         return function.return_type
     raise HolyFitraError("unsupported expression")
@@ -399,13 +500,27 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
 
 def validate_native(program: Program) -> None:
     functions = _function_map(program)
+    direct_calls, effective_effects = _effect_call_graph(program)
     allowed_effects = {"io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"}
     for function in program.functions:
+        ownership_modes = {type_.mode for _, type_ in function.parameters}
+        if not ownership_modes.issubset({"owned", "borrow", "borrow_mut", "shared"}):
+            raise HolyFitraError(f"function {function.name} uses an unknown ownership mode")
+        if sum(type_.mode == "borrow_mut" for _, type_ in function.parameters) > 1:
+            raise HolyFitraError(f"function {function.name} has multiple borrow_mut parameters; mutable access must be exclusive")
         unknown_effects = set(function.effects) - allowed_effects
         if unknown_effects:
             raise HolyFitraError(f"function {function.name} declares unknown effects: {', '.join(sorted(unknown_effects))}")
         if len(set(function.effects)) != len(function.effects):
             raise HolyFitraError(f"function {function.name} declares duplicate effects")
+        required_from_calls = effective_effects[function.name] - set(function.effects)
+        if required_from_calls and "unsafe" not in function.effects:
+            raise HolyFitraError(f"function {function.name} must declare transitive effects: {', '.join(sorted(required_from_calls))}")
+        if function.task is not None:
+            if function.task.capacity <= 0:
+                raise HolyFitraError(f"function {function.name} task capacity must be positive")
+            if function.task.deadline_ms is not None and function.task.deadline_ms <= 0:
+                raise HolyFitraError(f"function {function.name} task deadline must be positive")
         if function.return_type.name not in {"i32", "i64", "bool", "void"}:
             raise HolyFitraError(f"function {function.name} has unsupported return type {function.return_type.name}")
         variables = dict(function.parameters)
@@ -415,7 +530,7 @@ def validate_native(program: Program) -> None:
             for statement in statements:
                 if isinstance(statement, LetStmt):
                     actual = _infer_expression(statement.value, scope, functions)
-                    if statement.type is not None and actual != statement.type:
+                    if statement.type is not None and not _same_value_type(actual, statement.type):
                         raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
                     scope[statement.name] = statement.type or actual
                 elif isinstance(statement, ReturnStmt):
@@ -427,7 +542,7 @@ def validate_native(program: Program) -> None:
                         if statement.value is None:
                             raise HolyFitraError(f"function {function.name} must return {function.return_type.name}")
                         actual = _infer_expression(statement.value, scope, functions)
-                        if actual != function.return_type:
+                        if not _same_value_type(actual, function.return_type):
                             raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
                 elif isinstance(statement, IfStmt):
                     condition_type = _infer_expression(statement.condition, scope, functions)
@@ -502,7 +617,7 @@ class LLVMEmitter:
                     return ("1" if outcomes[expression.operator] else "0"), Type("bool")
             left, type_ = self.emit_expr(expression.left)
             right, right_type = self.emit_expr(expression.right)
-            if type_ != right_type:
+            if not _same_value_type(type_, right_type):
                 raise HolyFitraError("binary operands have different types")
             if expression.operator in {"&&", "||"}:
                 opcode = "and" if expression.operator == "&&" else "or"
@@ -526,7 +641,7 @@ class LLVMEmitter:
             args: list[str] = []
             for argument, (_, parameter_type) in zip(expression.arguments, function.parameters):
                 value, actual_type = self.emit_expr(argument)
-                if actual_type != parameter_type:
+                if not _same_value_type(actual_type, parameter_type):
                     raise HolyFitraError("call argument type mismatch")
                 args.append(f"{parameter_type.llvm} {value}")
             result_type = function.return_type
@@ -548,7 +663,9 @@ class LLVMEmitter:
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
         return_type = "void" if function.return_type.name == "void" else function.return_type.llvm
         effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
-        lines = [effect_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
+        ownership_comment = "; ownership: " + ", ".join(f"{name}:{type_.mode}" for name, type_ in function.parameters) if function.parameters else "; ownership: none"
+        task_comment = "; task: " + (json.dumps({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised}, sort_keys=True) if function.task else "sync")
+        lines = [effect_comment, ownership_comment, task_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
         self.emit_block(function.body)
         if not self.terminated and function.return_type.name == "void":
@@ -750,7 +867,8 @@ def check_file(source_path: Path) -> int:
             return 0 if result["valid"] else 1
         program = parse_native(source)
         validate_native(program)
-        print(json.dumps({"valid": True, "module": program.module, "functions": [{"name": function.name, "effects": list(function.effects)} for function in program.functions]}, indent=2))
+        direct_calls, effective_effects = _effect_call_graph(program)
+        print(json.dumps({"valid": True, "module": program.module, "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()}, "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()}, "functions": [{"name": function.name, "effects": list(function.effects), "parameters": [{"name": name, "type": type_.name, "mode": type_.mode} for name, type_ in function.parameters], "task": ({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised} if function.task else None)} for function in program.functions]}, indent=2))
         return 0
     except (HolyFitraError, ValueError) as error:
         print(json.dumps({"valid": False, "error": str(error)}, indent=2))
@@ -794,6 +912,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tui_parser.add_argument("--snapshot", action="store_true")
     repl_parser = subparsers.add_parser("repl", help="start the interactive Holy Fitra REPL")
     bench_parser = subparsers.add_parser("bench", help="run compiler and AI runtime benchmark diagnostics")
+    contracts_parser = subparsers.add_parser("contracts", help="validate structured task, supervisor, result, and kernel contracts")
     bench_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
     bench_parser.add_argument("--repeats", type=int, default=5)
     bench_parser.add_argument("-o", "--output", type=Path)
@@ -832,6 +951,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "repl":
             from holyfitra_repl import Repl
             return Repl().run()
+        if args.command == "contracts":
+            from holyfitra_contracts import demo
+            print(json.dumps(demo(), indent=2, sort_keys=True))
+            return 0
         if args.command == "bench":
             from holyfitra_benchmark import benchmark_project
             result = benchmark_project(args.path, args.repeats)

@@ -113,7 +113,9 @@ class Repl:
                 try:
                     program = parse_native(source)
                     validate_native(program)
-                    self.write(json.dumps({"valid": True, "module": program.module, "functions": [{"name": fn.name, "effects": list(fn.effects)} for fn in program.functions]}, indent=2))
+                    from holyfitra_compiler import _effect_call_graph
+                    direct_calls, effective_effects = _effect_call_graph(program)
+                    self.write(json.dumps({"valid": True, "module": program.module, "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()}, "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()}, "functions": [{"name": fn.name, "effects": list(fn.effects), "parameters": [{"name": name, "type": type_.name, "mode": type_.mode} for name, type_ in fn.parameters], "task": ({"async": fn.task.async_, "priority": fn.task.priority, "deadline_ms": fn.task.deadline_ms, "capacity": fn.task.capacity, "cancelable": fn.task.cancelable, "supervised": fn.task.supervised} if fn.task else None)} for fn in program.functions]}, indent=2))
                 except HolyFitraError as error:
                     self.write(json.dumps({"valid": False, "error": str(error)}, indent=2))
             elif self.project_path:

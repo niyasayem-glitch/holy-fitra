@@ -80,7 +80,9 @@ class Workspace:
             else:
                 program = parse_native(source)
                 validate_native(program)
-                self.last_result = {"valid": True, "mode": "native", "module": program.module, "functions": [{"name": fn.name, "effects": list(fn.effects)} for fn in program.functions]}
+                from holyfitra_compiler import _effect_call_graph
+                direct_calls, effective_effects = _effect_call_graph(program)
+                self.last_result = {"valid": True, "mode": "native", "module": program.module, "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()}, "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()}, "functions": [{"name": fn.name, "effects": list(fn.effects), "parameters": [{"name": name, "type": type_.name, "mode": type_.mode} for name, type_ in fn.parameters], "task": ({"async": fn.task.async_, "priority": fn.task.priority, "deadline_ms": fn.task.deadline_ms, "capacity": fn.task.capacity, "cancelable": fn.task.cancelable, "supervised": fn.task.supervised} if fn.task else None)} for fn in program.functions]}
         except (HolyFitraError, OSError, ValueError) as error:
             self.last_result = {"valid": False, "error": str(error), "file": self.relative(path)}
         self.status = "valid" if self.last_result.get("valid") else "error"
