@@ -41,7 +41,8 @@ _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
 _MEMORY_COMPILE_CACHE_LIMIT = 32
 _EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, set[str]]]] = OrderedDict()
 _EFFECT_GRAPH_CACHE_LIMIT = 64
-_LLVM_CACHE_SCHEMA = 1
+_LLVM_CACHE_SCHEMA = 2
+_NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v2"
 
 
 class HolyFitraError(Exception):
@@ -774,7 +775,9 @@ class LLVMEmitter:
         return "\n".join(lines).rstrip() + "\n"
 
     def emit_call_values(self, name: str, arguments: list[tuple[str, Type]]) -> tuple[str, Type]:
-        function = self.functions[name]
+        function = self.functions.get(name)
+        if function is None:
+            raise HolyFitraError(f"unknown function {name}")
         if len(arguments) != len(function.parameters):
             raise HolyFitraError(f"call argument count mismatch for {name}")
         rendered: list[str] = []
@@ -859,7 +862,11 @@ class LLVMEmitter:
             lines.append(f"  {result} = {opcode} {type_.llvm} {left}, {right}")
             return result, type_
         if isinstance(expression, CallExpr):
-            function = self.functions[expression.name]
+            function = self.functions.get(expression.name)
+            if function is None:
+                raise HolyFitraError(f"unknown function {expression.name}")
+            if len(expression.arguments) != len(function.parameters):
+                raise HolyFitraError(f"function {expression.name} expects {len(function.parameters)} arguments")
             arguments: list[tuple[str, Type]] = []
             for argument, (_, parameter_type) in zip(expression.arguments, function.parameters):
                 value, actual_type = self.emit_expr(argument)
@@ -872,6 +879,8 @@ class LLVMEmitter:
     def emit_function(self, function: Function) -> list[str]:
         self.counter = 0
         self.block_counter = 0
+        self.local_counter = 0
+        self.alloca_lines: list[str] = []
         self.terminated = False
         self.variables = {name: f"%{name}.addr" for name, _ in function.parameters}
         self.types = dict(function.parameters)
@@ -892,6 +901,7 @@ class LLVMEmitter:
         for name, type_ in function.parameters:
             lines.append(f"  %{name}.addr = alloca {type_.llvm}")
             lines.append(f"  store {type_.llvm} %{name}, ptr %{name}.addr")
+        entry_alloca_index = len(lines)
         if function.hybrid is not None:
             current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
             if function.hybrid.strategy == "parallel":
@@ -909,6 +919,8 @@ class LLVMEmitter:
             lines.append("  ret void")
         elif not self.terminated:
             raise HolyFitraError(f"function {function.name} has an unterminated return path")
+        if self.alloca_lines:
+            lines[entry_alloca_index:entry_alloca_index] = self.alloca_lines
         lines.append("}")
         return lines
 
@@ -921,8 +933,9 @@ class LLVMEmitter:
             if isinstance(statement, LetStmt):
                 value, value_type = self.emit_expr(statement.value)
                 local_type = statement.type or value_type
-                address = f"%{statement.name}.addr.{self.counter}"
-                self.current_lines.append(f"  {address} = alloca {local_type.llvm}")
+                address = f"%{statement.name}.addr.{self.local_counter}"
+                self.local_counter += 1
+                self.alloca_lines.append(f"  {address} = alloca {local_type.llvm}")
                 self.current_lines.append(f"  store {local_type.llvm} {value}, ptr {address}")
                 self.variables[statement.name] = address
                 self.types[statement.name] = local_type
@@ -1024,7 +1037,8 @@ def _atomic_write_text(path: Path, text: str) -> None:
 
 def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
     source = source_path.read_text(encoding="utf-8")
-    cache_identity = source + "\\0" + (target or "x86_64-pc-linux-gnu")
+    effective_target = target or "x86_64-pc-linux-gnu"
+    cache_identity = "\\0".join((source, effective_target, str(_LLVM_CACHE_SCHEMA), _NATIVE_COMPILER_ABI))
     digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
     memory_cached = _MEMORY_COMPILE_CACHE.get(digest)
     if memory_cached is not None:
@@ -1128,10 +1142,13 @@ def load_project(path: Path) -> Project:
     project = document.get("project", {})
     build_config = document.get("build", {})
     name = project.get("name") or root.name
-    entry = root / project.get("entry", "src/main.hf")
+    entry = (root / str(project.get("entry", "src/main.hf"))).resolve()
+    root_resolved = root.resolve()
+    if entry != root_resolved and root_resolved not in entry.parents:
+        raise HolyFitraError(f"project entry escapes project root: {entry}")
     if not entry.is_file():
         raise HolyFitraError(f"project entry does not exist: {entry}")
-    return Project(root, str(name), entry, build_config.get("target"))
+    return Project(root_resolved, str(name), entry, build_config.get("target"))
 
 
 def init_project(root: Path, name: str | None = None) -> int:
@@ -1155,8 +1172,14 @@ def init_project(root: Path, name: str | None = None) -> int:
 
 def test_project(source_path: Path, target: str | None = None) -> int:
     project = load_project(source_path)
+    effective_target = target or project.target or "x86_64-pc-linux-gnu"
+    if not (effective_target == "host" or effective_target.startswith("x86_64")):
+        raise HolyFitraError(f"holyfitra test requires an executable host target, got {effective_target}")
     tests_dir = project.root / "tests"
     test_sources = sorted(tests_dir.glob("*.hf")) if tests_dir.is_dir() else []
+    if not test_sources:
+        print(json.dumps({"ok": False, "project": str(project.root), "tests": [], "count": 0, "error": "no .hf tests found"}, indent=2, sort_keys=True))
+        return 1
     results: list[dict[str, object]] = []
     with tempfile.TemporaryDirectory(prefix="holyfitra-tests-") as temporary:
         temporary_root = Path(temporary)

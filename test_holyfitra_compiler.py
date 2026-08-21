@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, compile_native_file, emit_llvm, init_project, load_project, parse_native, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, compile_native_file, emit_llvm, init_project, load_project, parse_native, test_project, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -247,7 +247,7 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(rebuilt_llvm, expected_llvm)
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["digest"], digest)
-            self.assertEqual(payload["schema"], 1)
+            self.assertEqual(payload["schema"], 2)
 
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
@@ -282,6 +282,25 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(project.entry.name, "main.hf")
             self.assertEqual(project.target, "x86_64-pc-linux-gnu")
             self.assertTrue((root / "tests" / "smoke.hf").is_file())
+
+    def test_call_arity_rejection_is_user_facing(self):
+        source = "fn add(a: i32, b: i32) -> i32 { return a + b } fn main() -> i32 { return add(1) }"
+        with self.assertRaisesRegex(HolyFitraError, "expects 2 arguments"):
+            emit_llvm(parse_native(source))
+
+    def test_empty_project_test_suite_fails_closed(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "empty_project"
+            init_project(root, "empty_project")
+            (root / "tests" / "smoke.hf").unlink()
+            self.assertEqual(test_project(root), 1)
+
+    def test_cross_target_project_tests_are_rejected_before_execution(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "arm_project"
+            init_project(root, "arm_project")
+            with self.assertRaisesRegex(HolyFitraError, "requires an executable host target"):
+                test_project(root, "aarch64-linux-android21")
 
     def test_cli_test_runs_project_smoke_suite(self):
         root = Path(__file__).parent

@@ -252,3 +252,20 @@ This is a real-language foundation wave, not yet the self-hosted compiler fixed 
 Project initialization now creates a `tests/` directory with a deterministic native smoke test, and the compiler exposes `holyfitra test <project>` to discover sorted standalone `.hf` test programs, build each test through the native compiler, run it in an isolated temporary executable path, and emit a structured JSON result. A failing build, timeout, non-zero test status, or missing project test is reported fail-closed.
 
 The focused compiler suite passed **25 tests with 0 failures** after this addition. The complete applicable Python suite passed **133 tests with 0 failures**, and the Termux-compatible host gate passed **129 tests**. The workflow remains Python-hosted at this stage; the test protocol is intentionally simple so it can later be reimplemented by the self-hosted Stage-1 driver.
+
+## Self-healing hardening wave retained
+
+A repository-wide self-healing audit found no active syntax, shell, or regression failures, so the retained changes target latent correctness hazards and weak fail-closed contracts. The native LLVM cache now uses schema version 2 plus an explicit compiler ABI identity in its digest input, preventing stale artifacts from surviving emitter-contract changes. Function calls now reject unknown names and wrong arity with user-facing `HolyFitraError` diagnostics instead of allowing internal indexing failures. Project manifests now resolve entries under a canonical project root and reject path escapes. The native project test runner now refuses cross-target execution, fails when no `.hf` tests are present, keeps deterministic sorted discovery, and preserves isolated timeout-bounded execution. Local `alloca` instructions are hoisted to function entry so loop iterations do not create new stack allocations.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | Passed; 175 tests, 0 failures |
+| No-Python bootstrap gate | Passed |
+| Self-hosted frontend native gate | Passed |
+| Bootstrap runtime sanitizer | Passed |
+| Bootstrap diagnostics and invalid-source gates | Passed |
+| AArch64 object generation | Passed; host and self-hosted artifacts non-empty |
+| Termux-compatible host gate | Passed; 136 tests |
+| Python compileall and shell syntax | Passed |
+
+No physical Android execution was performed. AArch64 results are cross-compilation artifact validation only. The next deferred candidates remain the module import graph, structured native diagnostic protocol, LLVM verifier integration, and self-hosted symbol/type arena snapshots; these are intentionally separate semantic-core milestones rather than hidden in this repair wave.
