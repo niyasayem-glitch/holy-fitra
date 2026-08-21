@@ -1,48 +1,27 @@
-// Holy Fitra Stage-0 bootstrap compiler.
+// Holy Fitra Stage-0 bootstrap compiler, dependency-free C++17 seed.
 //
-// This deliberately small compiler has no Python dependency.  It accepts the
-// bootstrap scalar subset of Holy Fitra and emits textual LLVM IR.  Clang or
-// LLVM can then lower that IR to host or AArch64 objects/executables.
-//
-// Supported source subset:
-//   module name
-//   fn name(a: i32, b: i64) -> i32 { ... }
-//   types: i32, i64, bool, void
-//   let/var, return, if/else, while, expression statements
-//   integer/boolean literals, names, calls, arithmetic, comparisons, &&, ||
-//   unary - and !
-//
-// Deliberate bootstrap constraints:
-//   * no imports, tensors, effects, tasks, hybrids, pointers, or generics;
-//   * each function has one lexical local scope; shadowing is rejected;
-//   * assignments are not part of this first seed subset;
-//   * while loops are supported for compiler implementation code, but the
-//     validator does not treat a while loop as guaranteeing a return.
+// The seed emits textual LLVM IR and supports the compiler-core substrate:
+// scalar values, fixed arrays, named structs, string literals, indexing,
+// field access, direct calls, if/else, while, locals, and returns.
 //
 // Build:
-//   clang++ -std=c++17 -O2 -Wall -Wextra -pedantic holyfitra_bootstrap.cpp \
-//       -o holyfitra_bootstrap
-//
-// Emit LLVM:
+//   clang++ -std=c++17 -O2 -Wall -Wextra -pedantic holyfitra_bootstrap.cpp -o holyfitra_bootstrap
+// Emit:
 //   ./holyfitra_bootstrap --target=x86_64-pc-linux-gnu input.hf -o input.ll
-//   ./holyfitra_bootstrap --target=aarch64-linux-android21 input.hf -o input.ll
-//
-// Build native output after emission:
 //   clang input.ll -O2 -o input
+// AArch64 object:
+//   ./holyfitra_bootstrap --target=aarch64-linux-android21 input.hf -o input.ll
 //   clang --target=aarch64-linux-android21 -c input.ll -o input.aarch64.o
 
-#include <algorithm>
 #include <cstdint>
-#include <cstdlib>
 #include <fstream>
 #include <iostream>
-#include <limits>
+#include <map>
 #include <memory>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -61,18 +40,10 @@ struct Diagnostic final : std::runtime_error {
 }
 
 static std::string location(int line, int column) {
-    if (line <= 0) return {};
-    return " at " + std::to_string(line) + ":" + std::to_string(column);
+    return line > 0 ? " at " + std::to_string(line) + ":" + std::to_string(column) : "";
 }
 
-enum class TokenKind {
-    Eof,
-    Identifier,
-    Integer,
-    Arrow,
-    Operator,
-    Punctuation,
-};
+enum class TokenKind { Eof, Identifier, Integer, String, Arrow, Operator, Punctuation };
 
 struct Token final {
     TokenKind kind;
@@ -86,115 +57,93 @@ public:
     explicit Lexer(std::string source) : source_(std::move(source)) {}
 
     std::vector<Token> run() {
-        std::vector<Token> tokens;
+        std::vector<Token> result;
         while (position_ < source_.size()) {
-            char c = source_[position_];
-            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') {
-                advanceChar();
-                continue;
-            }
-            if (c == '/' && peek(1) == '/') {
-                skipLineComment();
-                continue;
-            }
-            if (c == '#') {
-                skipLineComment();
-                continue;
-            }
+            const char c = source_[position_];
+            if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { advance(); continue; }
+            if ((c == '/' && peek(1) == '/') || c == '#') { skipComment(); continue; }
             const int line = line_;
             const int column = column_;
-            if (isIdentifierStart(c)) {
-                std::string value;
-                while (position_ < source_.size() && isIdentifierContinue(source_[position_])) {
-                    value.push_back(source_[position_]);
-                    advanceChar();
-                }
-                tokens.push_back({TokenKind::Identifier, std::move(value), line, column});
+            if (identifierStart(c)) {
+                std::string text;
+                while (position_ < source_.size() && identifierContinue(source_[position_])) { text.push_back(source_[position_]); advance(); }
+                result.push_back({TokenKind::Identifier, std::move(text), line, column});
                 continue;
             }
             if (c >= '0' && c <= '9') {
-                std::string value;
-                while (position_ < source_.size() && source_[position_] >= '0' && source_[position_] <= '9') {
-                    value.push_back(source_[position_]);
-                    advanceChar();
+                std::string text;
+                while (position_ < source_.size() && source_[position_] >= '0' && source_[position_] <= '9') { text.push_back(source_[position_]); advance(); }
+                result.push_back({TokenKind::Integer, std::move(text), line, column});
+                continue;
+            }
+            if (c == '"') {
+                advance();
+                std::string text;
+                while (position_ < source_.size() && source_[position_] != '"') {
+                    if (source_[position_] == '\\' && peek(1) == '"') { text.push_back('"'); advance(); advance(); }
+                    else if (source_[position_] == '\\' && peek(1) == 'n') { text.push_back('\n'); advance(); advance(); }
+                    else { text.push_back(source_[position_]); advance(); }
                 }
-                tokens.push_back({TokenKind::Integer, std::move(value), line, column});
+                if (position_ >= source_.size()) fail("unterminated string literal" + location(line, column), line, column);
+                advance();
+                result.push_back({TokenKind::String, std::move(text), line, column});
                 continue;
             }
-            if (c == '-' && peek(1) == '>') {
-                advanceChar();
-                advanceChar();
-                tokens.push_back({TokenKind::Arrow, "->", line, column});
-                continue;
-            }
+            if (c == '-' && peek(1) == '>') { advance(); advance(); result.push_back({TokenKind::Arrow, "->", line, column}); continue; }
             const std::string two = std::string() + c + peek(1);
             if (two == "==" || two == "!=" || two == "<=" || two == ">=" || two == "&&" || two == "||") {
-                advanceChar();
-                advanceChar();
-                tokens.push_back({TokenKind::Operator, two, line, column});
-                continue;
+                advance(); advance(); result.push_back({TokenKind::Operator, two, line, column}); continue;
             }
-            if (std::string("+-*/=<>!").find(c) != std::string::npos) {
-                advanceChar();
-                tokens.push_back({TokenKind::Operator, std::string(1, c), line, column});
-                continue;
-            }
-            if (std::string("{}(),:;").find(c) != std::string::npos) {
-                advanceChar();
-                tokens.push_back({TokenKind::Punctuation, std::string(1, c), line, column});
-                continue;
-            }
+            if (std::string("+-*/=<>!").find(c) != std::string::npos) { advance(); result.push_back({TokenKind::Operator, std::string(1, c), line, column}); continue; }
+            if (std::string("{}(),:;[].").find(c) != std::string::npos) { advance(); result.push_back({TokenKind::Punctuation, std::string(1, c), line, column}); continue; }
             fail(std::string("unexpected character '") + c + "'" + location(line, column), line, column);
         }
-        tokens.push_back({TokenKind::Eof, "", line_, column_});
-        return tokens;
+        result.push_back({TokenKind::Eof, "", line_, column_});
+        return result;
     }
 
 private:
-    static bool isIdentifierStart(char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_';
-    }
-
-    static bool isIdentifierContinue(char c) {
-        return isIdentifierStart(c) || (c >= '0' && c <= '9');
-    }
-
-    char peek(std::size_t offset) const {
-        const std::size_t index = position_ + offset;
-        return index < source_.size() ? source_[index] : '\0';
-    }
-
-    void advanceChar() {
-        if (position_ >= source_.size()) return;
-        if (source_[position_] == '\n') {
-            ++line_;
-            column_ = 1;
-        } else {
-            ++column_;
-        }
-        ++position_;
-    }
-
-    void skipLineComment() {
-        while (position_ < source_.size() && source_[position_] != '\n') advanceChar();
-    }
-
+    static bool identifierStart(char c) { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || c == '_'; }
+    static bool identifierContinue(char c) { return identifierStart(c) || (c >= '0' && c <= '9'); }
+    char peek(std::size_t offset) const { const auto i = position_ + offset; return i < source_.size() ? source_[i] : '\0'; }
+    void advance() { if (source_[position_] == '\n') { ++line_; column_ = 1; } else ++column_; ++position_; }
+    void skipComment() { while (position_ < source_.size() && source_[position_] != '\n') advance(); }
     std::string source_;
     std::size_t position_ = 0;
     int line_ = 1;
     int column_ = 1;
 };
 
-enum class TypeKind { I32, I64, Bool, Void };
+enum class TypeKind { I32, I64, Bool, Void, String, Array, Struct };
 
 struct Type final {
-    TypeKind kind;
-    std::string name() const {
+    TypeKind kind = TypeKind::Void;
+    std::string name;
+    std::size_t count = 0;
+    std::shared_ptr<Type> element;
+    std::vector<std::pair<std::string, Type>> fields;
+
+    static Type scalar(TypeKind kind) { Type type; type.kind = kind; return type; }
+    static Type array(std::size_t count, Type element) { Type type; type.kind = TypeKind::Array; type.count = count; type.element = std::make_shared<Type>(std::move(element)); return type; }
+    static Type structure(std::string name, std::vector<std::pair<std::string, Type>> fields = {}) { Type type; type.kind = TypeKind::Struct; type.name = std::move(name); type.fields = std::move(fields); return type; }
+
+    bool operator==(const Type& other) const {
+        if (kind != other.kind) return false;
+        if (kind == TypeKind::Struct) return name == other.name;
+        if (kind == TypeKind::Array) return count == other.count && element && other.element && *element == *other.element;
+        return true;
+    }
+    bool operator!=(const Type& other) const { return !(*this == other); }
+
+    std::string display() const {
         switch (kind) {
             case TypeKind::I32: return "i32";
             case TypeKind::I64: return "i64";
             case TypeKind::Bool: return "bool";
             case TypeKind::Void: return "void";
+            case TypeKind::String: return "string";
+            case TypeKind::Array: return "[" + std::to_string(count) + "]" + element->display();
+            case TypeKind::Struct: return name;
         }
         return "unknown";
     }
@@ -204,847 +153,184 @@ struct Type final {
             case TypeKind::I64: return "i64";
             case TypeKind::Bool: return "i1";
             case TypeKind::Void: return "void";
+            case TypeKind::String: return "ptr";
+            case TypeKind::Array: return "[" + std::to_string(count) + " x " + element->llvm() + "]";
+            case TypeKind::Struct: return "%struct." + name;
         }
         return "void";
     }
-    bool operator==(const Type& other) const { return kind == other.kind; }
-    bool operator!=(const Type& other) const { return !(*this == other); }
 };
 
+// Keep the typo-prone TypeKind spelling localized through a compile-time alias.
+using TypeKindKind = TypeKind;
+
+struct StructDecl final { std::string name; std::vector<std::pair<std::string, Type>> fields; int line = 0; };
 struct Expr;
 struct Statement;
 using ExprPtr = std::unique_ptr<Expr>;
 using StatementPtr = std::unique_ptr<Statement>;
 
 struct Expr {
-    enum class Kind { Integer, Boolean, Name, Unary, Binary, Call };
-    explicit Expr(Kind kind, int line, int column) : kind(kind), line(line), column(column) {}
+    enum class Kind { Integer, Boolean, String, Name, Unary, Binary, Call, Array, Struct, Field, Index };
+    Expr(Kind kind, int line, int column) : kind(kind), line(line), column(column) {}
     virtual ~Expr() = default;
     Kind kind;
     int line;
     int column;
 };
+struct IntegerExpr final : Expr { IntegerExpr(std::int64_t v, int l, int c) : Expr(Kind::Integer,l,c), value(v) {} std::int64_t value; };
+struct BooleanExpr final : Expr { BooleanExpr(bool v, int l, int c) : Expr(Kind::Boolean,l,c), value(v) {} bool value; };
+struct StringExpr final : Expr { StringExpr(std::string v, int l, int c) : Expr(Kind::String,l,c), value(std::move(v)) {} std::string value; };
+struct NameExpr final : Expr { NameExpr(std::string v, int l, int c) : Expr(Kind::Name,l,c), name(std::move(v)) {} std::string name; };
+struct UnaryExpr final : Expr { UnaryExpr(std::string o, ExprPtr e, int l, int c) : Expr(Kind::Unary,l,c), op(std::move(o)), operand(std::move(e)) {} std::string op; ExprPtr operand; };
+struct BinaryExpr final : Expr { BinaryExpr(std::string o, ExprPtr a, ExprPtr b, int l, int c) : Expr(Kind::Binary,l,c), op(std::move(o)), left(std::move(a)), right(std::move(b)) {} std::string op; ExprPtr left; ExprPtr right; };
+struct CallExpr final : Expr { CallExpr(std::string n, std::vector<ExprPtr> a, int l, int c) : Expr(Kind::Call,l,c), name(std::move(n)), arguments(std::move(a)) {} std::string name; std::vector<ExprPtr> arguments; };
+struct ArrayExpr final : Expr { ArrayExpr(std::vector<ExprPtr> e, int l, int c) : Expr(Kind::Array,l,c), elements(std::move(e)) {} std::vector<ExprPtr> elements; };
+struct StructExpr final : Expr { StructExpr(std::string n, std::vector<std::pair<std::string,ExprPtr>> f, int l, int c) : Expr(Kind::Struct,l,c), name(std::move(n)), fields(std::move(f)) {} std::string name; std::vector<std::pair<std::string,ExprPtr>> fields; };
+struct FieldExpr final : Expr { FieldExpr(ExprPtr b, std::string f, int l, int c) : Expr(Kind::Field,l,c), base(std::move(b)), field(std::move(f)) {} ExprPtr base; std::string field; };
+struct IndexExpr final : Expr { IndexExpr(ExprPtr b, ExprPtr i, int l, int c) : Expr(Kind::Index,l,c), base(std::move(b)), index(std::move(i)) {} ExprPtr base; ExprPtr index; };
 
-struct IntegerExpr final : Expr {
-    IntegerExpr(std::int64_t value, int line, int column) : Expr(Kind::Integer, line, column), value(value) {}
-    std::int64_t value;
-};
+struct Statement { enum class Kind { Let, Return, If, While, Expression }; Statement(Kind k,int l,int c):kind(k),line(l),column(c){} virtual ~Statement()=default; Kind kind; int line; int column; };
+struct LetStatement final : Statement { LetStatement(std::string n,std::optional<Type> t,ExprPtr v,bool m,int l,int c):Statement(Kind::Let,l,c),name(std::move(n)),declared(std::move(t)),value(std::move(v)),mutable_value(m){} std::string name; std::optional<Type> declared; ExprPtr value; bool mutable_value; };
+struct ReturnStatement final : Statement { ReturnStatement(ExprPtr v,int l,int c):Statement(Kind::Return,l,c),value(std::move(v)){} ExprPtr value; };
+struct IfStatement final : Statement { IfStatement(ExprPtr c,std::vector<StatementPtr> a,std::vector<StatementPtr>b,int l,int col):Statement(Kind::If,l,col),condition(std::move(c)),then_body(std::move(a)),else_body(std::move(b)){} ExprPtr condition; std::vector<StatementPtr> then_body; std::vector<StatementPtr> else_body; };
+struct WhileStatement final : Statement { WhileStatement(ExprPtr c,std::vector<StatementPtr>b,int l,int col):Statement(Kind::While,l,col),condition(std::move(c)),body(std::move(b)){} ExprPtr condition; std::vector<StatementPtr> body; };
+struct ExpressionStatement final : Statement { ExpressionStatement(ExprPtr e,int l,int c):Statement(Kind::Expression,l,c),expression(std::move(e)){} ExprPtr expression; };
 
-struct BooleanExpr final : Expr {
-    BooleanExpr(bool value, int line, int column) : Expr(Kind::Boolean, line, column), value(value) {}
-    bool value;
-};
-
-struct NameExpr final : Expr {
-    NameExpr(std::string name, int line, int column) : Expr(Kind::Name, line, column), name(std::move(name)) {}
-    std::string name;
-};
-
-struct UnaryExpr final : Expr {
-    UnaryExpr(std::string op, ExprPtr operand, int line, int column)
-        : Expr(Kind::Unary, line, column), op(std::move(op)), operand(std::move(operand)) {}
-    std::string op;
-    ExprPtr operand;
-};
-
-struct BinaryExpr final : Expr {
-    BinaryExpr(std::string op, ExprPtr left, ExprPtr right, int line, int column)
-        : Expr(Kind::Binary, line, column), op(std::move(op)), left(std::move(left)), right(std::move(right)) {}
-    std::string op;
-    ExprPtr left;
-    ExprPtr right;
-};
-
-struct CallExpr final : Expr {
-    CallExpr(std::string name, std::vector<ExprPtr> arguments, int line, int column)
-        : Expr(Kind::Call, line, column), name(std::move(name)), arguments(std::move(arguments)) {}
-    std::string name;
-    std::vector<ExprPtr> arguments;
-};
-
-struct Statement {
-    enum class Kind { Let, Return, If, While, Expression };
-    explicit Statement(Kind kind, int line, int column) : kind(kind), line(line), column(column) {}
-    virtual ~Statement() = default;
-    Kind kind;
-    int line;
-    int column;
-};
-
-struct LetStatement final : Statement {
-    LetStatement(std::string name, std::optional<Type> declared, ExprPtr value, bool mutable_value, int line, int column)
-        : Statement(Kind::Let, line, column), name(std::move(name)), declared(std::move(declared)), value(std::move(value)), mutable_value(mutable_value) {}
-    std::string name;
-    std::optional<Type> declared;
-    ExprPtr value;
-    bool mutable_value;
-};
-
-struct ReturnStatement final : Statement {
-    ReturnStatement(ExprPtr value, int line, int column) : Statement(Kind::Return, line, column), value(std::move(value)) {}
-    ExprPtr value;
-};
-
-struct IfStatement final : Statement {
-    IfStatement(ExprPtr condition, std::vector<StatementPtr> then_body, std::vector<StatementPtr> else_body, int line, int column)
-        : Statement(Kind::If, line, column), condition(std::move(condition)), then_body(std::move(then_body)), else_body(std::move(else_body)) {}
-    ExprPtr condition;
-    std::vector<StatementPtr> then_body;
-    std::vector<StatementPtr> else_body;
-};
-
-struct WhileStatement final : Statement {
-    WhileStatement(ExprPtr condition, std::vector<StatementPtr> body, int line, int column)
-        : Statement(Kind::While, line, column), condition(std::move(condition)), body(std::move(body)) {}
-    ExprPtr condition;
-    std::vector<StatementPtr> body;
-};
-
-struct ExpressionStatement final : Statement {
-    ExpressionStatement(ExprPtr expression, int line, int column)
-        : Statement(Kind::Expression, line, column), expression(std::move(expression)) {}
-    ExprPtr expression;
-};
-
-struct Parameter final {
-    std::string name;
-    Type type;
-};
-
-struct Function final {
-    std::string name;
-    std::vector<Parameter> parameters;
-    Type return_type{TypeKind::Void};
-    std::vector<StatementPtr> body;
-    int line = 0;
-};
-
-struct Program final {
-    std::string module = "anonymous";
-    std::vector<Function> functions;
-};
+struct Parameter final { std::string name; Type type; };
+struct Function final { std::string name; std::vector<Parameter> parameters; Type return_type; std::vector<StatementPtr> body; int line = 0; };
+struct Program final { std::string module = "anonymous"; std::vector<StructDecl> structs; std::vector<Function> functions; };
 
 class Parser final {
 public:
     explicit Parser(std::vector<Token> tokens) : tokens_(std::move(tokens)) {}
-
     Program parse() {
         Program program;
-        if (acceptIdentifier("module")) {
-            program.module = expect(TokenKind::Identifier, "module name").text;
-        }
+        if (accept(TokenKind::Identifier,"module")) program.module = expect(TokenKind::Identifier,"module name").text;
         while (!is(TokenKind::Eof)) {
-            if (acceptIdentifier("fn")) {
-                program.functions.push_back(parseFunction());
-            } else {
-                unexpected("top-level declaration");
-            }
+            if (accept(TokenKind::Identifier,"struct")) program.structs.push_back(parseStruct());
+            else if (accept(TokenKind::Identifier,"fn")) program.functions.push_back(parseFunction());
+            else unexpected("struct or function");
         }
         if (program.functions.empty()) fail("program must declare at least one function");
         return program;
     }
-
 private:
     const Token& current() const { return tokens_.at(index_); }
-
-    bool is(TokenKind kind) const { return current().kind == kind; }
-
-    bool isText(TokenKind kind, const std::string& text) const {
-        return current().kind == kind && current().text == text;
+    const Token& lookahead(std::size_t offset) const { const std::size_t i = index_ + offset; return tokens_.at(i < tokens_.size() ? i : tokens_.size() - 1); }
+    bool is(TokenKind k) const { return current().kind == k; }
+    bool isText(TokenKind k,const std::string& t) const { return current().kind==k && current().text==t; }
+    Token advance() { Token t=current(); if(index_+1<tokens_.size())++index_; return t; }
+    bool accept(TokenKind k,const std::string& t="") { if(current().kind==k && (t.empty()||current().text==t)){advance();return true;} return false; }
+    Token expect(TokenKind k,const std::string& what) { if(!is(k)) unexpected(what); return advance(); }
+    void expectText(TokenKind k,const std::string& t) { if(!isText(k,t)) unexpected("'"+t+"'"); advance(); }
+    [[noreturn]] void unexpected(const std::string& what) const { fail("expected "+what+", got '"+current().text+"'"+location(current().line,current().column),current().line,current().column); }
+    StructDecl parseStruct() {
+        Token name=expect(TokenKind::Identifier,"struct name"); expectText(TokenKind::Punctuation,"{"); StructDecl decl{name.text,{},name.line};
+        while(!accept(TokenKind::Punctuation,"}")) { Token field=expect(TokenKind::Identifier,"field name"); expectText(TokenKind::Punctuation,":"); decl.fields.push_back({field.text,parseType()}); accept(TokenKind::Punctuation,";"); if(!isText(TokenKind::Punctuation,"}")) accept(TokenKind::Punctuation,","); }
+        return decl;
     }
-
-    Token advance() {
-        const Token token = current();
-        if (index_ < tokens_.size() - 1) ++index_;
-        return token;
-    }
-
-    bool accept(TokenKind kind, const std::string& text = {}) {
-        if (current().kind == kind && (text.empty() || current().text == text)) {
-            advance();
-            return true;
-        }
-        return false;
-    }
-
-    bool acceptIdentifier(const std::string& text) { return accept(TokenKind::Identifier, text); }
-
-    Token expect(TokenKind kind, const std::string& description) {
-        if (!is(kind)) unexpected(description);
-        return advance();
-    }
-
-    void expectText(TokenKind kind, const std::string& text) {
-        if (!isText(kind, text)) unexpected("'" + text + "'");
-        advance();
-    }
-
-    [[noreturn]] void unexpected(const std::string& expected) const {
-        fail("expected " + expected + ", got '" + current().text + "'" + location(current().line, current().column), current().line, current().column);
-    }
-
     Function parseFunction() {
-        const Token name = expect(TokenKind::Identifier, "function name");
-        expectText(TokenKind::Punctuation, "(");
-        std::vector<Parameter> parameters;
-        if (!accept(TokenKind::Punctuation, ")")) {
-            while (true) {
-                const Token parameter = expect(TokenKind::Identifier, "parameter name");
-                expectText(TokenKind::Punctuation, ":");
-                parameters.push_back({parameter.text, parseType()});
-                if (accept(TokenKind::Punctuation, ")")) break;
-                expectText(TokenKind::Punctuation, ",");
-            }
-        }
-        expect(TokenKind::Arrow, "'->'");
-        Type return_type = parseType();
-        Function function{name.text, std::move(parameters), return_type, {}, name.line};
-        function.body = parseBlock();
-        return function;
+        Token name=expect(TokenKind::Identifier,"function name"); expectText(TokenKind::Punctuation,"("); std::vector<Parameter> params;
+        if(!accept(TokenKind::Punctuation,")")) { while(true) { Token p=expect(TokenKind::Identifier,"parameter name"); expectText(TokenKind::Punctuation,":"); params.push_back({p.text,parseType()}); if(accept(TokenKind::Punctuation,")"))break; expectText(TokenKind::Punctuation,","); } }
+        expect(TokenKind::Arrow,"'->'"); Type ret=parseType(); return Function{name.text,std::move(params),ret,parseBlock(),name.line};
     }
-
     Type parseType() {
-        const Token type = expect(TokenKind::Identifier, "type");
-        if (type.text == "i32") return {TypeKind::I32};
-        if (type.text == "i64") return {TypeKind::I64};
-        if (type.text == "bool") return {TypeKind::Bool};
-        if (type.text == "void") return {TypeKind::Void};
-        fail("unsupported bootstrap type '" + type.text + "'" + location(type.line, type.column), type.line, type.column);
+        if(accept(TokenKind::Punctuation,"[")) { Token n=expect(TokenKind::Integer,"array length"); expectText(TokenKind::Punctuation,"]"); std::size_t count=static_cast<std::size_t>(std::stoull(n.text)); if(count==0) fail("array length must be positive",n.line,n.column); return Type::array(count,parseType()); }
+        Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); return Type::structure(t.text);
     }
-
-    std::vector<StatementPtr> parseBlock() {
-        expectText(TokenKind::Punctuation, "{");
-        std::vector<StatementPtr> body;
-        while (!accept(TokenKind::Punctuation, "}")) {
-            if (is(TokenKind::Eof)) unexpected("'}'");
-            body.push_back(parseStatement());
-        }
-        return body;
-    }
-
+    std::vector<StatementPtr> parseBlock() { expectText(TokenKind::Punctuation,"{"); std::vector<StatementPtr> body; while(!accept(TokenKind::Punctuation,"}")){if(is(TokenKind::Eof))unexpected("'}'");body.push_back(parseStatement());}return body; }
     StatementPtr parseStatement() {
-        if (isText(TokenKind::Identifier, "let") || isText(TokenKind::Identifier, "var")) {
-            const Token keyword = advance();
-            const Token name = expect(TokenKind::Identifier, "local name");
-            std::optional<Type> declared;
-            if (accept(TokenKind::Punctuation, ":")) declared = parseType();
-            expectText(TokenKind::Operator, "=");
-            ExprPtr value = parseExpression();
-            accept(TokenKind::Punctuation, ";");
-            return std::make_unique<LetStatement>(name.text, declared, std::move(value), keyword.text == "var", name.line, name.column);
-        }
-        if (acceptIdentifier("return")) {
-            const Token keyword = tokens_.at(index_ - 1);
-            ExprPtr value;
-            if (!isText(TokenKind::Punctuation, ";") && !isText(TokenKind::Punctuation, "}")) value = parseExpression();
-            accept(TokenKind::Punctuation, ";");
-            return std::make_unique<ReturnStatement>(std::move(value), keyword.line, keyword.column);
-        }
-        if (acceptIdentifier("if")) {
-            const Token keyword = tokens_.at(index_ - 1);
-            ExprPtr condition = parseExpression();
-            std::vector<StatementPtr> then_body = parseBlock();
-            std::vector<StatementPtr> else_body;
-            if (acceptIdentifier("else")) else_body = parseBlock();
-            return std::make_unique<IfStatement>(std::move(condition), std::move(then_body), std::move(else_body), keyword.line, keyword.column);
-        }
-        if (acceptIdentifier("while")) {
-            const Token keyword = tokens_.at(index_ - 1);
-            ExprPtr condition = parseExpression();
-            std::vector<StatementPtr> body = parseBlock();
-            return std::make_unique<WhileStatement>(std::move(condition), std::move(body), keyword.line, keyword.column);
-        }
-        const Token start = current();
-        ExprPtr expression = parseExpression();
-        accept(TokenKind::Punctuation, ";");
-        return std::make_unique<ExpressionStatement>(std::move(expression), start.line, start.column);
+        if(isText(TokenKind::Identifier,"let")||isText(TokenKind::Identifier,"var")){Token kw=advance(),name=expect(TokenKind::Identifier,"local name");std::optional<Type> type;if(accept(TokenKind::Punctuation,":"))type=parseType();expectText(TokenKind::Operator,"=");auto value=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<LetStatement>(name.text,type,std::move(value),kw.text=="var",name.line,name.column);}
+        if(accept(TokenKind::Identifier,"return")){Token k=tokens_[index_-1];ExprPtr value;if(!isText(TokenKind::Punctuation,";")&&!isText(TokenKind::Punctuation,"}"))value=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<ReturnStatement>(std::move(value),k.line,k.column);}
+        if(accept(TokenKind::Identifier,"if")){Token k=tokens_[index_-1];auto c=parseExpression();auto a=parseBlock(),b=std::vector<StatementPtr>{};if(accept(TokenKind::Identifier,"else"))b=parseBlock();return std::make_unique<IfStatement>(std::move(c),std::move(a),std::move(b),k.line,k.column);}
+        if(accept(TokenKind::Identifier,"while")){Token k=tokens_[index_-1];auto c=parseExpression();auto b=parseBlock();return std::make_unique<WhileStatement>(std::move(c),std::move(b),k.line,k.column);}
+        Token k=current();auto e=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<ExpressionStatement>(std::move(e),k.line,k.column);
     }
-
-    ExprPtr parseExpression() { return parseLogicalOr(); }
-
-    ExprPtr parseLogicalOr() {
-        ExprPtr expression = parseLogicalAnd();
-        while (isText(TokenKind::Operator, "||")) {
-            const Token op = advance();
-            expression = std::make_unique<BinaryExpr>(op.text, std::move(expression), parseLogicalAnd(), op.line, op.column);
-        }
-        return expression;
-    }
-
-    ExprPtr parseLogicalAnd() {
-        ExprPtr expression = parseComparison();
-        while (isText(TokenKind::Operator, "&&")) {
-            const Token op = advance();
-            expression = std::make_unique<BinaryExpr>(op.text, std::move(expression), parseComparison(), op.line, op.column);
-        }
-        return expression;
-    }
-
-    ExprPtr parseComparison() {
-        ExprPtr expression = parseAdditive();
-        while (is(TokenKind::Operator) && (current().text == "==" || current().text == "!=" || current().text == "<" || current().text == "<=" || current().text == ">" || current().text == ">=")) {
-            const Token op = advance();
-            expression = std::make_unique<BinaryExpr>(op.text, std::move(expression), parseAdditive(), op.line, op.column);
-        }
-        return expression;
-    }
-
-    ExprPtr parseAdditive() {
-        ExprPtr expression = parseMultiplicative();
-        while (is(TokenKind::Operator) && (current().text == "+" || current().text == "-")) {
-            const Token op = advance();
-            expression = std::make_unique<BinaryExpr>(op.text, std::move(expression), parseMultiplicative(), op.line, op.column);
-        }
-        return expression;
-    }
-
-    ExprPtr parseMultiplicative() {
-        ExprPtr expression = parseUnary();
-        while (is(TokenKind::Operator) && (current().text == "*" || current().text == "/")) {
-            const Token op = advance();
-            expression = std::make_unique<BinaryExpr>(op.text, std::move(expression), parseUnary(), op.line, op.column);
-        }
-        return expression;
-    }
-
-    ExprPtr parseUnary() {
-        if (isText(TokenKind::Operator, "-") || isText(TokenKind::Operator, "!")) {
-            const Token op = advance();
-            return std::make_unique<UnaryExpr>(op.text, parseUnary(), op.line, op.column);
-        }
-        return parsePrimary();
-    }
-
-    ExprPtr parsePrimary() {
-        if (is(TokenKind::Integer)) {
-            const Token token = advance();
-            try {
-                std::size_t consumed = 0;
-                const long long value = std::stoll(token.text, &consumed, 10);
-                if (consumed != token.text.size()) throw std::invalid_argument("integer");
-                return std::make_unique<IntegerExpr>(value, token.line, token.column);
-            } catch (const std::exception&) {
-                fail("invalid integer literal" + location(token.line, token.column), token.line, token.column);
-            }
-        }
-        if (isText(TokenKind::Identifier, "true") || isText(TokenKind::Identifier, "false")) {
-            const Token token = advance();
-            return std::make_unique<BooleanExpr>(token.text == "true", token.line, token.column);
-        }
-        if (is(TokenKind::Identifier)) {
-            const Token name = advance();
-            if (!accept(TokenKind::Punctuation, "(")) return std::make_unique<NameExpr>(name.text, name.line, name.column);
-            std::vector<ExprPtr> arguments;
-            if (!accept(TokenKind::Punctuation, ")")) {
-                while (true) {
-                    arguments.push_back(parseExpression());
-                    if (accept(TokenKind::Punctuation, ")")) break;
-                    expectText(TokenKind::Punctuation, ",");
-                }
-            }
-            return std::make_unique<CallExpr>(name.text, std::move(arguments), name.line, name.column);
-        }
-        if (accept(TokenKind::Punctuation, "(")) {
-            ExprPtr expression = parseExpression();
-            expectText(TokenKind::Punctuation, ")");
-            return expression;
-        }
+    ExprPtr parseExpression(){return parseLogicalOr();}
+    ExprPtr parseLogicalOr(){auto e=parseLogicalAnd();while(isText(TokenKind::Operator,"||")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseLogicalAnd(),o.line,o.column);}return e;}
+    ExprPtr parseLogicalAnd(){auto e=parseComparison();while(isText(TokenKind::Operator,"&&")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseComparison(),o.line,o.column);}return e;}
+    ExprPtr parseComparison(){auto e=parseAdditive();while(is(TokenKind::Operator)&&(current().text=="=="||current().text=="!="||current().text=="<"||current().text=="<="||current().text==">"||current().text==">=")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseAdditive(),o.line,o.column);}return e;}
+    ExprPtr parseAdditive(){auto e=parseMultiplicative();while(is(TokenKind::Operator)&&(current().text=="+"||current().text=="-")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseMultiplicative(),o.line,o.column);}return e;}
+    ExprPtr parseMultiplicative(){auto e=parseUnary();while(is(TokenKind::Operator)&&(current().text=="*"||current().text=="/")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseUnary(),o.line,o.column);}return e;}
+    ExprPtr parseUnary(){if(isText(TokenKind::Operator,"-")||isText(TokenKind::Operator,"!")){Token o=advance();return std::make_unique<UnaryExpr>(o.text,parseUnary(),o.line,o.column);}return parsePostfix();}
+    ExprPtr parsePostfix(){auto e=parsePrimary();while(true){if(accept(TokenKind::Punctuation,".")){Token f=expect(TokenKind::Identifier,"field name");e=std::make_unique<FieldExpr>(std::move(e),f.text,f.line,f.column);}else if(accept(TokenKind::Punctuation,"[")){Token i=current();auto idx=parseExpression();expectText(TokenKind::Punctuation,"]");e=std::make_unique<IndexExpr>(std::move(e),std::move(idx),i.line,i.column);}else break;}return e;}
+    ExprPtr parsePrimary(){
+        if(is(TokenKind::Integer)){Token t=advance();return std::make_unique<IntegerExpr>(std::stoll(t.text),t.line,t.column);}
+        if(is(TokenKind::String)){Token t=advance();return std::make_unique<StringExpr>(t.text,t.line,t.column);}
+        if(isText(TokenKind::Identifier,"true")||isText(TokenKind::Identifier,"false")){Token t=advance();return std::make_unique<BooleanExpr>(t.text=="true",t.line,t.column);}
+                if(isText(TokenKind::Punctuation,"[")){Token t=advance();
+std::vector<ExprPtr> e;if(!accept(TokenKind::Punctuation,"]")){while(true){e.push_back(parseExpression());if(accept(TokenKind::Punctuation,"]"))break;expectText(TokenKind::Punctuation,",");}}return std::make_unique<ArrayExpr>(std::move(e),t.line,t.column);}
+        if(is(TokenKind::Identifier)){Token n=advance();if(accept(TokenKind::Punctuation,"(")){std::vector<ExprPtr>a;if(!accept(TokenKind::Punctuation,")")){while(true){a.push_back(parseExpression());if(accept(TokenKind::Punctuation,")"))break;expectText(TokenKind::Punctuation,",");}}return std::make_unique<CallExpr>(n.text,std::move(a),n.line,n.column);}if(isText(TokenKind::Punctuation,"{")&&lookahead(1).kind==TokenKind::Identifier&&lookahead(2).kind==TokenKind::Punctuation&&lookahead(2).text==":"){advance();std::vector<std::pair<std::string,ExprPtr>>f;while(!accept(TokenKind::Punctuation,"}")){Token k=expect(TokenKind::Identifier,"field name");expectText(TokenKind::Punctuation,":");f.push_back({k.text,parseExpression()});if(accept(TokenKind::Punctuation,"}"))break;expectText(TokenKind::Punctuation,",");}return std::make_unique<StructExpr>(n.text,std::move(f),n.line,n.column);}return std::make_unique<NameExpr>(n.text,n.line,n.column);}
+        if(accept(TokenKind::Punctuation,"(")){auto e=parseExpression();expectText(TokenKind::Punctuation,")");return e;}
         unexpected("expression");
     }
-
-    std::vector<Token> tokens_;
-    std::size_t index_ = 0;
+    std::vector<Token> tokens_;std::size_t index_=0;
 };
 
 class Validator final {
 public:
-    void run(const Program& program) {
-        functions_.clear();
-        for (const Function& function : program.functions) {
-            if (functions_.find(function.name) != functions_.end()) fail("duplicate function '" + function.name + "'", function.line, 1);
-            functions_.emplace(function.name, &function);
-        }
-        for (const Function& function : program.functions) validateFunction(function);
-    }
-
+    void run(const Program& program){structs_.clear();functions_.clear();for(const auto& s:program.structs){if(structs_.count(s.name))fail("duplicate struct '"+s.name+"'",s.line,1);structs_[s.name]=&s;}for(const auto& f:program.functions){if(functions_.count(f.name))fail("duplicate function '"+f.name+"'",f.line,1);functions_[f.name]=&f;}for(const auto& f:program.functions)validateFunction(f);}
 private:
-    static bool compatible(const Expr& expression, const Type& actual, const Type& expected) {
-        return actual == expected || (expression.kind == Expr::Kind::Integer && actual.kind == TypeKind::I32 && expected.kind == TypeKind::I64);
+    bool compatible(const Expr& e,const Type& a,const Type& b)const{return a==b||(e.kind==Expr::Kind::Integer&&a.kind==TypeKind::I32&&b.kind==TypeKind::I64);}
+    const StructDecl& structure(const std::string& n,int l,int c)const{auto i=structs_.find(n);if(i==structs_.end())fail("unknown struct '"+n+"'",l,c);return *i->second;}
+    Type infer(const Expr& e,std::unordered_map<std::string,Type>& vars)const{
+        switch(e.kind){
+            case Expr::Kind::Integer:return Type::scalar(TypeKind::I32);case Expr::Kind::Boolean:return Type::scalar(TypeKind::Bool);case Expr::Kind::String:return Type::scalar(TypeKind::String);
+            case Expr::Kind::Name:{auto n=static_cast<const NameExpr&>(e).name;auto i=vars.find(n);if(i==vars.end())fail("unknown value '"+n+"'",e.line,e.column);return i->second;}
+            case Expr::Kind::Unary:{auto&x=static_cast<const UnaryExpr&>(e);auto t=infer(*x.operand,vars);if(x.op=="-"&&(t.kind!=TypeKind::I32&&t.kind!=TypeKind::I64))fail("unary '-' requires integer",e.line,e.column);if(x.op=="!"&&t.kind!=TypeKind::Bool)fail("unary '!' requires bool",e.line,e.column);return t;}
+            case Expr::Kind::Binary:{auto&x=static_cast<const BinaryExpr&>(e);auto a=infer(*x.left,vars),b=infer(*x.right,vars);if(a!=b)fail("binary operands have different types",e.line,e.column);if(x.op=="&&"||x.op=="||"){if(a.kind!=TypeKind::Bool)fail("logical operators require bool",e.line,e.column);return Type::scalar(TypeKind::Bool);}if(x.op=="=="||x.op=="!="||x.op=="<"||x.op=="<="||x.op==">"||x.op==">="){if(a.kind!=TypeKind::I32&&a.kind!=TypeKind::I64&&a.kind!=TypeKind::Bool)fail("unsupported comparison type",e.line,e.column);return Type::scalar(TypeKind::Bool);}if(a.kind!=TypeKind::I32&&a.kind!=TypeKind::I64)fail("arithmetic requires integer",e.line,e.column);return a;}
+            case Expr::Kind::Call:{auto&x=static_cast<const CallExpr&>(e);auto fi=functions_.find(x.name);if(fi==functions_.end())fail("unknown function '"+x.name+"'",e.line,e.column);const auto&f=*fi->second;if(x.arguments.size()!=f.parameters.size())fail("wrong argument count",e.line,e.column);for(std::size_t i=0;i<x.arguments.size();++i){auto a=infer(*x.arguments[i],vars);if(!compatible(*x.arguments[i],a,f.parameters[i].type))fail("argument type mismatch",e.line,e.column);}return f.return_type;}
+            case Expr::Kind::Array:{auto&x=static_cast<const ArrayExpr&>(e);if(x.elements.empty())fail("empty arrays require an explicit type",e.line,e.column);auto t=infer(*x.elements[0],vars);for(const auto&v:x.elements){auto a=infer(*v,vars);if(!compatible(*v,a,t))fail("array elements have different types",v->line,v->column);}return Type::array(x.elements.size(),t);}
+            case Expr::Kind::Struct:{auto&x=static_cast<const StructExpr&>(e);auto&s=structure(x.name,e.line,e.column);if(x.fields.size()!=s.fields.size())fail("wrong struct field count",e.line,e.column);for(std::size_t i=0;i<s.fields.size();++i){if(x.fields[i].first!=s.fields[i].first)fail("struct fields must be in declaration order",e.line,e.column);auto a=infer(*x.fields[i].second,vars);if(!compatible(*x.fields[i].second,a,s.fields[i].second))fail("struct field type mismatch",e.line,e.column);}return Type::structure(x.name,s.fields);}
+            case Expr::Kind::Field:{auto&x=static_cast<const FieldExpr&>(e);auto t=infer(*x.base,vars);if(t.kind!=TypeKind::Struct)fail("field access requires struct",e.line,e.column);for(auto&f:t.fields)if(f.first==x.field)return f.second;const auto&s=structure(t.name,e.line,e.column);for(auto&f:s.fields)if(f.first==x.field)return f.second;fail("unknown struct field",e.line,e.column);}
+            case Expr::Kind::Index:{auto&x=static_cast<const IndexExpr&>(e);auto t=infer(*x.base,vars);if(t.kind!=TypeKind::Array)fail("indexing requires fixed array",e.line,e.column);if(infer(*x.index,vars).kind!=TypeKind::I32)fail("array index must be i32",e.line,e.column);return *t.element;}
+        }fail("unsupported expression",e.line,e.column);
     }
-
-    Type infer(const Expr& expression, std::unordered_map<std::string, Type>& variables) const {
-        switch (expression.kind) {
-            case Expr::Kind::Integer:
-                return {TypeKind::I32};
-            case Expr::Kind::Boolean:
-                return {TypeKind::Bool};
-            case Expr::Kind::Name: {
-                const auto& name = static_cast<const NameExpr&>(expression).name;
-                const auto it = variables.find(name);
-                if (it == variables.end()) fail("unknown value '" + name + "'", expression.line, expression.column);
-                return it->second;
-            }
-            case Expr::Kind::Unary: {
-                const auto& unary = static_cast<const UnaryExpr&>(expression);
-                const Type operand = infer(*unary.operand, variables);
-                if (unary.op == "-" && operand.kind != TypeKind::I32 && operand.kind != TypeKind::I64) fail("unary '-' requires an integer", expression.line, expression.column);
-                if (unary.op == "!" && operand.kind != TypeKind::Bool) fail("unary '!' requires bool", expression.line, expression.column);
-                return operand.kind == TypeKind::Bool ? Type{TypeKind::Bool} : operand;
-            }
-            case Expr::Kind::Binary: {
-                const auto& binary = static_cast<const BinaryExpr&>(expression);
-                const Type left = infer(*binary.left, variables);
-                const Type right = infer(*binary.right, variables);
-                if (left != right) fail("binary operands must have the same type", expression.line, expression.column);
-                if (binary.op == "&&" || binary.op == "||") {
-                    if (left.kind != TypeKind::Bool) fail("logical operators require bool", expression.line, expression.column);
-                    return {TypeKind::Bool};
-                }
-                if (binary.op == "==" || binary.op == "!=" || binary.op == "<" || binary.op == "<=" || binary.op == ">" || binary.op == ">=") {
-                    if (left.kind != TypeKind::I32 && left.kind != TypeKind::I64 && left.kind != TypeKind::Bool) fail("unsupported comparison type", expression.line, expression.column);
-                    return {TypeKind::Bool};
-                }
-                if (left.kind != TypeKind::I32 && left.kind != TypeKind::I64) fail("arithmetic requires integers", expression.line, expression.column);
-                return left;
-            }
-            case Expr::Kind::Call: {
-                const auto& call = static_cast<const CallExpr&>(expression);
-                const auto function_it = functions_.find(call.name);
-                if (function_it == functions_.end()) fail("unknown function '" + call.name + "'", expression.line, expression.column);
-                const Function& function = *function_it->second;
-                if (call.arguments.size() != function.parameters.size()) fail("wrong argument count for '" + call.name + "'", expression.line, expression.column);
-                for (std::size_t i = 0; i < call.arguments.size(); ++i) {
-                    const Type actual = infer(*call.arguments[i], variables);
-                    if (!compatible(*call.arguments[i], actual, function.parameters[i].type)) fail("argument type mismatch for '" + call.name + "'", expression.line, expression.column);
-                }
-                return function.return_type;
-            }
-        }
-        fail("unsupported expression", expression.line, expression.column);
-    }
-
-    bool validateBlock(const std::vector<StatementPtr>& statements, std::unordered_map<std::string, Type>& variables, const Type& return_type) const {
-        bool guaranteed_return = false;
-        for (const auto& statement : statements) {
-            if (guaranteed_return) break;
-            switch (statement->kind) {
-                case Statement::Kind::Let: {
-                    const auto& let = static_cast<const LetStatement&>(*statement);
-                    if (variables.find(let.name) != variables.end()) fail("local shadowing or duplicate local '" + let.name + "'", let.line, let.column);
-                    const Type actual = infer(*let.value, variables);
-                    if (let.declared.has_value() && !compatible(*let.value, actual, *let.declared)) fail("declared type does not match initializer", let.line, let.column);
-                    variables.emplace(let.name, let.declared.value_or(actual));
-                    break;
-                }
-                case Statement::Kind::Return: {
-                    const auto& ret = static_cast<const ReturnStatement&>(*statement);
-                    if (return_type.kind == TypeKind::Void) {
-                        if (ret.value) fail("void function cannot return a value", ret.line, ret.column);
-                    } else {
-                        if (!ret.value) fail("non-void function must return a value", ret.line, ret.column);
-                        const Type actual = infer(*ret.value, variables);
-                        if (!compatible(*ret.value, actual, return_type)) fail("return type mismatch", ret.line, ret.column);
-                    }
-                    guaranteed_return = true;
-                    break;
-                }
-                case Statement::Kind::If: {
-                    const auto& conditional = static_cast<const IfStatement&>(*statement);
-                    if (infer(*conditional.condition, variables).kind != TypeKind::Bool) fail("if condition must be bool", conditional.line, conditional.column);
-                    auto then_variables = variables;
-                    auto else_variables = variables;
-                    const bool then_return = validateBlock(conditional.then_body, then_variables, return_type);
-                    const bool else_return = !conditional.else_body.empty() && validateBlock(conditional.else_body, else_variables, return_type);
-                    guaranteed_return = then_return && else_return;
-                    break;
-                }
-                case Statement::Kind::While: {
-                    const auto& loop = static_cast<const WhileStatement&>(*statement);
-                    if (infer(*loop.condition, variables).kind != TypeKind::Bool) fail("while condition must be bool", loop.line, loop.column);
-                    auto body_variables = variables;
-                    validateBlock(loop.body, body_variables, return_type);
-                    break;
-                }
-                case Statement::Kind::Expression: {
-                    const Type expression_type = infer(*static_cast<const ExpressionStatement&>(*statement).expression, variables);
-                    if (expression_type.kind != TypeKind::Void) {
-                        // Expression statements may discard non-void values in the seed subset.
-                    }
-                    break;
-                }
-            }
-        }
-        return guaranteed_return;
-    }
-
-    void validateFunction(const Function& function) const {
-        std::unordered_map<std::string, Type> variables;
-        for (const Parameter& parameter : function.parameters) {
-            if (variables.find(parameter.name) != variables.end()) fail("duplicate parameter '" + parameter.name + "'", function.line, 1);
-            variables.emplace(parameter.name, parameter.type);
-        }
-        const bool guaranteed_return = validateBlock(function.body, variables, function.return_type);
-        if (function.return_type.kind != TypeKind::Void && !guaranteed_return) fail("function '" + function.name + "' does not return on every path", function.line, 1);
-    }
-
-    std::unordered_map<std::string, const Function*> functions_;
+    bool block(const std::vector<StatementPtr>& ss,std::unordered_map<std::string,Type>& vars,const Type& ret)const{bool r=false;for(const auto&sp:ss){if(r)break;switch(sp->kind){case Statement::Kind::Let:{auto&x=static_cast<const LetStatement&>(*sp);if(vars.count(x.name))fail("duplicate local",x.line,x.column);auto a=infer(*x.value,vars);if(x.declared&&!compatible(*x.value,a,*x.declared))fail("declared type does not match initializer",x.line,x.column);vars[x.name]=x.declared.value_or(a);break;}case Statement::Kind::Return:{auto&x=static_cast<const ReturnStatement&>(*sp);if(ret.kind==TypeKind::Void){if(x.value)fail("void function cannot return value",x.line,x.column);}else{if(!x.value)fail("missing return value",x.line,x.column);auto a=infer(*x.value,vars);if(!compatible(*x.value,a,ret))fail("return type mismatch",x.line,x.column);}r=true;break;}case Statement::Kind::If:{auto&x=static_cast<const IfStatement&>(*sp);if(infer(*x.condition,vars).kind!=TypeKind::Bool)fail("if condition must be bool",x.line,x.column);auto a=vars,b=vars;bool ar=block(x.then_body,a,ret),br=!x.else_body.empty()&&block(x.else_body,b,ret);r=ar&&br;break;}case Statement::Kind::While:{auto&x=static_cast<const WhileStatement&>(*sp);if(infer(*x.condition,vars).kind!=TypeKind::Bool)fail("while condition must be bool",x.line,x.column);auto a=vars;block(x.body,a,ret);break;}case Statement::Kind::Expression:infer(*static_cast<const ExpressionStatement&>(*sp).expression,vars);break;}}return r;}
+    void validateFunction(const Function& f)const{std::unordered_map<std::string,Type>v;for(auto&p:f.parameters){if(v.count(p.name))fail("duplicate parameter",f.line,1);v[p.name]=p.type;}if(f.return_type.kind!=TypeKind::Void&&!block(f.body,v,f.return_type))fail("function does not return on every path",f.line,1);}
+    std::unordered_map<std::string,const StructDecl*>structs_;std::unordered_map<std::string,const Function*>functions_;
 };
 
 class LLVMEmitter final {
 public:
-    explicit LLVMEmitter(const Program& program, std::string target) : program_(program), target_(std::move(target)) {
-        for (const Function& function : program_.functions) functions_.emplace(function.name, &function);
-    }
-
-    std::string emit() {
-        std::ostringstream out;
-        out << "; Holy Fitra Stage-0 bootstrap module " << program_.module << "\n";
-        out << "; target: " << target_ << "\n";
-        if (target_.rfind("aarch64", 0) == 0) {
-            out << "; ABI: AAPCS64\n";
-            out << "; vector capability: NEON when available\n";
-        }
-        out << "target triple = \"" << target_ << "\"\n\n";
-        for (const Function& function : program_.functions) {
-            emitFunction(function, out);
-            out << "\n";
-        }
-        return out.str();
-    }
-
+    LLVMEmitter(const Program& p,std::string target):program_(p),target_(std::move(target)){for(const auto&f:p.functions)functions_[f.name]=&f;for(const auto&s:p.structs)structs_[s.name]=&s;}
+    std::string emit(){collectStrings();std::ostringstream o;o<<"; Holy Fitra Stage-0 aggregate bootstrap module "<<program_.module<<"\n; target: "<<target_<<"\n";if(target_.rfind("aarch64",0)==0)o<<"; ABI: AAPCS64\n; vector capability: NEON when available\n";o<<"target triple = \""<<target_<<"\"\n\n";for(const auto&s:program_.structs){o<<"%struct."<<s.name<<" = type { ";for(std::size_t i=0;i<s.fields.size();++i){if(i)o<<", ";o<<s.fields[i].second.llvm();}o<<" }\n";}if(!program_.structs.empty())o<<"\n";for(const auto&g:strings_)o<<"@.str."<<g.second<<" = private unnamed_addr constant ["<<g.first.size()+1<<" x i8] c\""<<escape(g.first)<<"\\00\"\n";if(!strings_.empty())o<<"\n";for(const auto&f:program_.functions){emitFunction(f,o);o<<"\n";}return o.str();}
 private:
-    struct Local final {
-        Type type;
-        std::string address;
-    };
-
-    static std::string escapeName(const std::string& name) {
-        std::string result;
-        result.reserve(name.size() + 1);
-        for (char c : name) result.push_back((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_' ? c : '_');
-        return result;
+    struct Local{Type type;std::string addr;};
+    std::string tmp(){return "%t"+std::to_string(temp_++);}std::string label(const std::string&p){return p+std::to_string(label_++);}static std::string escape(const std::string&s){std::ostringstream o;for(unsigned char c:s){if(c=='\\')o<<"\\5C";else if(c=='"')o<<"\\22";else if(c=='\n')o<<"\\0A";else if(c<32||c>126){const char*hex="0123456789ABCDEF";o<<"\\"<<hex[c>>4]<<hex[c&15];}else o<<c;}return o.str();}
+    void collectStrings(){for(const auto&f:program_.functions)collectBlock(f.body);}void collectBlock(const std::vector<StatementPtr>&ss){for(const auto&sp:ss){if(sp->kind==Statement::Kind::Let)collectExpr(*static_cast<const LetStatement&>(*sp).value);else if(sp->kind==Statement::Kind::Return&&static_cast<const ReturnStatement&>(*sp).value)collectExpr(*static_cast<const ReturnStatement&>(*sp).value);else if(sp->kind==Statement::Kind::Expression)collectExpr(*static_cast<const ExpressionStatement&>(*sp).expression);else if(sp->kind==Statement::Kind::If){auto&x=static_cast<const IfStatement&>(*sp);collectExpr(*x.condition);collectBlock(x.then_body);collectBlock(x.else_body);}else if(sp->kind==Statement::Kind::While){auto&x=static_cast<const WhileStatement&>(*sp);collectExpr(*x.condition);collectBlock(x.body);}}}void collectExpr(const Expr&e){if(e.kind==Expr::Kind::String){auto&s=static_cast<const StringExpr&>(e).value;if(!strings_.count(s))strings_[s]=strings_.size();}else if(e.kind==Expr::Kind::Unary)collectExpr(*static_cast<const UnaryExpr&>(e).operand);else if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);collectExpr(*x.left);collectExpr(*x.right);}else if(e.kind==Expr::Kind::Call){for(auto&x:static_cast<const CallExpr&>(e).arguments)collectExpr(*x);}else if(e.kind==Expr::Kind::Array){for(auto&x:static_cast<const ArrayExpr&>(e).elements)collectExpr(*x);}else if(e.kind==Expr::Kind::Struct){for(auto&x:static_cast<const StructExpr&>(e).fields)collectExpr(*x.second);}else if(e.kind==Expr::Kind::Field)collectExpr(*static_cast<const FieldExpr&>(e).base);else if(e.kind==Expr::Kind::Index){auto&x=static_cast<const IndexExpr&>(e);collectExpr(*x.base);collectExpr(*x.index);}}
+    Type localType(const Expr&e)const{if(e.kind==Expr::Kind::Integer)return Type::scalar(TypeKind::I32);if(e.kind==Expr::Kind::Boolean)return Type::scalar(TypeKind::Bool);if(e.kind==Expr::Kind::String)return Type::scalar(TypeKind::String);if(e.kind==Expr::Kind::Array){auto&x=static_cast<const ArrayExpr&>(e);return Type::array(x.elements.size(),localType(*x.elements[0]));}if(e.kind==Expr::Kind::Struct)return Type::structure(static_cast<const StructExpr&>(e).name);if(e.kind==Expr::Kind::Call)return functions_.at(static_cast<const CallExpr&>(e).name)->return_type;if(e.kind==Expr::Kind::Name)return locals_.at(static_cast<const NameExpr&>(e).name).type;if(e.kind==Expr::Kind::Field){auto&x=static_cast<const FieldExpr&>(e);Type b=localType(*x.base);auto&s=*structs_.at(b.name);for(auto&f:s.fields)if(f.first==x.field)return f.second;}if(e.kind==Expr::Kind::Index)return *localType(*static_cast<const IndexExpr&>(e).base).element;return Type::scalar(TypeKind::I32);}
+    std::pair<std::string,Type> expr(const Expr&e,std::ostringstream&o,std::optional<Type> expected=std::nullopt){
+        if(e.kind==Expr::Kind::Integer){return {std::to_string(static_cast<const IntegerExpr&>(e).value),expected.value_or(Type::scalar(TypeKind::I32))};}
+        if(e.kind==Expr::Kind::Boolean){return {static_cast<const BooleanExpr&>(e).value?"1":"0",expected.value_or(Type::scalar(TypeKind::Bool))
+};}
+        if(e.kind==Expr::Kind::String){auto&s=static_cast<const StringExpr&>(e).value;auto id=strings_.at(s);auto r=tmp();o<<"  "<<r<<" = getelementptr inbounds ["<<s.size()+1<<" x i8], ptr @.str."<<id<<", i64 0, i64 0\n";return {r,Type::scalar(TypeKind::String)};}
+        if(e.kind==Expr::Kind::Name){auto&n=static_cast<const NameExpr&>(e).name;auto&l=locals_.at(n);auto r=tmp();o<<"  "<<r<<" = load "<<l.type.llvm()<<", ptr "<<l.addr<<"\n";return {r,l.type};}
+        if(e.kind==Expr::Kind::Unary){auto&x=static_cast<const UnaryExpr&>(e);auto a=expr(*x.operand,o);auto r=tmp();if(x.op=="-")o<<"  "<<r<<" = sub "<<a.second.llvm()<<" 0, "<<a.first<<"\n";else o<<"  "<<r<<" = xor i1 "<<a.first<<", 1\n";return {r,a.second};}
+        if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);auto a=expr(*x.left,o),b=expr(*x.right,o);auto r=tmp();if(x.op=="&&"||x.op=="||")o<<"  "<<r<<" = "<<(x.op=="&&"?"and":"or")<<" i1 "<<a.first<<", "<<b.first<<"\n";else if(x.op=="+"||x.op=="-"||x.op=="*"||x.op=="/")o<<"  "<<r<<" = "<<(x.op=="+"?"add":x.op=="-"?"sub":x.op=="*"?"mul":"sdiv")<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";else{o<<"  "<<r<<" = icmp "<<std::map<std::string,std::string>{{"==","eq"},{"!=","ne"},{"<","slt"},{"<=","sle"},{">","sgt"},{">=","sge"}}.at(x.op)<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";return {r,Type::scalar(TypeKind::Bool)};}return {r,(x.op=="&&"||x.op=="||")?Type::scalar(TypeKind::Bool):a.second};}
+        if(e.kind==Expr::Kind::Call){auto&x=static_cast<const CallExpr&>(e);auto&f=*functions_.at(x.name);std::vector<std::pair<std::string,Type>>a;for(std::size_t i=0;i<x.arguments.size();++i)a.push_back(expr(*x.arguments[i],o,f.parameters[i].type));std::ostringstream args;for(std::size_t i=0;i<a.size();++i){if(i)args<<", ";args<<f.parameters[i].type.llvm()<<" "<<a[i].first;}if(f.return_type.kind==TypeKind::Void){o<<"  call void @"<<f.name<<"("<<args.str()<<")\n";return {"",f.return_type};}auto r=tmp();o<<"  "<<r<<" = call "<<f.return_type.llvm()<<" @"<<f.name<<"("<<args.str()<<")\n";return {r,f.return_type};}
+        if(e.kind==Expr::Kind::Array||e.kind==Expr::Kind::Struct){return {aggregate(e,expected.value_or(localType(e)),o),expected.value_or(localType(e))};}
+        if(e.kind==Expr::Kind::Field||e.kind==Expr::Kind::Index){auto a=address(e,o);auto r=tmp();Type t=localType(e);o<<"  "<<r<<" = load "<<t.llvm()<<", ptr "<<a.first<<"\n";return {r,t};}
+        fail("unsupported aggregate expression",e.line,e.column);
     }
-
-    std::string temp() { return "%t" + std::to_string(temp_counter_++); }
-    std::string label(const std::string& prefix) { return prefix + std::to_string(label_counter_++); }
-
-    static std::string zeroValue(const Type& type) {
-        return type.kind == TypeKind::Void ? "" : "0";
+    std::pair<std::string,Type> address(const Expr&e,std::ostringstream&o){
+        if(e.kind==Expr::Kind::Name){auto&l=locals_.at(static_cast<const NameExpr&>(e).name);return {l.addr,l.type};}
+        if(e.kind==Expr::Kind::Field){auto&x=static_cast<const FieldExpr&>(e);auto b=address(*x.base,o);const StructDecl&s=*structs_.at(b.second.name);std::size_t index=0;Type field;for(std::size_t i=0;i<s.fields.size();++i)if(s.fields[i].first==x.field){index=i;field=s.fields[i].second;break;}auto r=tmp();o<<"  "<<r<<" = getelementptr inbounds "<<b.second.llvm()<<", ptr "<<b.first<<", i64 0, i32 "<<index<<"\n";return {r,field};}
+        if(e.kind==Expr::Kind::Index){auto&x=static_cast<const IndexExpr&>(e);auto b=address(*x.base,o);auto i=expr(*x.index,o);auto r=tmp();o<<"  "<<r<<" = getelementptr inbounds "<<b.second.llvm()<<", ptr "<<b.first<<", i64 0, i64 "<<i.first<<"\n";return {r,*b.second.element};}
+        fail("expression is not addressable",e.line,e.column);
     }
-
-    Type inferCollectionType(const Expr& expression, const std::unordered_map<std::string, Type>& known) const {
-        if (expression.kind == Expr::Kind::Integer) return {TypeKind::I32};
-        if (expression.kind == Expr::Kind::Boolean) return {TypeKind::Bool};
-        if (expression.kind == Expr::Kind::Unary) return inferCollectionType(*static_cast<const UnaryExpr&>(expression).operand, known);
-        if (expression.kind == Expr::Kind::Binary) return inferCollectionType(*static_cast<const BinaryExpr&>(expression).left, known);
-        if (expression.kind == Expr::Kind::Call) return functions_.at(static_cast<const CallExpr&>(expression).name)->return_type;
-        if (expression.kind == Expr::Kind::Name) {
-            const auto& name = static_cast<const NameExpr&>(expression).name;
-            const auto it = known.find(name);
-            if (it != known.end()) return it->second;
-        }
-        return {TypeKind::I32};
-    }
-
-    void collectLocals(const std::vector<StatementPtr>& statements, std::vector<std::pair<std::string, Type>>& locals, std::unordered_map<std::string, Type>& known) {
-        for (const auto& statement : statements) {
-            switch (statement->kind) {
-                case Statement::Kind::Let: {
-                    const auto& let = static_cast<const LetStatement&>(*statement);
-                    const Type type = let.declared.value_or(inferCollectionType(*let.value, known));
-                    locals.emplace_back(let.name, type);
-                    known.emplace(let.name, type);
-                    break;
-                }
-                case Statement::Kind::If: {
-                    const auto& conditional = static_cast<const IfStatement&>(*statement);
-                    collectLocals(conditional.then_body, locals, known);
-                    collectLocals(conditional.else_body, locals, known);
-                    break;
-                }
-                case Statement::Kind::While:
-                    collectLocals(static_cast<const WhileStatement&>(*statement).body, locals, known);
-                    break;
-                default:
-                    break;
-            }
-        }
-    }
-
-    // The validator has already checked all local initializer types.  This
-    // helper is retained as a conservative fallback for malformed ASTs.
-    Type inferLocalType(const Expr& expression) const {
-        if (expression.kind == Expr::Kind::Integer) return {TypeKind::I32};
-        if (expression.kind == Expr::Kind::Boolean) return {TypeKind::Bool};
-        if (expression.kind == Expr::Kind::Unary) return inferLocalType(*static_cast<const UnaryExpr&>(expression).operand);
-        if (expression.kind == Expr::Kind::Binary) return inferLocalType(*static_cast<const BinaryExpr&>(expression).left);
-        if (expression.kind == Expr::Kind::Call) {
-            const auto& call = static_cast<const CallExpr&>(expression);
-            return functions_.at(call.name)->return_type;
-        }
-        if (expression.kind == Expr::Kind::Name) {
-            const auto& name = static_cast<const NameExpr&>(expression).name;
-            const auto it = locals_.find(name);
-            if (it != locals_.end()) return it->second.type;
-        }
-        return {TypeKind::I32};
-    }
-
-    std::pair<std::string, Type> emitExpr(const Expr& expression, std::ostringstream& out, std::optional<Type> expected = std::nullopt) {
-        switch (expression.kind) {
-            case Expr::Kind::Integer: {
-                const auto& literal = static_cast<const IntegerExpr&>(expression);
-                return {std::to_string(literal.value), expected.value_or(Type{TypeKind::I32})};
-            }
-            case Expr::Kind::Boolean: {
-                const auto& literal = static_cast<const BooleanExpr&>(expression);
-                return {literal.value ? "1" : "0", expected.value_or(Type{TypeKind::Bool})};
-            }
-            case Expr::Kind::Name: {
-                const auto& name = static_cast<const NameExpr&>(expression).name;
-                const Local& local = locals_.at(name);
-                const std::string result = temp();
-                out << "  " << result << " = load " << local.type.llvm() << ", ptr " << local.address << "\n";
-                return {result, local.type};
-            }
-            case Expr::Kind::Unary: {
-                const auto& unary = static_cast<const UnaryExpr&>(expression);
-                const auto operand = emitExpr(*unary.operand, out);
-                if (unary.op == "-") {
-                    const std::string result = temp();
-                    out << "  " << result << " = sub " << operand.second.llvm() << " 0, " << operand.first << "\n";
-                    return {result, operand.second};
-                }
-                const std::string result = temp();
-                out << "  " << result << " = xor i1 " << operand.first << ", 1\n";
-                return {result, {TypeKind::Bool}};
-            }
-            case Expr::Kind::Binary: {
-                const auto& binary = static_cast<const BinaryExpr&>(expression);
-                const auto left = emitExpr(*binary.left, out);
-                const auto right = emitExpr(*binary.right, out);
-                const std::string result = temp();
-                if (binary.op == "&&" || binary.op == "||") {
-                    out << "  " << result << " = " << (binary.op == "&&" ? "and" : "or") << " i1 " << left.first << ", " << right.first << "\n";
-                    return {result, {TypeKind::Bool}};
-                }
-                if (binary.op == "+" || binary.op == "-" || binary.op == "*" || binary.op == "/") {
-                    const std::string opcode = binary.op == "+" ? "add" : binary.op == "-" ? "sub" : binary.op == "*" ? "mul" : "sdiv";
-                    out << "  " << result << " = " << opcode << " " << left.second.llvm() << " " << left.first << ", " << right.first << "\n";
-                    return {result, left.second};
-                }
-                const std::unordered_map<std::string, std::string> predicates{{"==", "eq"}, {"!=", "ne"}, {"<", "slt"}, {"<=", "sle"}, {">", "sgt"}, {">=", "sge"}};
-                out << "  " << result << " = icmp " << predicates.at(binary.op) << " " << left.second.llvm() << " " << left.first << ", " << right.first << "\n";
-                return {result, {TypeKind::Bool}};
-            }
-            case Expr::Kind::Call: {
-                const auto& call = static_cast<const CallExpr&>(expression);
-                const Function& function = *functions_.at(call.name);
-                std::vector<std::pair<std::string, Type>> arguments;
-                for (std::size_t i = 0; i < call.arguments.size(); ++i) arguments.push_back(emitExpr(*call.arguments[i], out, function.parameters[i].type));
-                std::ostringstream rendered;
-                for (std::size_t i = 0; i < arguments.size(); ++i) {
-                    if (i) rendered << ", ";
-                    rendered << function.parameters[i].type.llvm() << " " << arguments[i].first;
-                }
-                if (function.return_type.kind == TypeKind::Void) {
-                    out << "  call void @" << function.name << "(" << rendered.str() << ")\n";
-                    return {"", function.return_type};
-                }
-                const std::string result = temp();
-                out << "  " << result << " = call " << function.return_type.llvm() << " @" << function.name << "(" << rendered.str() << ")\n";
-                return {result, function.return_type};
-            }
-        }
-        fail("unsupported expression in LLVM emitter", expression.line, expression.column);
-    }
-
-    bool emitBlock(const std::vector<StatementPtr>& statements, std::ostringstream& out, const Type& return_type) {
-        bool terminated = false;
-        for (const auto& statement : statements) {
-            if (terminated) break;
-            switch (statement->kind) {
-                case Statement::Kind::Let: {
-                    const auto& let = static_cast<const LetStatement&>(*statement);
-                    const auto value = emitExpr(*let.value, out, let.declared);
-                    out << "  store " << value.second.llvm() << " " << value.first << ", ptr " << locals_.at(let.name).address << "\n";
-                    break;
-                }
-                case Statement::Kind::Return: {
-                    const auto& ret = static_cast<const ReturnStatement&>(*statement);
-                    if (!ret.value) out << "  ret void\n";
-                    else {
-                        const auto value = emitExpr(*ret.value, out, return_type);
-                        out << "  ret " << value.second.llvm() << " " << value.first << "\n";
-                    }
-                    terminated = true;
-                    break;
-                }
-                case Statement::Kind::Expression:
-                    emitExpr(*static_cast<const ExpressionStatement&>(*statement).expression, out);
-                    break;
-                case Statement::Kind::If: {
-                    const auto& conditional = static_cast<const IfStatement&>(*statement);
-                    const auto condition = emitExpr(*conditional.condition, out);
-                    const std::string then_label = label("if_then");
-                    const std::string else_label = label("if_else");
-                    const std::string merge_label = label("if_merge");
-                    out << "  br i1 " << condition.first << ", label %" << then_label << ", label %" << else_label << "\n";
-                    out << then_label << ":\n";
-                    const bool then_terminated = emitBlock(conditional.then_body, out, return_type);
-                    if (!then_terminated) out << "  br label %" << merge_label << "\n";
-                    out << else_label << ":\n";
-                    const bool else_terminated = conditional.else_body.empty() ? false : emitBlock(conditional.else_body, out, return_type);
-                    if (!else_terminated) out << "  br label %" << merge_label << "\n";
-                    out << merge_label << ":\n";
-                    terminated = then_terminated && else_terminated;
-                    if (terminated) out << "  unreachable\n";
-                    break;
-                }
-                case Statement::Kind::While: {
-                    const auto& loop = static_cast<const WhileStatement&>(*statement);
-                    const std::string head = label("while_head");
-                    const std::string body = label("while_body");
-                    const std::string exit = label("while_exit");
-                    out << "  br label %" << head << "\n";
-                    out << head << ":\n";
-                    const auto condition = emitExpr(*loop.condition, out);
-                    out << "  br i1 " << condition.first << ", label %" << body << ", label %" << exit << "\n";
-                    out << body << ":\n";
-                    const bool body_terminated = emitBlock(loop.body, out, return_type);
-                    if (!body_terminated) out << "  br label %" << head << "\n";
-                    out << exit << ":\n";
-                    break;
-                }
-            }
-        }
-        return terminated;
-    }
-
-    void emitFunction(const Function& function, std::ostringstream& out) {
-        temp_counter_ = 0;
-        label_counter_ = 0;
-        locals_.clear();
-        std::vector<std::pair<std::string, Type>> collected;
-        for (const Parameter& parameter : function.parameters) collected.emplace_back(parameter.name, parameter.type);
-        std::unordered_map<std::string, Type> known;
-        for (const Parameter& parameter : function.parameters) known.emplace(parameter.name, parameter.type);
-        collectLocals(function.body, collected, known);
-        for (const auto& local : collected) {
-            if (locals_.find(local.first) == locals_.end()) locals_.emplace(local.first, Local{local.second, "%" + escapeName(local.first) + ".addr"});
-        }
-        out << "; function: " << function.name << "\n";
-        out << "define " << function.return_type.llvm() << " @" << function.name << "(";
-        for (std::size_t i = 0; i < function.parameters.size(); ++i) {
-            if (i) out << ", ";
-            out << function.parameters[i].type.llvm() << " %" << escapeName(function.parameters[i].name);
-        }
-        out << ") {\nentry:\n";
-        for (const auto& local : collected) {
-            if (locals_.find(local.first) == locals_.end()) continue;
-            if (local.first.empty()) continue;
-            const Local& storage = locals_.at(local.first);
-            out << "  " << storage.address << " = alloca " << storage.type.llvm() << "\n";
-        }
-        for (const Parameter& parameter : function.parameters) {
-            const Local& storage = locals_.at(parameter.name);
-            out << "  store " << parameter.type.llvm() << " %" << escapeName(parameter.name) << ", ptr " << storage.address << "\n";
-        }
-        const bool terminated = emitBlock(function.body, out, function.return_type);
-        if (!terminated && function.return_type.kind == TypeKind::Void) out << "  ret void\n";
-        else if (!terminated) fail("non-void function '" + function.name + "' has no terminating return", function.line, 1);
-
-        out << "}\n";
-    }
-
-    const Program& program_;
-    std::string target_;
-    std::unordered_map<std::string, const Function*> functions_;
-    std::unordered_map<std::string, Local> locals_;
-    int temp_counter_ = 0;
-    int label_counter_ = 0;
+    std::string aggregate(const Expr&e,const Type&t,std::ostringstream&o){if(e.kind==Expr::Kind::Array){auto&x=static_cast<const ArrayExpr&>(e);std::ostringstream v;v<<"[";for(std::size_t i=0;i<x.elements.size();++i){if(i)v<<", ";auto a=expr(*x.elements[i],o,*t.element);v<<t.element->llvm()<<" "<<a.first;}v<<"]";return v.str();}auto&x=static_cast<const StructExpr&>(e);const StructDecl&s=*structs_.at(x.name);std::ostringstream v;v<<"{";for(std::size_t i=0;i<x.fields.size();++i){if(i)v<<", ";auto a=expr(*x.fields[i].second,o,s.fields[i].second);v<<s.fields[i].second.llvm()<<" "<<a.first;}v<<"}";return v.str();}
+    void collect(const std::vector<StatementPtr>&ss,std::vector<std::pair<std::string,Type>>&ls,std::unordered_map<std::string,Type>&known){for(const auto&sp:ss){if(sp->kind==Statement::Kind::Let){auto&x=static_cast<const LetStatement&>(*sp);Type t=x.declared.value_or(localType(*x.value));ls.push_back({x.name,t});known[x.name]=t;locals_[x.name]={t,""};}else if(sp->kind==Statement::Kind::If){auto&x=static_cast<const IfStatement&>(*sp);collect(x.then_body,ls,known);collect(x.else_body,ls,known);}else if(sp->kind==Statement::Kind::While){collect(static_cast<const WhileStatement&>(*sp).body,ls,known);}}}
+    bool block(const std::vector<StatementPtr>&ss,std::ostringstream&o,const Type&ret){bool term=false;for(const auto&sp:ss){if(term)break;if(sp->kind==Statement::Kind::Let){auto&x=static_cast<const LetStatement&>(*sp);auto v=expr(*x.value,o,x.declared);o<<"  store "<<v.second.llvm()<<" "<<v.first<<", ptr "<<locals_.at(x.name).addr<<"\n";}else if(sp->kind==Statement::Kind::Return){auto&x=static_cast<const ReturnStatement&>(*sp);if(!x.value)o<<"  ret void\n";else{auto v=expr(*x.value,o,ret);o<<"  ret "<<v.second.llvm()<<" "<<v.first<<"\n";}term=true;}else if(sp->kind==Statement::Kind::Expression)expr(*static_cast<const ExpressionStatement&>(*sp).expression,o);else if(sp->kind==Statement::Kind::If){auto&x=static_cast<const IfStatement&>(*sp);auto c=expr(*x.condition,o);auto a=label("if_then"),b=label("if_else"),m=label("if_merge");o<<"  br i1 "<<c.first<<", label %"<<a<<", label %"<<b<<"\n"<<a<<":\n";bool ar=block(x.then_body,o,ret);if(!ar)o<<"  br label %"<<m<<"\n";o<<b<<":\n";bool br=x.else_body.empty()?false:block(x.else_body,o,ret);if(!br)o<<"  br label %"<<m<<"\n";o<<m<<":\n";term=ar&&br;if(term)o<<"  unreachable\n";}else if(sp->kind==Statement::Kind::While){auto&x=static_cast<const WhileStatement&>(*sp);auto h=label("while_head"),b=label("while_body"),z=label("while_exit");o<<"  br label %"<<h<<"\n"<<h<<":\n";auto c=expr(*x.condition,o);o<<"  br i1 "<<c.first<<", label %"<<b<<", label %"<<z<<"\n"<<b<<":\n";bool bt=block(x.body,o,ret);if(!bt)o<<"  br label %"<<h<<"\n";o<<z<<":\n";}}return term;}
+    void emitFunction(const Function&f,std::ostringstream&o){temp_=label_=0;locals_.clear();std::vector<std::pair<std::string,Type>>ls;std::unordered_map<std::string,Type>known;for(auto&p:f.parameters){ls.push_back({p.name,p.type});known[p.name]=p.type;locals_[p.name]={p.type,""};}collect(f.body,ls,known);for(auto&l:ls)locals_[l.first]={l.second,"%"+l.first+".addr"};o<<"; function: "<<f.name<<"\ndefine "<<f.return_type.llvm()<<" @"<<f.name<<"(";for(std::size_t i=0;i<f.parameters.size();++i){if(i)o<<", ";o<<f.parameters[i].type.llvm()<<" %"<<f.parameters[i].name;}o<<") {\nentry:\n";for(auto&l:ls)o<<"  "<<locals_[l.first].addr<<" = alloca "<<l.second.llvm()<<"\n";for(auto&p:f.parameters)o<<"  store "<<p.type.llvm()<<" %"<<p.name<<", ptr "<<locals_[p.name].addr<<"\n";bool term=block(f.body,o,f.return_type);if(!term&&f.return_type.kind==TypeKind::Void)o<<"  ret void\n";else if(!term)fail("function has no terminating return",f.line,1);o<<"}\n";}
+    const Program&program_;std::string target_;std::unordered_map<std::string,const Function*>functions_;std::unordered_map<std::string,const StructDecl*>structs_;std::map<std::string,std::size_t>strings_;std::unordered_map<std::string,Local>locals_;int temp_=0,label_=0;
 };
 
-static std::string readFile(const std::string& path) {
-    std::ifstream input(path, std::ios::binary);
-    if (!input) fail("cannot open input file '" + path + "'");
-    std::ostringstream contents;
-    contents << input.rdbuf();
-    return contents.str();
-}
-
-static void writeFile(const std::string& path, const std::string& contents) {
-    std::ofstream output(path, std::ios::binary | std::ios::trunc);
-    if (!output) fail("cannot open output file '" + path + "'");
-    output << contents;
-    if (!output) fail("failed writing output file '" + path + "'");
-}
-
-static void printUsage(const char* program) {
-    std::cerr << "usage: " << program << " [--target=TRIPLE] INPUT.hf [-o OUTPUT.ll]\n"
-              << "       " << program << " --help\n";
-}
+static std::string readFile(const std::string&path){std::ifstream in(path,std::ios::binary);if(!in)fail("cannot open input file '"+path+"'");std::ostringstream s;s<<in.rdbuf();return s.str();}
+static void writeFile(const std::string&path,const std::string&text){std::ofstream out(path,std::ios::binary|std::ios::trunc);if(!out)fail("cannot open output file '"+path+"'");out<<text;}
+static void usage(const char*p){std::cerr<<"usage: "<<p<<" [--target=TRIPLE] INPUT.hf [-o OUTPUT.ll]\n";}
 
 } // namespace hf0
 
-int main(int argc, char** argv) {
-    using namespace hf0;
-    try {
-        if (argc < 2) {
-            printUsage(argv[0]);
-            return 2;
-        }
-        std::string input_path;
-        std::string output_path;
-        std::string target = "x86_64-pc-linux-gnu";
-        for (int index = 1; index < argc; ++index) {
-            const std::string argument(argv[index]);
-            if (argument == "--help" || argument == "-h") {
-                printUsage(argv[0]);
-                return 0;
-            }
-            if (argument.rfind("--target=", 0) == 0) {
-                target = argument.substr(std::string("--target=").size());
-                if (target.empty()) fail("--target cannot be empty");
-                continue;
-            }
-            if (argument == "--target") {
-                if (index + 1 >= argc) fail("--target requires a value");
-                target = argv[++index];
-                continue;
-            }
-            if (argument == "-o" || argument == "--output") {
-                if (index + 1 >= argc) fail("-o/--output requires a path");
-                output_path = argv[++index];
-                continue;
-            }
-            if (!argument.empty() && argument[0] == '-') fail("unknown option '" + argument + "'");
-            if (!input_path.empty()) fail("multiple input files are not supported by the seed compiler");
-            input_path = argument;
-        }
-        if (input_path.empty()) {
-            printUsage(argv[0]);
-            return 2;
-        }
-        const std::string source = readFile(input_path);
-        Lexer lexer(source);
-        Parser parser(lexer.run());
-        Program program = parser.parse();
-        Validator validator;
-        validator.run(program);
-        const std::string llvm = LLVMEmitter(program, target).emit();
-        if (output_path.empty()) {
-            std::cout << llvm;
-        } else {
-            writeFile(output_path, llvm);
-            std::cerr << "holyfitra-bootstrap: wrote " << output_path << "\n";
-        }
-        return 0;
-    } catch (const Diagnostic& diagnostic) {
-        std::cerr << "holyfitra-bootstrap: error" << location(diagnostic.line, diagnostic.column) << ": " << diagnostic.what() << "\n";
-        return 1;
-    } catch (const std::exception& error) {
-        std::cerr << "holyfitra-bootstrap: internal error: " << error.what() << "\n";
-        return 1;
-    }
-}
+int main(int argc,char**argv){using namespace hf0;try{if(argc<2){usage(argv[0]);return 2;}std::string input,output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}Program p=Parser(Lexer(readFile(input)).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){std::cerr<<"holyfitra-bootstrap: error"<<location(d.line,d.column)<<": "<<d.what()<<"\n";return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}

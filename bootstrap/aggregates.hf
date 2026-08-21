@@ -1,0 +1,13 @@
+module aggregates
+
+struct Pair {
+    first: i32
+    second: i32
+}
+
+fn main() -> i32 {
+    let values: [3]i32 = [10, 20, 12]
+    let pair: Pair = Pair { first: 1, second: 30 }
+    let label: string = "holyfitra"
+    return values[2] + pair.second
+}

@@ -122,3 +122,12 @@ The first no-Python bootstrap compiler is implemented in `holyfitra_bootstrap.cp
 `bootstrap/test_bootstrap.sh` passed strict C++17 compilation, host execution with exit code 42, control-flow execution with exit code 1, fail-closed invalid-type diagnostics, AArch64 object generation, and execution with Python removed from the environment. The measured AArch64 fixture object was 1,040 bytes in the x86-64 sandbox.
 
 This milestone is **Stage 0 only**, not a claim of a fully self-compiled compiler. The seed does not yet support strings, arrays, structs, imports, file/process APIs, effects, tasks, hybrids, tensors, or compiler-core standard-library services. The next self-hosting milestone is a minimal `compiler/main.hf` compiler core compiled by this seed, followed by Stage-1 self-rebuild and fixed-point verification.
+
+
+## Aggregate seed substrate verification
+
+The no-Python Stage-0 compiler now supports named structs, fixed arrays, string literals, aggregate constructors, indexing, field access, aggregate LLVM types, string constants, and aggregate load/store lowering. The aggregate fixture combines a `[3]i32` array, a `Pair` struct, a string value, `values[2]`, and `pair.second`, and executes with native exit code 42.
+
+The bootstrap gate passed strict C++17 compilation, scalar and control-flow fixtures, aggregate execution, fail-closed invalid-type diagnostics, AArch64 object generation, and Python-free invocation. The full Termux-compatible host gate passed **129 tests** and included the updated aggregate bootstrap gate. The measured AArch64 fixture object was 1,040 bytes on the x86-64 sandbox.
+
+This remains a compiler-core substrate milestone rather than a complete self-hosting claim. Dynamic arrays, pointer/handle APIs, file/process services, imports, effects, tasks, hybrids, and the `compiler/main.hf` self-hosted compiler core remain to be implemented.

@@ -24,6 +24,14 @@ control_status=$?
 set -e
 test "$control_status" -eq 1
 
+"$BUILD" "$ROOT/bootstrap/aggregates.hf" -o "$WORK/aggregates.ll"
+clang -O2 "$WORK/aggregates.ll" -o "$WORK/aggregates"
+set +e
+"$WORK/aggregates"
+aggregate_status=$?
+set -e
+test "$aggregate_status" -eq 42
+
 "$BUILD" --target=aarch64-linux-android21 "$ROOT/bootstrap/hello.hf" -o "$WORK/hello.aarch64.ll"
 clang --target=aarch64-linux-android21 -c "$WORK/hello.aarch64.ll" -o "$WORK/hello.aarch64.o"
 test -s "$WORK/hello.aarch64.o"
@@ -37,4 +45,4 @@ grep -F "declared type does not match initializer" "$WORK/invalid.err" >/dev/nul
 # Verify the seed command itself works without Python in PATH or environment.
 env -i PATH="$(dirname "$(command -v clang)"):$(dirname "$(command -v clang++)"):/usr/bin:/bin" HOME="$WORK/home" "$BUILD" --help >/dev/null
 
-printf 'bootstrap_host=passed\nbootstrap_invalid=passed\nbootstrap_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")"
+printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")"

@@ -4,9 +4,9 @@
 
 ## Supported subset
 
-The seed supports modules, functions, `i32`, `i64`, `bool`, and `void`, typed parameters, local `let`/`var` bindings, arithmetic, comparisons, logical operators, unary operators, calls, `if`/`else`, `while`, expression statements, and returns.
+The seed supports modules, functions, `i32`, `i64`, `bool`, `void`, and `string`, fixed arrays such as `[32]u8`-style scalar arrays, named structs, typed parameters, local `let`/`var` bindings, arithmetic, comparisons, logical operators, unary operators, calls, `if`/`else`, `while`, expression statements, returns, array indexing, and struct field access. The current aggregate constructors use forms such as `[1, 2, 3]` and `Pair { first: 1, second: 2 }`.
 
-It deliberately does not yet support tensors, effects, tasks, hybrid functions, imports, strings, arrays, structs, pointers, generics, or file/process APIs. Those features belong to the next self-hosted compiler-core stage.
+It deliberately does not yet support tensors, effects, tasks, hybrid functions, imports, dynamic arrays, pointers, generics, or file/process APIs. These remaining services belong to the next self-hosted compiler-core stage.
 
 ## Build without Python
 
