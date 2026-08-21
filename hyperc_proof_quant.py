@@ -17,6 +17,7 @@ import numpy as np
 from hyperc_hyperir import QuantizationProof
 from hyperc_quantized_transformer import QuantizedMatrix
 from hyperc_hybrid_quant import Float16Matrix
+from holyfitra_quant_utils import calibration_mse
 
 
 @dataclass(frozen=True)
@@ -55,9 +56,7 @@ class ProofManifest:
 
 
 def _mse(weight: np.ndarray, calibration: np.ndarray, candidate: Any) -> float:
-    reference = calibration @ weight
-    predicted = np.stack([candidate.matvec(row) for row in calibration])
-    return float(np.mean((reference - predicted) ** 2))
+    return calibration_mse(weight, calibration, candidate)
 
 
 def select_matrix(

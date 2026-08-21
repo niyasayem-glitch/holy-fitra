@@ -7,6 +7,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from hyperc_quantized_transformer import QuantizedMatrix
+from holyfitra_quant_utils import calibration_mse
 
 
 @dataclass
@@ -43,7 +44,5 @@ def calibrate_matrix(weight: np.ndarray, calibration: np.ndarray, bits: int, gro
     if not 0.0 <= sidecar_fraction <= 1.0:
         raise ValueError("sidecar_fraction must be between 0 and 1")
     matrix = QuantizedMatrix.quantize(weight, bits, group_size)
-    reference = calibration @ weight
-    predicted = np.stack([matrix.matvec(row) for row in calibration])
-    mse = float(np.mean((reference - predicted) ** 2))
+    mse = calibration_mse(weight, calibration, matrix)
     return CalibratedMatrix(matrix, mse, sidecar_fraction)

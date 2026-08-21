@@ -654,7 +654,6 @@ class LLVMEmitter:
         raise HolyFitraError("unsupported expression")
 
     def emit_function(self, function: Function) -> list[str]:
-        validate_native(self.program)
         self.counter = 0
         self.block_counter = 0
         self.terminated = False
@@ -759,6 +758,13 @@ def write_llvm(source_path: Path, output: Path, target: str | None = None) -> in
 def build(source_path: Path, output: Path, target: str | None = None, keep_llvm: bool = False) -> int:
     program, llvm, digest = compile_native_file(source_path, target=target)
     output.parent.mkdir(parents=True, exist_ok=True)
+    cache_dir = source_path.parent / ".holyfitra" / "cache"
+    artifact_cache = cache_dir / f"{digest}.native"
+    if artifact_cache.is_file() and artifact_cache.stat().st_size > 0:
+        if artifact_cache.resolve() != output.resolve():
+            shutil.copy2(artifact_cache, output)
+        print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": True}, sort_keys=True))
+        return 0
     main = next((function for function in program.functions if function.name == "main"), None)
     if main is None or main.parameters or main.return_type.name not in {"i32", "i64"}:
         raise HolyFitraError("build/run requires fn main() -> i32 or fn main() -> i64")
@@ -772,10 +778,13 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
         completed = subprocess.run(command, text=True, capture_output=True)
         if completed.returncode:
             raise HolyFitraError(completed.stderr.strip() or "clang failed")
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        if artifact_cache.resolve() != output.resolve():
+            shutil.copy2(output, artifact_cache)
         if keep_llvm:
             persistent_llvm = output.with_suffix(output.suffix + ".ll")
             persistent_llvm.write_text(llvm, encoding="utf-8")
-    print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host"}, sort_keys=True))
+    print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": False}, sort_keys=True))
     return 0
 
 

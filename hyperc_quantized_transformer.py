@@ -60,6 +60,17 @@ class QuantizedMatrix:
             return out
         return result
 
+    def matmat(self, matrix: np.ndarray) -> np.ndarray:
+        matrix = np.ascontiguousarray(matrix, dtype=np.float32)
+        if matrix.ndim != 2 or matrix.shape[1] != self._raw_shape[0]:
+            raise ValueError("matrix dimension mismatch")
+        if self.bits == 4:
+            reconstructed = self.packed.reconstruct()
+            return matrix @ reconstructed.T
+        values = np.asarray(self.packed.values, dtype=np.float32)
+        scales = np.asarray(self.packed.scales, dtype=np.float32)
+        return (matrix @ values.T) * scales
+
 
 class _PackedInt8:
     def __init__(self, in_dim: int, out_dim: int, values: np.ndarray, scales: np.ndarray):

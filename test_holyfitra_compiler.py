@@ -146,7 +146,11 @@ fn main() -> i32 {
             self.assertIn("define i32 @main", llvm.read_text(encoding="utf-8"))
             build = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "build", str(source), "-o", str(executable)], capture_output=True, text=True)
             self.assertEqual(build.returncode, 0, build.stderr)
+            self.assertFalse(json.loads(build.stdout)["cache_hit"])
             self.assertTrue(executable.exists())
+            second = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "build", str(source), "-o", str(executable)], capture_output=True, text=True)
+            self.assertEqual(second.returncode, 0, second.stderr)
+            self.assertTrue(json.loads(second.stdout)["cache_hit"])
             run = subprocess.run([str(executable)])
             self.assertEqual(run.returncode, 42)
 

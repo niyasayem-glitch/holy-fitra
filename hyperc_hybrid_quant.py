@@ -16,6 +16,7 @@ import numpy as np
 
 from hyperc_android_transformer import AndroidBuffers
 from hyperc_awq import calibrate_matrix
+from holyfitra_quant_utils import calibration_mse
 from hyperc_quantized_transformer import QuantizedAndroidMHA, QuantizedFeedForward, QuantizedMatrix
 from hyperc_transformer import FeedForward, KVCache, MultiHeadSelfAttention, TransformerSpec, gelu
 
@@ -23,6 +24,7 @@ from hyperc_transformer import FeedForward, KVCache, MultiHeadSelfAttention, Tra
 class Float16Matrix:
     def __init__(self, weight: np.ndarray):
         self.weight = np.ascontiguousarray(weight, dtype=np.float16)
+        self._float32_weight = np.ascontiguousarray(self.weight, dtype=np.float32)
 
     @property
     def storage_bytes(self) -> int:
@@ -37,11 +39,15 @@ class Float16Matrix:
         return self.raw_weight_bytes / self.storage_bytes
 
     def matvec(self, vector: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
-        result = np.asarray(vector, dtype=np.float32) @ self.weight.astype(np.float32)
+        result = np.asarray(vector, dtype=np.float32) @ self._float32_weight
         if out is not None:
             out[...] = result
             return out
         return result
+
+    def matmat(self, matrix: np.ndarray) -> np.ndarray:
+        matrix = np.ascontiguousarray(matrix, dtype=np.float32)
+        return matrix @ self._float32_weight
 
 
 def gated_matrix(weight: np.ndarray, calibration: np.ndarray, group_size: int, threshold: float):
@@ -49,9 +55,7 @@ def gated_matrix(weight: np.ndarray, calibration: np.ndarray, group_size: int, t
     if calibrated.calibration_mse <= threshold:
         return calibrated, "int4_awq"
     int8 = QuantizedMatrix.quantize(weight, 8, weight.shape[0])
-    reference = calibration @ weight
-    int8_output = np.stack([int8.matvec(row) for row in calibration])
-    int8_mse = float(np.mean((reference - int8_output) ** 2))
+    int8_mse = calibration_mse(weight, calibration, int8)
     if int8_mse <= threshold:
         return int8, "int8_fallback"
     return Float16Matrix(weight), "float16_fallback"
