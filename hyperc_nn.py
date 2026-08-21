@@ -33,12 +33,22 @@ class TensorSpec:
 
 
 class Tensor:
-    def __init__(self, data, *, requires_grad: bool = False, _parents=(), _backward: Callable[[], None] | None = None):
-        self.data = np.ascontiguousarray(data, dtype=np.float32)
+    def __init__(self, data, *, requires_grad: bool = False, copy: bool = True, _parents=(), _backward: Callable[[], None] | None = None):
+        array = np.asarray(data, dtype=np.float32)
+        if copy:
+            self.data = np.ascontiguousarray(array)
+        else:
+            if not array.flags.c_contiguous:
+                raise ValueError("zero-copy Tensor requires contiguous storage")
+            self.data = array
         self.grad: np.ndarray | None = np.zeros_like(self.data) if requires_grad else None
         self.requires_grad = requires_grad
         self._parents = tuple(_parents)
         self._backward = _backward or (lambda: None)
+
+    @classmethod
+    def from_buffer(cls, data, *, requires_grad: bool = False) -> "Tensor":
+        return cls(data, requires_grad=requires_grad, copy=False)
 
     @property
     def shape(self) -> tuple[int, ...]:
