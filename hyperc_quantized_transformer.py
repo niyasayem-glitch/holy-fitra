@@ -18,9 +18,11 @@ class QuantizedMatrix:
     _reconstructed_weight: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
     _reconstruction_dtype: str = field(default="f32", init=False, repr=False, compare=False)
     _reconstruction_error: float = field(default=0.0, init=False, repr=False, compare=False)
+    _hybrid_promote_after: int | None = field(default=None, init=False, repr=False, compare=False)
+    _matmat_calls: int = field(default=0, init=False, repr=False, compare=False)
 
     @classmethod
-    def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None) -> "QuantizedMatrix":
+    def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None, reconstruction_mode: str = "f32", promote_after: int = 4) -> "QuantizedMatrix":
         weight = np.asarray(weight, dtype=np.float32)
         if weight.ndim != 2:
             raise ValueError("weight must be rank-2 [in, out]")
@@ -38,8 +40,13 @@ class QuantizedMatrix:
             quantized = np.clip(np.rint(values / scales), -128, 127).astype(np.int8)
             packed = _PackedInt8(values.shape[1], values.shape[0], quantized, scales.reshape(-1))
         matrix = cls(packed, bits, tuple(weight.shape))
-        if reconstruction_dtype != "f32":
-            matrix.configure_reconstruction_cache(reconstruction_dtype, max_error=max_reconstruction_error)
+        mode = reconstruction_dtype if reconstruction_mode == "f32" and reconstruction_dtype != "f32" else reconstruction_mode
+        if mode == "f16":
+            matrix.configure_reconstruction_cache("f16", max_error=max_reconstruction_error)
+        elif mode == "hybrid":
+            matrix.configure_hybrid_reconstruction_cache(max_error=max_reconstruction_error, promote_after=promote_after)
+        elif mode != "f32":
+            raise ValueError("reconstruction_mode must be f32, f16, or hybrid")
         return matrix
 
     @property
@@ -76,6 +83,16 @@ class QuantizedMatrix:
         self._reconstructed_weight = None
         self._reconstruction_dtype = "f32"
         self._reconstruction_error = 0.0
+        self._hybrid_promote_after = None
+        self._matmat_calls = 0
+
+    def configure_hybrid_reconstruction_cache(self, *, max_error: float | None = None, promote_after: int = 4) -> dict[str, float | int | str]:
+        if promote_after <= 0:
+            raise ValueError("promote_after must be positive")
+        result = self.configure_reconstruction_cache("f16", max_error=max_error)
+        self._hybrid_promote_after = promote_after
+        self._matmat_calls = 0
+        return {**result, "mode": "hybrid", "promote_after": promote_after}
 
     def configure_reconstruction_cache(self, dtype: str = "f32", *, max_error: float | None = None) -> dict[str, float | int | str]:
         if dtype not in {"f32", "f16"}:
@@ -90,7 +107,15 @@ class QuantizedMatrix:
         self._reconstructed_weight = candidate
         self._reconstruction_dtype = dtype
         self._reconstruction_error = error
+        if dtype == "f32":
+            self._hybrid_promote_after = None
         return {"dtype": dtype, "cache_bytes": self.reconstruction_cache_bytes, "max_abs_error": error}
+
+    @property
+    def reconstruction_cache_mode(self) -> str:
+        if self._hybrid_promote_after is not None:
+            return "hybrid_cold"
+        return self._reconstruction_dtype
 
     def matvec(self, vector: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
         if hasattr(self.packed, "matvec_reference"):
@@ -109,6 +134,10 @@ class QuantizedMatrix:
         if self.bits == 4:
             if self._reconstructed_weight is None:
                 self.configure_reconstruction_cache("f32")
+            if self._hybrid_promote_after is not None:
+                self._matmat_calls += 1
+                if self._matmat_calls >= self._hybrid_promote_after:
+                    self.configure_reconstruction_cache("f32")
             return matrix @ self._reconstructed_weight.T
         values = np.asarray(self.packed.values, dtype=np.float32)
         scales = np.asarray(self.packed.scales, dtype=np.float32)

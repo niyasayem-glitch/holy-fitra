@@ -69,6 +69,23 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_dtype="f16", max_reconstruction_error=0.0)
 
+    def test_hybrid_cache_promotes_after_threshold(self):
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="hybrid", max_reconstruction_error=0.01, promote_after=2)
+        self.assertEqual(matrix.reconstruction_cache_mode, "hybrid_cold")
+        cold_bytes = matrix.reconstruction_cache_bytes
+        first = matrix.matmat(self.calibration)
+        self.assertEqual(matrix.reconstruction_cache_mode, "hybrid_cold")
+        second = matrix.matmat(self.calibration)
+        self.assertEqual(matrix.reconstruction_cache_mode, "f32")
+        self.assertGreater(matrix.reconstruction_cache_bytes, cold_bytes)
+        reference = QuantizedMatrix.quantize(self.weight, 4, 4).matmat(self.calibration)
+        np.testing.assert_allclose(second, reference, rtol=0.0, atol=1e-6)
+        self.assertLessEqual(float(np.max(np.abs(first - reference))), 0.01 * float(np.linalg.norm(self.calibration)) + 0.01)
+
+    def test_hybrid_cache_requires_positive_promotion_threshold(self):
+        with self.assertRaises(ValueError):
+            QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="hybrid", max_reconstruction_error=0.01, promote_after=0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
