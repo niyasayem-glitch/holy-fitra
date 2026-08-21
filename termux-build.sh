@@ -18,6 +18,7 @@ python3 -m unittest -q \
   test_holyfitra_quant_tuning.py \
   test_holyfitra_dashboard.py \
   test_holyfitra_ui.py \
+  test_holyfitra_data.py \
   test_language_core.py \
   test_hyperir.py \
   test_package.py \

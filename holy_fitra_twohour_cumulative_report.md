@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `6e1e82a` on `master` before the current verifier milestone is published.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `5ec9bd4` on `master`, containing the deterministic streaming dataset milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -23,7 +23,9 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | Round 14 | Content-addressed shared inference tensors with copy-on-write training materialization | 126 tests; Termux/native/sanitizer gates; duplicate 1,048,576-byte weights use 1,048,576 physical bytes | `2c2906a` |
 | Round 15 | Pressure-aware tiered residency with hot/pinned/lease protection | 131 tests; Termux/native/sanitizer gates; 1,024 physical bytes reclaimed under critical pressure | `d3b7dfa` |
 | AI System 1 | Evidence-grounded local agent with vector retrieval, uncertainty ledger, capability-scoped tools, bounded execution, and audit trace | 137 tests; Termux/native/sanitizer gates; unauthorized tool denied; retrieve→tool trace; 0.051086 ms local benchmark | `6e1e82a` |
-| Verifier 1 | Deterministic pre-tool claim verifier with factual overlap, contradiction detection, confidence threshold, and audit gating | 141 tests; Termux/native/sanitizer gates; unsupported claim blocked; zero tool invocations; 0.046871 ms block benchmark | Pending |
+| Verifier 1 | Deterministic pre-tool claim verifier with factual overlap, contradiction detection, confidence threshold, and audit gating | 141 tests; Termux/native/sanitizer gates; unsupported claim blocked; zero tool invocations; 0.046871 ms block benchmark | `9964e05` |
+| Model Dev 1 | LoRA adapters over frozen dense bases, deterministic pruning, manifests, merge/export equivalence, and resource budgets | 145 tests; x86-64 benchmark MSE 0.1532496512 → 0.0827450603; 25% sparsity; merged error 0.0 | `5df1127` |
+| Dataset 1 | Repeatable streaming sources, deterministic hash splits, bounded-buffer epoch shuffling, fixed batches, streaming evaluation, and streaming training integration | 151 tests; 112 Termux host tests; malformed/non-finite samples rejected; deterministic epoch and split tests passed; no physical Android measurements claimed | `5ec9bd4` |
 
 ## Rejected work
 
@@ -31,8 +33,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **141 tests with 0 failures**.
- Termux-compatible host validation passes compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. ASAN/UBSAN validation passes for the ragged scheduler executable and sanitized NibbleFlow shared-library build.
+The current full applicable Python suite passes **151 tests with 0 failures**. The Termux-compatible host gate passes **112 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The dataset milestone adds deterministic stream, split, batch, malformed-input, and integrated streaming-training coverage.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
 
@@ -106,6 +107,14 @@ Whole-program validation memoization was tested and rejected. Repeated equivalen
 
 
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic magnitude pruning, model manifests, adapter merge/export equivalence, and fail-closed resource budgets | x86-64 benchmark: initial MSE 0.1532496512 → final MSE 0.0827450603; 48 trainable versus 136 frozen-base parameters; 25% deterministic sparsity; merged maximum absolute error 0.0; 145 Python tests; 106 Termux host tests; ragged ASAN/UBSAN and sanitized NibbleFlow build passed; no physical Android measurements claimed | Pending |
+
+## Dataset pipeline milestone retained
+
+Holy Fitra now has a dependency-free streaming data layer in `holyfitra_data.py`. Repeatable source factories can be traversed across epochs without loading the complete dataset. Fixed-shape finite float32 validation rejects malformed samples early. Deterministic hash-based partitioning creates repeatable train/validation views, while bounded-buffer shuffling avoids whole-dataset materialization. `Batch` records include inputs, targets, source indices, epoch, and step metadata.
+
+The existing learning runtime now exposes `train_supervised_streaming` and `evaluate_streaming_mse`. Training consumes batches directly, preserves deterministic per-epoch ordering, and adds streamed examples to the bounded replay buffer without calling `to_arrays()` on the full dataset. `TrainingConfig.shuffle_buffer` makes the memory/performance tradeoff explicit. The module is registered in `pyproject.toml` and covered by the Termux host gate.
+
+The full applicable Python suite passed **151 tests with 0 failures** and `termux-build.sh --host-tests` passed **112 tests**. The x86-64 sandbox is the validation host; no physical Android execution, thermal, battery, latency, or throughput measurement is claimed.
 
 ## Model-development milestone retained
 

@@ -16,7 +16,7 @@ Holy Fitra can already train a NumPy MLP with Adam, replay, checkpoints, and eva
 | 8 | Neural architecture search under budget | Automated compact design | High | Defer |
 | 9 | Low-rank optimizer state | Lower training memory | Medium | Defer |
 | 10 | Structured pruning trainer | Smaller models | Medium | Defer |
-| 11 | Dataset streaming and bucketing | Larger training sets | Medium | Defer |
+| 11 | Dataset streaming and deterministic batching | Larger training sets with reproducible training | Medium | **Selected and retained** |
 | 12 | Adapter composition/router | Multi-domain specialization | High | Defer |
 | 13 | Mixed-precision training scaler | Faster/cheaper training | High | Defer |
 | 14 | Native ONNX/TFLite exporter | Wider deployment | High/toolchain-dependent | Defer |
@@ -50,4 +50,16 @@ The benchmark and native checks were performed on the x86-64 sandbox. AArch64 cr
 
 ## Retention decision
 
-**Retain.** The milestone adds an actual frozen-base/trainable-adapter path, deterministic pruning, merge-equivalent export behavior, explicit model manifests, and fail-closed resource contracts without weakening existing safety or quantization gates. Future milestones should add dataset pipelines, knowledge distillation, quantization-aware training, and deterministic deployment export while preserving the same regression and native-gate policy.
+**Retain.** The milestone adds an actual frozen-base/trainable-adapter path, deterministic pruning, merge-equivalent export behavior, explicit model manifests, and fail-closed resource contracts without weakening existing safety or quantization gates. Future milestones should add knowledge distillation, quantization-aware training, and deterministic deployment export while preserving the same regression and native-gate policy.
+
+## Dataset pipeline verification
+
+The next model-development sequence is now implemented in `holyfitra_data.py` and integrated into `holyfitra_learning.py`. `StreamingDataset` accepts repeatable factories or reusable iterables, validates fixed-shape finite float32 samples, performs deterministic hash-based train/validation assignment, and emits fixed-size `Batch` records. Shuffling uses a bounded buffer and a deterministic per-seed/per-epoch generator, so large or reopenable sources do not need to be materialized. `train_supervised_streaming` and `evaluate_streaming_mse` connect the stream to the existing Tensor/Adam and bounded replay path.
+
+The focused dataset suite passed 6 tests, the combined dataset/model-development/learning suite passed 15 tests, and the complete applicable Python regression suite passed **151 tests with 0 failures**. The Termux-compatible host gate passed **112 tests**, plus compiler/runtime workflows, NibbleFlow numerical validation, AArch64 object emission, ragged scalar/NEON/SVE checks, scheduler execution, and CLI project workflows. The module was added to `pyproject.toml`, and `test_holyfitra_data.py` is now part of `termux-build.sh --host-tests`.
+
+The validation ran on the x86-64 sandbox. No physical Android device, thermal, battery, latency, or throughput measurement is claimed.
+
+## Dataset retention decision
+
+**Retain.** The pipeline is deterministic, bounded-memory for source traversal and shuffle buffering, fail-closed on malformed/non-finite samples, compatible with existing replay and checkpoint-aware training, and covered by full regression plus Termux-native gates.

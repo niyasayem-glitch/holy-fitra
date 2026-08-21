@@ -200,9 +200,10 @@ class TrainingConfig:
     max_grad_norm: float = 5.0
     seed: int = 0
     checkpoint_every: int = 0
+    shuffle_buffer: int = 0
 
     def __post_init__(self) -> None:
-        if self.epochs <= 0 or self.batch_size <= 0 or not 0.0 <= self.replay_ratio <= 1.0 or self.max_grad_norm <= 0.0 or self.checkpoint_every < 0:
+        if self.epochs <= 0 or self.batch_size <= 0 or not 0.0 <= self.replay_ratio <= 1.0 or self.max_grad_norm <= 0.0 or self.checkpoint_every < 0 or self.shuffle_buffer < 0:
             raise ValueError("invalid training configuration")
 
 
@@ -281,6 +282,61 @@ def train_supervised(model: TrainableMLP, inputs: np.ndarray, targets: np.ndarra
     return history
 
 
+def evaluate_streaming_mse(model: TrainableMLP, dataset: Any, *, batch_size: int = 256) -> float:
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    total = 0.0
+    count = 0
+    for batch in dataset.iter_batches(batch_size, shuffle=False):
+        _validate_dataset(batch.inputs, batch.targets, model.input_dim, model.output_dim)
+        error = model.predict(batch.inputs) - batch.targets
+        total += float(np.sum(error * error, dtype=np.float64))
+        count += int(error.size)
+    if count == 0:
+        raise ValueError("streaming evaluation dataset is empty")
+    return total / count
+
+
+def train_supervised_streaming(model: TrainableMLP, dataset: Any, *, config: TrainingConfig | None = None, optimizer: Adam | None = None, replay: ReplayBuffer | None = None, eval_data: Any | None = None, checkpoint_path: str | os.PathLike[str] | None = None, threshold_controller: Any | None = None) -> TrainingHistory:
+    """Train from a repeatable StreamingDataset without materializing all samples."""
+    config = config or TrainingConfig()
+    optimizer = optimizer or Adam(model.parameters, learning_rate=1e-2)
+    history = TrainingHistory()
+    shuffle_buffer = config.shuffle_buffer or max(config.batch_size * 4, config.batch_size)
+    for epoch in range(config.epochs):
+        epoch_losses: list[float] = []
+        epoch_norms: list[float] = []
+        for batch in dataset.iter_batches(config.batch_size, epoch=epoch, shuffle=True, shuffle_buffer=shuffle_buffer):
+            _validate_dataset(batch.inputs, batch.targets, model.input_dim, model.output_dim)
+            batch_x, batch_y = batch.inputs, batch.targets
+            if replay is not None and len(replay) and config.replay_ratio > 0.0:
+                replay_count = max(1, int(round(batch_x.shape[0] * config.replay_ratio)))
+                replay_x, replay_y = replay.sample(replay_count)
+                if replay_x.size:
+                    batch_x = np.concatenate((batch_x, replay_x), axis=0)
+                    batch_y = np.concatenate((batch_y, replay_y), axis=0)
+            zero_grad(model.parameters)
+            loss = mse(model.forward_tensor(Tensor(batch_x)), Tensor(batch_y))
+            loss.backward()
+            epoch_norms.append(clip_grad_norm(model.parameters, config.max_grad_norm))
+            optimizer.step(model.parameters)
+            if replay is not None:
+                replay.add_batch(batch.inputs, batch.targets)
+            epoch_losses.append(float(loss.data.item()))
+        if not epoch_losses:
+            raise ValueError("streaming training dataset is empty")
+        history.losses.append(float(np.mean(epoch_losses)))
+        history.gradient_norms.append(float(np.mean(epoch_norms)))
+        history.optimizer_steps = optimizer.step_count
+        if eval_data is not None:
+            history.eval_losses.append(evaluate_streaming_mse(model, eval_data, batch_size=config.batch_size))
+        if checkpoint_path is not None and config.checkpoint_every and (epoch + 1) % config.checkpoint_every == 0:
+            save_checkpoint(checkpoint_path, model, optimizer, replay=replay, threshold_controller=threshold_controller, step=epoch + 1, metadata={"loss": history.losses[-1]})
+    if checkpoint_path is not None:
+        save_checkpoint(checkpoint_path, model, optimizer, replay=replay, threshold_controller=threshold_controller, step=config.epochs, metadata={"loss": history.final_loss})
+    return history
+
+
 def save_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer: Adam, *, replay: ReplayBuffer | None = None, threshold_controller: Any | None = None, step: int = 0, metadata: dict[str, Any] | None = None) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -319,4 +375,4 @@ def load_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer
         return manifest
 
 
-__all__ = ["Adam", "ReplayBuffer", "TrainableMLP", "TrainingConfig", "TrainingHistory", "clip_grad_norm", "evaluate_mse", "load_checkpoint", "save_checkpoint", "train_supervised", "zero_grad"]
+__all__ = ["Adam", "ReplayBuffer", "TrainableMLP", "TrainingConfig", "TrainingHistory", "clip_grad_norm", "evaluate_mse", "evaluate_streaming_mse", "load_checkpoint", "save_checkpoint", "train_supervised", "train_supervised_streaming", "zero_grad"]
