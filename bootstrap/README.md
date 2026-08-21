@@ -59,3 +59,9 @@ clang -O2 /tmp/io.ll bootstrap/holyfitra_runtime.c -o /tmp/io
 ```
 
 `bootstrap/test_bootstrap.sh` validates scalar and aggregate host execution, source-file reading, dynamic-array release, AArch64 LLVM object generation, the sanitized runtime contract, invalid diagnostics, and Python-free operation.
+
+## Source spans and diagnostics
+
+Tokens and AST nodes carry `SourceSpan` records with line/column begin and end positions. The compiler stores diagnostics as structured records containing a stable code, message, primary span, and optional notes. CLI errors render as `path:line:column: error[CODE]`, followed by the source line and a caret marker.
+
+Examples of the current diagnostic families include `HF1001` for parser syntax errors, `HF2001` for name-resolution errors, `HF3001` for type and return errors, `HF4001` for array/index errors, and `HF5001` for function and argument errors. The bootstrap gate validates type, parser, and unknown-name fixtures, including source excerpts and carets.

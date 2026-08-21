@@ -1,0 +1,5 @@
+module invalid_name
+
+fn main() -> i32 {
+    return missing_value
+}

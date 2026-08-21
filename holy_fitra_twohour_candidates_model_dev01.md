@@ -138,3 +138,10 @@ This remains a compiler-core substrate milestone rather than a complete self-hos
 The Stage-0 seed now exposes typed opaque `dyn<i32>` handles and `file` handles. The compiler validates builtin names, argument counts, handle types, integer capacities/indices, and return types, then emits LLVM declarations and direct calls. The dependency-free C runtime bounds dynamic capacity at one million i32 elements and file reads at 64 MiB. Invalid handles and out-of-bounds dynamic reads fail closed without undefined memory access.
 
 The `bootstrap/io.hf` fixture passed native execution with exit code 2 after allocating, pushing, reading, and freeing a dynamic array and opening/reading/closing a source file. The runtime safety test passed ASAN/UBSAN. The bootstrap gate passed host, aggregate, I/O, invalid-diagnostic, Python-free, and AArch64-object checks. The complete Termux-compatible host gate passed **129 tests**. This remains a compiler-core substrate milestone; arbitrary element types, dynamic resizing, general pointers, write-mode files, and the self-hosted compiler core remain future work.
+
+
+## Rich source-span diagnostic verification
+
+The Stage-0 compiler now propagates source spans through lexer tokens and AST nodes, stores structured diagnostics with stable family codes and optional notes, and renders source excerpts with caret markers. The negative fixtures cover HF3001 type mismatch, HF1001 parser syntax failure, and HF2001 unknown-name resolution. The full bootstrap gate passed all scalar, aggregate, I/O, sanitizer, AArch64 object, Python-free, and diagnostic checks; the Termux-compatible host gate passed **129 tests**.
+
+This remains a no-Python Stage-0 substrate milestone. The diagnostics are sufficient for compiler-core source parsing and later symbol/type errors, but notes, multi-span suggestions, Unicode display-width handling, and full self-hosted compiler integration remain future improvements.

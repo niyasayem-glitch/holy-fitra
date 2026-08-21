@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `19891df` on `master`, containing the typed dynamic-array and source-I/O substrate milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `fdab6e6` on `master`, containing the rich source-span diagnostics milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -182,3 +182,12 @@ The no-Python Stage-0 seed now supports typed `dyn<i32>` handles, bounded dynami
 The `bootstrap/io.hf` fixture allocates a dynamic array, pushes two values, reads an element, opens and reads a source file through both convenience and explicit file-handle APIs, releases the dynamic handle, and exits with status 2. The runtime contract test passed under ASAN/UBSAN, including zero/oversized capacity rejection, push-overflow rejection, indexed reads, release, and missing-file behavior. The bootstrap gate also emitted a non-empty `aarch64-linux-android21` object from the I/O LLVM.
 
 The full Termux-compatible host gate passed **129 tests**. Validation occurred on x86-64; AArch64 object generation is an artifact check only, and no physical Android execution, performance, thermal, or battery claim is made. This is still a compiler-core substrate milestone, not a complete self-hosting claim. The milestone commit is `19891df`.
+
+
+## Structured source-span diagnostics
+
+The no-Python Stage-0 compiler now carries `SourceSpan` records through tokens, expressions, statements, struct declarations, and functions. Diagnostics are structured records with stable family codes, primary spans, and optional notes. The CLI renders `path:line:column: error[CODE]`, the source excerpt, and a caret range. Current families include HF1001 parser syntax, HF2001 name resolution, HF3001 type/return, HF4001 array/index, and HF5001 function/argument errors.
+
+Negative fixtures verify type mismatch, unexpected syntax, and unknown-name diagnostics. The observed type diagnostic includes the source line and caret, for example `bootstrap/invalid_type.hf:4:9: error[HF3001]`, followed by the highlighted source. The full bootstrap gate passed scalar, aggregate, source-I/O, runtime sanitizer, diagnostic, AArch64 object, and Python-free checks. The complete Termux-compatible host gate passed **129 tests**.
+
+Validation was performed on x86-64. AArch64 object generation and cross-compilation validate artifacts only; no physical Android execution, performance, thermal, battery, latency, or throughput claim is made. This milestone improves compiler diagnostics but does not yet constitute a fully self-hosted compiler. The milestone commit is `fdab6e6`.

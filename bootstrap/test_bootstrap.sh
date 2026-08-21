@@ -56,9 +56,27 @@ if "$BUILD" "$ROOT/bootstrap/invalid_type.hf" >"$WORK/invalid.out" 2>"$WORK/inva
   echo "invalid fixture unexpectedly accepted" >&2
   exit 1
 fi
+grep -F "error[HF3001]" "$WORK/invalid.err" >/dev/null
 grep -F "declared type does not match initializer" "$WORK/invalid.err" >/dev/null
+grep -F "|" "$WORK/invalid.err" >/dev/null
+grep -F "^" "$WORK/invalid.err" >/dev/null
+
+if "$BUILD" "$ROOT/bootstrap/invalid_syntax.hf" >"$WORK/invalid_syntax.out" 2>"$WORK/invalid_syntax.err"; then
+  echo "invalid syntax fixture unexpectedly accepted" >&2
+  exit 1
+fi
+grep -F "error[HF1001]" "$WORK/invalid_syntax.err" >/dev/null
+grep -F "|" "$WORK/invalid_syntax.err" >/dev/null
+grep -F "^" "$WORK/invalid_syntax.err" >/dev/null
+
+if "$BUILD" "$ROOT/bootstrap/invalid_name.hf" >"$WORK/invalid_name.out" 2>"$WORK/invalid_name.err"; then
+  echo "invalid name fixture unexpectedly accepted" >&2
+  exit 1
+fi
+grep -F "error[HF2001]" "$WORK/invalid_name.err" >/dev/null
+grep -F "unknown value" "$WORK/invalid_name.err" >/dev/null
 
 # Verify the seed command itself works without Python in PATH or environment.
 env -i PATH="$(dirname "$(command -v clang)"):$(dirname "$(command -v clang++)"):/usr/bin:/bin" HOME="$WORK/home" "$BUILD" --help >/dev/null
 
-printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")"
+printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_diagnostics=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")"

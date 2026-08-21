@@ -29,11 +29,36 @@
 
 namespace hf0 {
 
+struct SourcePosition final {
+    int line = 0;
+    int column = 0;
+};
+
+struct SourceSpan final {
+    SourcePosition begin;
+    SourcePosition end;
+    bool valid() const { return begin.line > 0 && begin.column > 0; }
+    static SourceSpan point(int line, int column, int width = 1) {
+        SourceSpan span{{line, column}, {line, column + (width > 0 ? width : 1)}};
+        return span;
+    }
+};
+
+struct DiagnosticNote final {
+    std::string message;
+    SourceSpan span;
+};
+
 struct Diagnostic final : std::runtime_error {
-    int line;
-    int column;
-    Diagnostic(std::string message, int line = 0, int column = 0)
-        : std::runtime_error(std::move(message)), line(line), column(column) {}
+    std::string code;
+    SourceSpan span;
+    std::vector<DiagnosticNote> notes;
+    Diagnostic(std::string message, int line = 0, int column = 0, std::string code = "HF0001")
+        : std::runtime_error(std::move(message)), code(std::move(code)), span(SourceSpan::point(line, column)) {}
+    Diagnostic& addNote(std::string message, SourceSpan note_span = {}) {
+        notes.push_back({std::move(message), note_span});
+        return *this;
+    }
 };
 
 [[noreturn]] static void fail(const std::string& message, int line = 0, int column = 0) {
@@ -51,6 +76,9 @@ struct Token final {
     std::string text;
     int line;
     int column;
+    SourceSpan span;
+    Token(TokenKind kind, std::string text, int line, int column)
+        : kind(kind), text(std::move(text)), line(line), column(column), span(SourceSpan::point(line, column)) {}
 };
 
 class Lexer final {
@@ -172,7 +200,14 @@ struct Type final {
 // Keep the typo-prone TypeKind spelling localized through a compile-time alias.
 using TypeKindKind = TypeKind;
 
-struct StructDecl final { std::string name; std::vector<std::pair<std::string, Type>> fields; int line = 0; };
+struct StructDecl final {
+    std::string name;
+    std::vector<std::pair<std::string, Type>> fields;
+    int line = 0;
+    SourceSpan span;
+    StructDecl(std::string name, std::vector<std::pair<std::string, Type>> fields, int line)
+        : name(std::move(name)), fields(std::move(fields)), line(line), span(SourceSpan::point(line, 1)) {}
+};
 struct Expr;
 struct Statement;
 using ExprPtr = std::unique_ptr<Expr>;
@@ -180,11 +215,12 @@ using StatementPtr = std::unique_ptr<Statement>;
 
 struct Expr {
     enum class Kind { Integer, Boolean, String, Name, Unary, Binary, Call, Array, Struct, Field, Index };
-    Expr(Kind kind, int line, int column) : kind(kind), line(line), column(column) {}
+    Expr(Kind kind, int line, int column) : kind(kind), line(line), column(column), span(SourceSpan::point(line, column)) {}
     virtual ~Expr() = default;
     Kind kind;
     int line;
     int column;
+    SourceSpan span;
 };
 struct IntegerExpr final : Expr { IntegerExpr(std::int64_t v, int l, int c) : Expr(Kind::Integer,l,c), value(v) {} std::int64_t value; };
 struct BooleanExpr final : Expr { BooleanExpr(bool v, int l, int c) : Expr(Kind::Boolean,l,c), value(v) {} bool value; };
@@ -198,7 +234,7 @@ struct StructExpr final : Expr { StructExpr(std::string n, std::vector<std::pair
 struct FieldExpr final : Expr { FieldExpr(ExprPtr b, std::string f, int l, int c) : Expr(Kind::Field,l,c), base(std::move(b)), field(std::move(f)) {} ExprPtr base; std::string field; };
 struct IndexExpr final : Expr { IndexExpr(ExprPtr b, ExprPtr i, int l, int c) : Expr(Kind::Index,l,c), base(std::move(b)), index(std::move(i)) {} ExprPtr base; ExprPtr index; };
 
-struct Statement { enum class Kind { Let, Return, If, While, Expression }; Statement(Kind k,int l,int c):kind(k),line(l),column(c){} virtual ~Statement()=default; Kind kind; int line; int column; };
+struct Statement { enum class Kind { Let, Return, If, While, Expression }; Statement(Kind k,int l,int c):kind(k),line(l),column(c),span(SourceSpan::point(l,c)){} virtual ~Statement()=default; Kind kind; int line; int column; SourceSpan span; };
 struct LetStatement final : Statement { LetStatement(std::string n,std::optional<Type> t,ExprPtr v,bool m,int l,int c):Statement(Kind::Let,l,c),name(std::move(n)),declared(std::move(t)),value(std::move(v)),mutable_value(m){} std::string name; std::optional<Type> declared; ExprPtr value; bool mutable_value; };
 struct ReturnStatement final : Statement { ReturnStatement(ExprPtr v,int l,int c):Statement(Kind::Return,l,c),value(std::move(v)){} ExprPtr value; };
 struct IfStatement final : Statement { IfStatement(ExprPtr c,std::vector<StatementPtr> a,std::vector<StatementPtr>b,int l,int col):Statement(Kind::If,l,col),condition(std::move(c)),then_body(std::move(a)),else_body(std::move(b)){} ExprPtr condition; std::vector<StatementPtr> then_body; std::vector<StatementPtr> else_body; };
@@ -206,7 +242,17 @@ struct WhileStatement final : Statement { WhileStatement(ExprPtr c,std::vector<S
 struct ExpressionStatement final : Statement { ExpressionStatement(ExprPtr e,int l,int c):Statement(Kind::Expression,l,c),expression(std::move(e)){} ExprPtr expression; };
 
 struct Parameter final { std::string name; Type type; };
-struct Function final { std::string name; std::vector<Parameter> parameters; Type return_type; std::vector<StatementPtr> body; int line = 0; bool builtin = false; };
+struct Function final {
+    std::string name;
+    std::vector<Parameter> parameters;
+    Type return_type;
+    std::vector<StatementPtr> body;
+    int line = 0;
+    bool builtin = false;
+    SourceSpan span;
+    Function(std::string name, std::vector<Parameter> parameters, Type return_type, std::vector<StatementPtr> body, int line, bool builtin = false)
+        : name(std::move(name)), parameters(std::move(parameters)), return_type(std::move(return_type)), body(std::move(body)), line(line), builtin(builtin), span(SourceSpan::point(line, 1)) {}
+};
 struct Program final { std::string module = "anonymous"; std::vector<StructDecl> structs; std::vector<Function> functions; };
 
 static const std::vector<Function>& builtinFunctions() {
@@ -364,6 +410,50 @@ static std::string readFile(const std::string&path){std::ifstream in(path,std::i
 static void writeFile(const std::string&path,const std::string&text){std::ofstream out(path,std::ios::binary|std::ios::trunc);if(!out)fail("cannot open output file '"+path+"'");out<<text;}
 static void usage(const char*p){std::cerr<<"usage: "<<p<<" [--target=TRIPLE] INPUT.hf [-o OUTPUT.ll]\n";}
 
+static std::string diagnosticCode(const Diagnostic& diagnostic) {
+    const std::string message = diagnostic.what();
+    if (message.find("expected") != std::string::npos || message.find("unexpected") != std::string::npos) return "HF1001";
+    if (message.find("unknown") != std::string::npos || message.find("duplicate") != std::string::npos) return "HF2001";
+    if (message.find("type") != std::string::npos || message.find("operand") != std::string::npos || message.find("return") != std::string::npos) return "HF3001";
+    if (message.find("array") != std::string::npos || message.find("index") != std::string::npos) return "HF4001";
+    if (message.find("function") != std::string::npos || message.find("argument") != std::string::npos) return "HF5001";
+    return diagnostic.code;
+}
+
+class DiagnosticReporter final {
+public:
+    static void render(std::ostream& output, const Diagnostic& diagnostic, const std::string& path, const std::string& source) {
+        const std::string code = diagnosticCode(diagnostic);
+        output << path << ":" << diagnostic.span.begin.line << ":" << diagnostic.span.begin.column
+               << ": error[" << code << "]: " << diagnostic.what() << "\n";
+        if (diagnostic.span.valid()) renderSpan(output, diagnostic.span, source, "  ");
+        for (const auto& note : diagnostic.notes) {
+            output << "note: " << note.message << "\n";
+            if (note.span.valid()) renderSpan(output, note.span, source, "  ");
+        }
+    }
+private:
+    static std::vector<std::string> lines(const std::string& source) {
+        std::vector<std::string> result;
+        std::string current;
+        for (char c : source) { if (c == '\n') { result.push_back(current); current.clear(); } else current.push_back(c); }
+        result.push_back(current);
+        return result;
+    }
+    static void renderSpan(std::ostream& output, const SourceSpan& span, const std::string& source, const std::string& indent) {
+        const auto source_lines = lines(source);
+        if (span.begin.line <= 0 || static_cast<std::size_t>(span.begin.line) > source_lines.size()) return;
+        const std::string& source_line = source_lines[static_cast<std::size_t>(span.begin.line - 1)];
+        output << indent << span.begin.line << " | " << source_line << "\n";
+        const int column = span.begin.column > 0 ? span.begin.column : 1;
+        int width = 1;
+        if (span.end.line == span.begin.line && span.end.column > span.begin.column) width = span.end.column - span.begin.column;
+        output << indent << "  | " << std::string(static_cast<std::size_t>(column - 1), ' ') << "^";
+        if (width > 1) output << std::string(static_cast<std::size_t>(width - 1), '~');
+        output << "\n";
+    }
+};
+
 } // namespace hf0
 
-int main(int argc,char**argv){using namespace hf0;try{if(argc<2){usage(argv[0]);return 2;}std::string input,output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}Program p=Parser(Lexer(readFile(input)).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){std::cerr<<"holyfitra-bootstrap: error"<<location(d.line,d.column)<<": "<<d.what()<<"\n";return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}
+int main(int argc,char**argv){using namespace hf0;std::string input,source;try{if(argc<2){usage(argv[0]);return 2;}std::string output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}source=readFile(input);Program p=Parser(Lexer(source).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){DiagnosticReporter::render(std::cerr,d,input.empty()?"<command line>":input,source);return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}

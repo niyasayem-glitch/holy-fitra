@@ -1,0 +1,6 @@
+module invalid_syntax
+
+fn main() -> i32 {
+    let value: i32 = ;
+    return value
+}
