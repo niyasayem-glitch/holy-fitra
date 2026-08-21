@@ -1,0 +1,31 @@
+module control
+
+fn identity64(value: i64) -> i64 {
+    return value
+}
+
+fn classify(value: i32) -> bool {
+    if value >= 10 {
+        return true
+    } else {
+        return false
+    }
+}
+
+fn countdown(value: i32) -> i32 {
+    var current: i32 = value
+    while current > 0 {
+        return current
+    }
+    return 0
+}
+
+fn main() -> i32 {
+    let wide: i64 = 42
+    let ok: bool = classify(12)
+    if ok {
+        return 1
+    } else {
+        return 0
+    }
+}

@@ -1,0 +1,6 @@
+module invalid
+
+fn main() -> i32 {
+    let wrong: i64 = true
+    return wrong
+}

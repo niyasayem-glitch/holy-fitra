@@ -113,3 +113,12 @@ The validation host is x86-64. Successful AArch64 object generation is artifact 
 ## AArch64 lowering retention decision
 
 **Retain.** Parallel hybrid reducers now lower through the target-aware LLVM path and are cross-compiled into AArch64 objects under the declared ABI/vector metadata, while fail-closed type, effect, reducer, and worker contracts remain intact.
+
+
+## Self-hosting Stage-0 seed verification
+
+The first no-Python bootstrap compiler is implemented in `holyfitra_bootstrap.cpp` as a standalone C++17 executable. It supports the minimal scalar subset needed for the first bootstrap boundary: modules, functions, `i32`, `i64`, `bool`, `void`, typed parameters, local bindings, arithmetic, comparisons, Boolean logic, unary operators, direct calls, `if`/`else`, `while`, returns, target selection, diagnostics, and textual LLVM emission.
+
+`bootstrap/test_bootstrap.sh` passed strict C++17 compilation, host execution with exit code 42, control-flow execution with exit code 1, fail-closed invalid-type diagnostics, AArch64 object generation, and execution with Python removed from the environment. The measured AArch64 fixture object was 1,040 bytes in the x86-64 sandbox.
+
+This milestone is **Stage 0 only**, not a claim of a fully self-compiled compiler. The seed does not yet support strings, arrays, structs, imports, file/process APIs, effects, tasks, hybrids, tensors, or compiler-core standard-library services. The next self-hosting milestone is a minimal `compiler/main.hf` compiler core compiled by this seed, followed by Stage-1 self-rebuild and fixed-point verification.

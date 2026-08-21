@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `48d2cf0` on `master`, containing the target-aware AArch64 lowering milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `ffb1cfc` on `master`, containing the no-Python Stage-0 seed compiler milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -162,3 +162,14 @@ The native LLVM pipeline now carries target identity into parallel hybrid loweri
 The focused compiler suite passed **23 tests**, including cross-compilation of generated parallel-hybrid LLVM IR into a non-empty AArch64 object. The complete applicable Python suite passed **168 tests with 0 failures**, and `termux-build.sh --host-tests` passed **129 tests**. The ragged scheduler ASAN/UBSAN executable passed, and existing NibbleFlow numerical validation, AArch64 kernel object emission, ragged scalar/NEON/SVE checks, scheduler execution, and CLI workflows passed.
 
 The validation host is x86-64. AArch64 object generation and cross-compilation validate artifacts only; no physical Android execution, NEON runtime, thermal, battery, latency, or throughput measurement is claimed.
+
+
+| Self-hosting Stage 0 | No-Python C++17 seed compiler with scalar lexer/parser/type validation, LLVM emission, host execution, AArch64 object generation, bootstrap fixtures, and Python-free gate | Termux host gate passed 129 tests; seed gate passed; host exit 42; control-flow exit 1; AArch64 object 1,040 bytes; invalid diagnostics passed; not yet fully self-hosted | `ffb1cfc` |
+
+## Self-hosting Stage-0 seed milestone in progress
+
+Holy Fitra now has a no-Python C++17 Stage-0 seed compiler in `holyfitra_bootstrap.cpp`. The seed implements a minimal scalar subset with lexing, recursive-descent parsing, typed validation, arithmetic, comparisons, Boolean logic, calls, local bindings, `if`/`else`, `while`, returns, target selection, structured diagnostics, LLVM text emission, host execution, and AArch64 object generation.
+
+`bootstrap/test_bootstrap.sh` validates strict C++17 compilation, host execution with exit code 42, control-flow execution with exit code 1, fail-closed type diagnostics, non-empty `aarch64-linux-android21` object generation, and operation with Python removed from the environment and `PATH`. The measured AArch64 fixture object was 1,040 bytes in the x86-64 sandbox.
+
+This is **not yet the fully self-compiled compiler**. The seed intentionally lacks strings, arrays, structs, file/process APIs, imports, effects, tasks, hybrids, tensors, and the compiler-core standard library. The next retained self-hosting milestone is a minimal `compiler/main.hf` compiler core compiled by this seed, followed by Stage-1 self-rebuild and fixed-point verification. No physical Android execution or performance claim is made.
