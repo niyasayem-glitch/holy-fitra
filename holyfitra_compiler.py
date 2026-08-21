@@ -39,6 +39,7 @@ _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
 _MEMORY_COMPILE_CACHE_LIMIT = 32
 _EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, set[str]]]] = OrderedDict()
 _EFFECT_GRAPH_CACHE_LIMIT = 64
+_LLVM_CACHE_SCHEMA = 1
 
 
 class HolyFitraError(Exception):
@@ -755,6 +756,24 @@ def emit_llvm(program: Program, target: str | None = None) -> str:
     return LLVMEmitter(program).emit(target)
 
 
+def _atomic_write_text(path: Path, text: str) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False) as handle:
+            temporary_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary_path, path)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink()
+            except OSError:
+                pass
+
+
 def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
     source = source_path.read_text(encoding="utf-8")
     cache_identity = source + "\\0" + (target or "x86_64-pc-linux-gnu")
@@ -767,14 +786,23 @@ def compile_native_file(source_path: Path, cache_dir: Path | None = None, target
         cache_dir = source_path.parent / ".holyfitra" / "cache"
     cache_dir.mkdir(parents=True, exist_ok=True)
     cache_path = cache_dir / f"{digest}.json"
+    llvm: str | None = None
     if cache_path.exists():
-        cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        program = parse_native(source)
-        llvm = cached["llvm"]
-    else:
-        program = parse_native(source)
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if cached.get("schema") != _LLVM_CACHE_SCHEMA or cached.get("digest") != digest or not isinstance(cached.get("llvm"), str):
+                raise ValueError("stale or malformed LLVM cache")
+            llvm = cached["llvm"]
+        except (OSError, json.JSONDecodeError, TypeError, ValueError):
+            try:
+                cache_path.unlink()
+            except OSError:
+                pass
+    program = parse_native(source)
+    if llvm is None:
         llvm = emit_llvm(program, target)
-        cache_path.write_text(json.dumps({"digest": digest, "llvm": llvm}, sort_keys=True), encoding="utf-8")
+        payload = json.dumps({"digest": digest, "llvm": llvm, "schema": _LLVM_CACHE_SCHEMA}, sort_keys=True)
+        _atomic_write_text(cache_path, payload)
     _MEMORY_COMPILE_CACHE[digest] = (program, llvm)
     _MEMORY_COMPILE_CACHE.move_to_end(digest)
     while len(_MEMORY_COMPILE_CACHE) > _MEMORY_COMPILE_CACHE_LIMIT:

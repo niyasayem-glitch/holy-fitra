@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, emit_llvm, init_project, load_project, parse_native, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, compile_native_file, emit_llvm, init_project, load_project, parse_native, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -139,6 +139,23 @@ fn main() -> i32 effects [model] { return a() }
         source = "fn main() -> i32 { let x: i64 = 1 return x }"
         with self.assertRaises(HolyFitraError):
             validate_native(parse_native(source))
+
+    def test_corrupt_persistent_llvm_cache_is_rebuilt(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "main.hf"
+            source.write_text(self.SOURCE, encoding="utf-8")
+            cache_dir = root / "cache"
+            _, expected_llvm, digest = compile_native_file(source, cache_dir=cache_dir)
+            _MEMORY_COMPILE_CACHE.clear()
+            cache_path = cache_dir / f"{digest}.json"
+            cache_path.write_text("{broken", encoding="utf-8")
+            _, rebuilt_llvm, rebuilt_digest = compile_native_file(source, cache_dir=cache_dir)
+            self.assertEqual(rebuilt_digest, digest)
+            self.assertEqual(rebuilt_llvm, expected_llvm)
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["digest"], digest)
+            self.assertEqual(payload["schema"], 1)
 
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
