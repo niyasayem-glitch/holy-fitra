@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
@@ -17,6 +18,25 @@ from typing import Any
 
 class HyperIRError(ValueError):
     pass
+
+
+HYPERIR_TEXT_FORMAT = "holyfitra.hyperir"
+HYPERIR_TEXT_VERSION = 1
+_VERIFY_CACHE_LIMIT = 64
+_VERIFY_CACHE: OrderedDict[str, tuple[tuple[str, ...], tuple[bool, ...]]] = OrderedDict()
+_VERIFY_CACHE_HITS = 0
+_VERIFY_CACHE_MISSES = 0
+
+
+def clear_verifier_cache() -> None:
+    global _VERIFY_CACHE_HITS, _VERIFY_CACHE_MISSES
+    _VERIFY_CACHE.clear()
+    _VERIFY_CACHE_HITS = 0
+    _VERIFY_CACHE_MISSES = 0
+
+
+def verifier_cache_info() -> dict[str, int]:
+    return {"size": len(_VERIFY_CACHE), "limit": _VERIFY_CACHE_LIMIT, "hits": _VERIFY_CACHE_HITS, "misses": _VERIFY_CACHE_MISSES}
 
 
 class EvidenceKind(str, Enum):
@@ -175,6 +195,17 @@ class HyperIR:
             self.add_value(value)
 
     def verify(self) -> list[str]:
+        global _VERIFY_CACHE_HITS, _VERIFY_CACHE_MISSES
+        digest = self.digest()
+        cached = _VERIFY_CACHE.get(digest)
+        if cached is not None:
+            _VERIFY_CACHE.move_to_end(digest)
+            _VERIFY_CACHE_HITS += 1
+            errors, proof_states = cached
+            for proof, verified in zip(self.quantization_proofs, proof_states):
+                proof.verified = verified
+            return list(errors)
+        _VERIFY_CACHE_MISSES += 1
         errors: list[str] = []
         cache_state: dict[str, str] = {}
         for index, operation in enumerate(self.operations):
@@ -187,7 +218,12 @@ class HyperIR:
         for proof in self.quantization_proofs:
             if not proof.verify():
                 errors.append(f"quantization proof failed: {proof.model}")
-        return errors
+        result = (tuple(errors), tuple(proof.verified for proof in self.quantization_proofs))
+        _VERIFY_CACHE[digest] = result
+        _VERIFY_CACHE.move_to_end(digest)
+        while len(_VERIFY_CACHE) > _VERIFY_CACHE_LIMIT:
+            _VERIFY_CACHE.popitem(last=False)
+        return list(errors)
 
     def _verify_operation(self, op: Operation, inputs: list[Value], outputs: list[Value], cache_state: dict[str, str]) -> None:
         if op.op in {"matmul", "linear"}:
@@ -281,18 +317,106 @@ class HyperIR:
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def to_jsonable(self) -> dict[str, Any]:
+        def evidence_json(evidence: EvidenceType | None) -> dict[str, Any] | None:
+            if evidence is None:
+                return None
+            return {
+                "kind": evidence.kind.value,
+                "payload_type": evidence.payload_type,
+                "confidence": evidence.confidence,
+                "sources": list(evidence.sources),
+            }
+
         def value_json(value: Value) -> dict[str, Any]:
             data = {"name": value.name, "type_name": value.type_name, "resource": value.resource}
             data["tensor"] = value.tensor.jsonable() if value.tensor else None
-            data["evidence"] = asdict(value.evidence) if value.evidence else None
+            data["evidence"] = evidence_json(value.evidence)
             return data
+
+        def policy_json(policy: CapabilityPolicy) -> dict[str, Any]:
+            def capability_json(capability: Capability) -> dict[str, str]:
+                return {"resource": capability.resource, "operation": capability.operation, "scope": capability.scope}
+            return {
+                "allow": [capability_json(item) for item in policy.allow],
+                "deny": [capability_json(item) for item in policy.deny],
+            }
+
         return {
             "name": self.name,
             "values": {name: value_json(value) for name, value in self.values.items()},
             "operations": [{"op": op.op, "inputs": list(op.inputs), "outputs": list(op.outputs), "attrs": op.attrs, "effects": sorted(op.effects)} for op in self.operations],
+            "policies": {name: policy_json(policy) for name, policy in sorted(self.policies.items())},
             "lowered_plan": self.lower_plan(),
-            "quantization_proofs": [asdict(proof) for proof in self.quantization_proofs],
+            "quantization_proofs": [
+                {
+                    "model": proof.model,
+                    "calibration_sha256": proof.calibration_sha256,
+                    "precision": proof.precision,
+                    "group_size": proof.group_size,
+                    "layer_error": proof.layer_error,
+                    "task_score": proof.task_score,
+                    "baseline_task_score": proof.baseline_task_score,
+                    "max_layer_error": proof.max_layer_error,
+                    "minimum_task_score": proof.minimum_task_score,
+                    "kernel": proof.kernel,
+                    "device": proof.device,
+                }
+                for proof in self.quantization_proofs
+            ],
         }
+
+    def to_text(self) -> str:
+        envelope = {"format": HYPERIR_TEXT_FORMAT, "version": HYPERIR_TEXT_VERSION, "ir": self.to_jsonable()}
+        return json.dumps(envelope, ensure_ascii=True, sort_keys=True, separators=(",", ":")) + "\n"
+
+    @classmethod
+    def from_text(cls, text: str) -> "HyperIR":
+        try:
+            envelope = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise HyperIRError(f"invalid HyperIR text: {exc.msg}") from exc
+        if not isinstance(envelope, dict) or envelope.get("format") != HYPERIR_TEXT_FORMAT or envelope.get("version") != HYPERIR_TEXT_VERSION:
+            raise HyperIRError("unsupported HyperIR text format or version")
+        data = envelope.get("ir")
+        if not isinstance(data, dict):
+            raise HyperIRError("HyperIR text is missing its ir object")
+        try:
+            ir = cls(str(data["name"]))
+            parsed_values: dict[str, Value] = {}
+            for name, value_data in data.get("values", {}).items():
+                tensor_data = value_data.get("tensor")
+                tensor = TensorType(tuple(tensor_data["shape"]), tensor_data["dtype"], tensor_data["device"], tensor_data["layout"]) if tensor_data else None
+                evidence_data = value_data.get("evidence")
+                evidence = None
+                if evidence_data:
+                    evidence = EvidenceType(EvidenceKind(evidence_data["kind"]), evidence_data["payload_type"], evidence_data.get("confidence"), tuple(evidence_data.get("sources", [])))
+                parsed_values[str(name)] = Value(str(name), value_data["type_name"], tensor, evidence, value_data.get("resource"))
+            operation_data_list = data.get("operations", [])
+            produced_names = {output for operation_data in operation_data_list for output in operation_data.get("outputs", [])}
+            for name, value in parsed_values.items():
+                if name not in produced_names:
+                    ir.add_value(value)
+            for name, policy_data in data.get("policies", {}).items():
+                allow = [Capability(item["resource"], item["operation"], item.get("scope", "*")) for item in policy_data.get("allow", [])]
+                deny = [Capability(item["resource"], item["operation"], item.get("scope", "*")) for item in policy_data.get("deny", [])]
+                ir.policies[str(name)] = CapabilityPolicy(allow, deny)
+            for operation_data in operation_data_list:
+                operation = Operation(operation_data["op"], tuple(operation_data.get("inputs", [])), tuple(operation_data.get("outputs", [])), dict(operation_data.get("attrs", {})), frozenset(operation_data.get("effects", [])))
+                ir.add_operation(operation)
+                for output in operation.outputs:
+                    if output in parsed_values:
+                        ir.add_output_value(operation, parsed_values[output])
+            ir.quantization_proofs = [QuantizationProof(**proof_data) for proof_data in data.get("quantization_proofs", [])]
+        except (KeyError, TypeError, ValueError, HyperIRError) as exc:
+            raise HyperIRError(f"invalid HyperIR object: {exc}") from exc
+        return ir
+
+    @classmethod
+    def read_text(cls, path: Path) -> "HyperIR":
+        return cls.from_text(path.read_text(encoding="utf-8"))
+
+    def write_text(self, path: Path) -> None:
+        path.write_text(self.to_text(), encoding="utf-8")
 
     def write_json(self, path: Path) -> None:
         path.write_text(json.dumps(self.to_jsonable(), indent=2, sort_keys=True, default=str))

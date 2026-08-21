@@ -16,7 +16,9 @@ from hyperc_hyperir import (
     QuantizationProof,
     TensorType,
     Value,
+    clear_verifier_cache,
     demo_ir,
+    verifier_cache_info,
 )
 from hyperc_speculative import SpeculativePlan, make_models, standard_generate
 from hyperc_proof_quant import select_matrix
@@ -90,6 +92,31 @@ class HyperIRTests(unittest.TestCase):
         first = demo_ir().digest()
         second = demo_ir().digest()
         self.assertEqual(first, second)
+
+    def test_canonical_text_round_trip_preserves_digest_and_verifier(self):
+        original = demo_ir()
+        text = original.to_text()
+        restored = HyperIR.from_text(text)
+        self.assertEqual(text, restored.to_text())
+        self.assertEqual(original.digest(), restored.digest())
+        self.assertEqual(restored.verify(), [])
+
+    def test_text_parser_rejects_unknown_format_and_malformed_json(self):
+        with self.assertRaises(HyperIRError):
+            HyperIR.from_text('{"format":"unknown","version":1,"ir":{}}')
+        with self.assertRaises(HyperIRError):
+            HyperIR.from_text('{not-json')
+
+    def test_verifier_cache_hits_and_invalidates_on_graph_change(self):
+        clear_verifier_cache()
+        ir = demo_ir()
+        self.assertEqual(ir.verify(), [])
+        self.assertEqual(verifier_cache_info()["misses"], 1)
+        self.assertEqual(ir.verify(), [])
+        self.assertEqual(verifier_cache_info()["hits"], 1)
+        ir.operations[0].attrs["group_size"] = 8
+        self.assertEqual(ir.verify(), [])
+        self.assertEqual(verifier_cache_info()["misses"], 2)
 
     def test_proof_selector_selects_int4_when_gate_passes(self):
         import numpy as np
