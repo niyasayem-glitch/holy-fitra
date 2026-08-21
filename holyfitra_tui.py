@@ -26,6 +26,7 @@ class Workspace:
     selected: int = 0
     status: str = "ready"
     last_result: dict[str, object] | None = None
+    telemetry: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def open(cls, path: Path) -> "Workspace":
@@ -58,6 +59,11 @@ class Workspace:
             return path.relative_to(self.root).as_posix()
         except ValueError:
             return path.as_posix()
+
+    def refresh_telemetry(self) -> dict[str, object]:
+        from holyfitra_telemetry import read_events, summarize_events
+        self.telemetry = summarize_events(read_events(self.root))
+        return self.telemetry
 
     def inspect(self) -> dict[str, object]:
         path = self.selected_file
@@ -105,7 +111,10 @@ class Workspace:
 
     def snapshot(self, width: int = 100, source_lines: int = 18) -> str:
         self.refresh()
-        lines = ["HOLY FITRA WORKSPACE", "=" * min(width, 80), f"root: {self.root}", f"status: {self.status}", "", "FILES"]
+        self.refresh_telemetry()
+        lines = ["HOLY FITRA WORKSPACE", "=" * min(width, 80), f"root: {self.root}", f"status: {self.status}", "", "LIVE DASHBOARD"]
+        lines.extend(json.dumps(self.telemetry, indent=2, sort_keys=True, default=str).splitlines())
+        lines.extend(["", "FILES"])
         if not self.files:
             lines.append("  (no .hf files found)")
         for index, path in enumerate(self.files):
@@ -118,15 +127,17 @@ class Workspace:
         lines.extend(["", "INSPECTION"])
         result = self.last_result or self.inspect()
         lines.extend(json.dumps(result, indent=2, sort_keys=True, default=str).splitlines())
-        lines.extend(["", "KEYS: j/k or arrows select | c check | p plan summary | b benchmark | r refresh | q quit"])
+        lines.extend(["", "KEYS: j/k or arrows select | c check | p plan summary | b benchmark | r refresh | q quit | live telemetry: 1s polling"])
         return "\n".join(lines)
 
 
 class CursesApp:
-    def __init__(self, workspace: Workspace):
+    def __init__(self, workspace: Workspace, poll_interval: float = 1.0):
         self.workspace = workspace
+        self.poll_interval = max(0.1, poll_interval)
 
     def draw(self, screen) -> None:
+        self.workspace.refresh_telemetry()
         screen.erase()
         height, width = screen.getmaxyx()
         title = "Holy Fitra TUI  |  q quit  j/k move  c check  p plan  b bench  r refresh"
@@ -145,15 +156,18 @@ class CursesApp:
             screen.addnstr(4 + offset, split + 1, f"{offset + 1:4d} | {line}", max(1, width - split - 2))
         result = self.workspace.last_result or self.workspace.inspect()
         status_y = max(5, height - 7)
-        screen.addnstr(status_y, 0, "INSPECTION", max(1, width - 1), curses.A_UNDERLINE)
-        summary = json.dumps(result, sort_keys=True, default=str)
-        screen.addnstr(status_y + 1, 0, summary, max(1, width - 1))
-        screen.addnstr(height - 2, 0, f"status: {self.workspace.status}", max(1, width - 1), curses.A_BOLD)
+        screen.addnstr(status_y, 0, "LIVE TELEMETRY / INSPECTION", max(1, width - 1), curses.A_UNDERLINE)
+        dashboard = json.dumps(self.workspace.telemetry, sort_keys=True, default=str)
+        inspection = json.dumps(result, sort_keys=True, default=str)
+        screen.addnstr(status_y + 1, 0, "telemetry: " + dashboard, max(1, width - 1))
+        screen.addnstr(status_y + 2, 0, "inspection: " + inspection, max(1, width - 1))
+        screen.addnstr(height - 2, 0, f"status: {self.workspace.status} | polling telemetry every second", max(1, width - 1), curses.A_BOLD)
         screen.refresh()
 
     def run(self, screen) -> None:
         curses.curs_set(0)
         screen.keypad(True)
+        screen.timeout(max(100, int(self.poll_interval * 1000)))
         self.workspace.inspect()
         while True:
             self.draw(screen)
@@ -175,12 +189,12 @@ class CursesApp:
                 self.workspace.benchmark()
 
 
-def run_tui(path: Path, snapshot: bool = False) -> int:
+def run_tui(path: Path, snapshot: bool = False, poll_interval: float = 1.0) -> int:
     workspace = Workspace.open(path)
     if snapshot or not (sys.stdin.isatty() and sys.stdout.isatty()):
         print(workspace.snapshot())
         return 0
-    curses.wrapper(CursesApp(workspace).run)
+    curses.wrapper(CursesApp(workspace, poll_interval).run)
     return 0
 
 
@@ -188,9 +202,10 @@ def main(argv: Iterable[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holyfitra tui")
     parser.add_argument("path", nargs="?", default=".", type=Path)
     parser.add_argument("--snapshot", action="store_true", help="print a deterministic text view instead of opening curses")
+    parser.add_argument("--watch-interval", type=float, default=1.0, help="seconds between live telemetry refreshes")
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:
-        return run_tui(args.path, args.snapshot)
+        return run_tui(args.path, args.snapshot, args.watch_interval)
     except (HolyFitraError, OSError, curses.error) as error:
         print(f"holyfitra tui: error: {error}", file=sys.stderr)
         return 1

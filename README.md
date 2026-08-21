@@ -124,6 +124,27 @@ holyfitra emit-llvm arithmetic.hf \
 
 A complete Android executable still requires the Android NDK/sysroot or the Android application’s CMake toolchain. Termux can compile the host-side native runtime and emit target IR, but Termux itself is not a replacement for the NDK when producing APK-linked native libraries.
 
+## Live compilation and quantization dashboard
+
+The TUI now includes a real-time dashboard backed by an append-only project telemetry file at `.holyfitra/telemetry.jsonl`.
+
+```bash
+holyfitra tui . --watch-interval 1.0
+```
+
+The dashboard polls once per second by default and reports compiler event count, cache hits, cache misses, hit rate, last digest, compile latency, quantization precision, calibration latency, proof verification, fallback state, and layer error. Building and benchmarking a project automatically records telemetry:
+
+```bash
+holyfitra build . -o build/app
+holyfitra build . -o build/app
+holyfitra bench . --repeats 5
+holyfitra tui . --snapshot
+```
+
+The first build normally reports a cache miss, while the second identical build reports a cache hit. `--snapshot` produces the same dashboard information without curses, which is suitable for Termux, SSH sessions, CI, and log collection. Set `HOLYFITRA_TELEMETRY=/path/to/events.jsonl` to route telemetry to an explicit file without changing source code.
+
+The telemetry layer records measurements only; it does not execute shell commands, access the network, or expose secrets. It tolerates truncated JSONL lines so an interrupted process cannot make the dashboard unusable.
+
 ## Evolving native language features
 
 The native frontend now supports booleans, comparisons, logical operators, structured `if/else` blocks, path-sensitive return checking, compile-time constant folding, and explicit function effects.

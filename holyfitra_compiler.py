@@ -27,6 +27,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -756,6 +757,7 @@ def write_llvm(source_path: Path, output: Path, target: str | None = None) -> in
 
 
 def build(source_path: Path, output: Path, target: str | None = None, keep_llvm: bool = False) -> int:
+    started_ns = time.perf_counter_ns()
     program, llvm, digest = compile_native_file(source_path, target=target)
     output.parent.mkdir(parents=True, exist_ok=True)
     cache_dir = source_path.parent / ".holyfitra" / "cache"
@@ -763,7 +765,10 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
     if artifact_cache.is_file() and artifact_cache.stat().st_size > 0:
         if artifact_cache.resolve() != output.resolve():
             shutil.copy2(artifact_cache, output)
-        print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": True}, sort_keys=True))
+        elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
+        from holyfitra_telemetry import record_event
+        record_event(source_path.parent, "compile", stage="native", cache_hit=True, digest=digest, elapsed_ms=elapsed_ms, target=target or "host")
+        print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": True, "elapsed_ms": elapsed_ms}, sort_keys=True))
         return 0
     main = next((function for function in program.functions if function.name == "main"), None)
     if main is None or main.parameters or main.return_type.name not in {"i32", "i64"}:
@@ -784,7 +789,10 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
         if keep_llvm:
             persistent_llvm = output.with_suffix(output.suffix + ".ll")
             persistent_llvm.write_text(llvm, encoding="utf-8")
-    print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": False}, sort_keys=True))
+    elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
+    from holyfitra_telemetry import record_event
+    record_event(source_path.parent, "compile", stage="native", cache_hit=False, digest=digest, elapsed_ms=elapsed_ms, target=target or "host")
+    print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": False, "elapsed_ms": elapsed_ms}, sort_keys=True))
     return 0
 
 
@@ -919,6 +927,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     tui_parser = subparsers.add_parser("tui", help="open the Holy Fitra terminal workspace UI")
     tui_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
     tui_parser.add_argument("--snapshot", action="store_true")
+    tui_parser.add_argument("--watch-interval", type=float, default=1.0)
     repl_parser = subparsers.add_parser("repl", help="start the interactive Holy Fitra REPL")
     bench_parser = subparsers.add_parser("bench", help="run compiler and AI runtime benchmark diagnostics")
     contracts_parser = subparsers.add_parser("contracts", help="validate structured task, supervisor, result, and kernel contracts")
@@ -956,7 +965,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return doctor()
         if args.command == "tui":
             from holyfitra_tui import run_tui
-            return run_tui(args.path, args.snapshot)
+            return run_tui(args.path, args.snapshot, args.watch_interval)
         if args.command == "repl":
             from holyfitra_repl import Repl
             return Repl().run()

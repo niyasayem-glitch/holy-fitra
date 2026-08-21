@@ -54,14 +54,21 @@ def benchmark_project(path: Path, repeats: int = 5) -> dict[str, Any]:
         from hyperc_proof_quant import demo as proof_demo
         start = time.perf_counter_ns()
         proof = proof_demo()
-        result["quantization"] = {"elapsed_ms": (time.perf_counter_ns() - start) / 1_000_000.0, "precision": proof["candidate"]["precision"], "proof_verified": proof["proof_verified"]}
+        elapsed_ms = (time.perf_counter_ns() - start) / 1_000_000.0
+        quantization = {"elapsed_ms": elapsed_ms, "precision": proof["candidate"]["precision"], "proof_verified": proof["proof_verified"], "fallback": proof["candidate"]["precision"] != "int4", "layer_error": proof["candidate"].get("layer_error")}
+        result["quantization"] = quantization
+        from holyfitra_telemetry import record_event
+        record_event(project.root, "quantization", **quantization)
     except Exception as error:
         result["quantization"] = {"error": str(error)}
     try:
         from holy_fitra_ragged_attention import demo as ragged_demo
         start = time.perf_counter_ns()
         ragged = ragged_demo()
-        result["ragged_attention"] = {"elapsed_ms": (time.perf_counter_ns() - start) / 1_000_000.0, "max_error": ragged["max_error"], "total_tokens": ragged["total_tokens"]}
+        elapsed_ms = (time.perf_counter_ns() - start) / 1_000_000.0
+        result["ragged_attention"] = {"elapsed_ms": elapsed_ms, "max_error": ragged["max_error"], "total_tokens": ragged["total_tokens"]}
+        from holyfitra_telemetry import record_event
+        record_event(project.root, "ragged_attention", elapsed_ms=elapsed_ms, max_error=ragged["max_error"], total_tokens=ragged["total_tokens"])
     except Exception as error:
         result["ragged_attention"] = {"error": str(error)}
     return result
