@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 import unittest
-from holyfitra_ai_system import AgentAction, AgentRuntime, CapabilityError, Evidence, EvidenceKind, EvidenceLedger, MemoryDocument, ToolRegistry, ToolResult, ToolSpec, VectorMemory
+from holyfitra_ai_system import AgentAction, AgentRuntime, CapabilityError, ClaimVerifier, Evidence, EvidenceKind, EvidenceLedger, MemoryDocument, ToolRegistry, ToolResult, ToolSpec, VectorMemory, VerificationStatus
 
 
 class HolyFitraAISystemTests(unittest.TestCase):
@@ -37,7 +37,7 @@ class HolyFitraAISystemTests(unittest.TestCase):
         runtime = AgentRuntime(self.memory, self.tools, max_steps=3)
         result = runtime.run((1.0, 0.0, 0.0), (AgentAction("retrieve"), AgentAction("tool", "safe_echo", {"text": "ok"})), grants=frozenset({"cap.echo"}))
         self.assertEqual(result.status, "completed")
-        self.assertEqual([event.event for event in result.trace], ["retrieve", "tool"])
+        self.assertEqual([event.event for event in result.trace], ["retrieve", "claim_verification", "tool"])
         self.assertTrue(any(e.evidence_id == "memory:fact-a" for e in result.evidence))
         self.assertTrue(any(e.evidence_id == "tool:2:safe_echo" for e in result.evidence))
 
@@ -52,6 +52,37 @@ class HolyFitraAISystemTests(unittest.TestCase):
         result = runtime.run((1.0, 0.0, 0.0), (AgentAction("tool", "cancel"), AgentAction("retrieve")), grants=frozenset({"cap.cancel"}))
         self.assertEqual(result.status, "cancelled")
         self.assertEqual(result.trace[-1].event, "cancelled")
+
+    def test_claim_verifier_classifies_support_and_contradiction(self):
+        ledger = EvidenceLedger()
+        ledger.add(Evidence("f", EvidenceKind.FACT, "cache uses shared tensor memory", 0.95, ("doc",)))
+        verifier = ClaimVerifier(min_confidence=0.6, min_overlap=0.5)
+        supported = verifier.verify("shared tensor memory uses cache", ledger, evidence_ids=("f",))
+        self.assertEqual(supported.status, VerificationStatus.SUPPORTED)
+        contradicted = verifier.verify("cache does not use shared tensor memory", ledger, evidence_ids=("f",))
+        self.assertEqual(contradicted.status, VerificationStatus.CONTRADICTED)
+        unsupported = verifier.verify("scheduler uses external network", ledger)
+        self.assertEqual(unsupported.status, VerificationStatus.UNSUPPORTED)
+
+    def test_low_confidence_fact_cannot_authorize_tool_claim(self):
+        ledger = EvidenceLedger()
+        ledger.add(Evidence("weak", EvidenceKind.FACT, "tool is safe", 0.2, ("untrusted",)))
+        verifier = ClaimVerifier(min_confidence=0.6)
+        result = verifier.verify("tool is safe", ledger, evidence_ids=("weak",))
+        self.assertEqual(result.status, VerificationStatus.UNSUPPORTED)
+
+    def test_pre_tool_verifier_blocks_unsupported_claim(self):
+        runtime = AgentRuntime(self.memory, self.tools, max_steps=2, verifier=ClaimVerifier(min_overlap=0.5), require_claims=True)
+        blocked = runtime.run((1.0, 0.0, 0.0), (AgentAction("retrieve"), AgentAction("tool", "safe_echo", {"text": "blocked"}, claim="external network is authorized")), grants=frozenset({"cap.echo"}))
+        self.assertEqual(blocked.status, "blocked_claim")
+        self.assertEqual(blocked.trace[-1].event, "claim_verification")
+        self.assertNotIn("tool", [event.event for event in blocked.trace])
+
+    def test_pre_tool_verifier_allows_supported_claim(self):
+        runtime = AgentRuntime(self.memory, self.tools, max_steps=2, verifier=ClaimVerifier(min_overlap=0.5), require_claims=True)
+        allowed = runtime.run((1.0, 0.0, 0.0), (AgentAction("retrieve"), AgentAction("tool", "safe_echo", {"text": "allowed"}, claim="ARM64 uses compact tensor buffers", evidence_ids=("memory:fact-a",))), grants=frozenset({"cap.echo"}))
+        self.assertEqual(allowed.status, "completed")
+        self.assertEqual([event.event for event in allowed.trace], ["retrieve", "claim_verification", "tool"])
 
     def test_prediction_can_exist_without_provenance_but_fact_cannot(self):
         Evidence("p", EvidenceKind.PREDICTION, "likely", 0.5, ())

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import re
 from typing import Any, Callable, Iterable
 
 import numpy as np
@@ -132,6 +133,74 @@ class CapabilityError(PermissionError):
     pass
 
 
+class VerificationStatus(str, Enum):
+    SUPPORTED = "supported"
+    UNSUPPORTED = "unsupported"
+    CONTRADICTED = "contradicted"
+
+
+@dataclass(frozen=True)
+class VerificationResult:
+    status: VerificationStatus
+    score: float
+    evidence_ids: tuple[str, ...]
+    reason: str
+
+
+class ClaimVerifier:
+    """Conservative deterministic verifier over factual ledger records."""
+
+    _STOPWORDS = frozenset({"a", "an", "and", "are", "as", "at", "be", "by", "for", "from", "has", "in", "is", "it", "of", "on", "or", "that", "the", "this", "to", "uses", "use"})
+    _NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "cant", "false", "isnt", "doesnt"})
+
+    def __init__(self, *, min_confidence: float = 0.6, min_overlap: float = 0.5):
+        if not 0.0 <= min_confidence <= 1.0 or not 0.0 < min_overlap <= 1.0:
+            raise ValueError("invalid claim-verifier thresholds")
+        self.min_confidence = float(min_confidence)
+        self.min_overlap = float(min_overlap)
+
+    @classmethod
+    def _tokens(cls, text: str) -> frozenset[str]:
+        return frozenset(token for token in re.findall(r"[a-z0-9]+", text.lower()) if token not in cls._STOPWORDS)
+
+    @classmethod
+    def _negated(cls, text: str) -> bool:
+        return bool(cls._NEGATIONS.intersection(re.findall(r"[a-z0-9]+", text.lower())))
+
+    def verify(self, claim: str, ledger: EvidenceLedger, *, evidence_ids: tuple[str, ...] = ()) -> VerificationResult:
+        if not claim or not claim.strip():
+            raise ValueError("claim must be non-empty")
+        claim_tokens = self._tokens(claim)
+        if not claim_tokens:
+            return VerificationResult(VerificationStatus.UNSUPPORTED, 0.0, (), "claim has no verifiable content tokens")
+        factual = [record for record in ledger.records if record.kind == EvidenceKind.FACT and record.confidence >= self.min_confidence]
+        if evidence_ids:
+            selected: list[Evidence] = []
+            for evidence_id in evidence_ids:
+                try:
+                    record = ledger.get(evidence_id)
+                except KeyError:
+                    return VerificationResult(VerificationStatus.UNSUPPORTED, 0.0, tuple(evidence_ids), f"missing evidence: {evidence_id}")
+                if record.kind != EvidenceKind.FACT or record.confidence < self.min_confidence:
+                    return VerificationResult(VerificationStatus.UNSUPPORTED, record.confidence, tuple(evidence_ids), "cited evidence is not a sufficiently confident fact")
+                selected.append(record)
+            factual = selected
+        best_score = 0.0
+        best_ids: tuple[str, ...] = ()
+        claim_negated = self._negated(claim)
+        for record in factual:
+            evidence_tokens = self._tokens(record.content)
+            overlap = len(claim_tokens & evidence_tokens) / max(1, len(claim_tokens))
+            if overlap > best_score:
+                best_score = overlap
+                best_ids = (record.evidence_id,)
+            if overlap >= self.min_overlap and claim_negated != self._negated(record.content):
+                return VerificationResult(VerificationStatus.CONTRADICTED, overlap * record.confidence, (record.evidence_id,), "claim polarity conflicts with factual evidence")
+        if best_score >= self.min_overlap:
+            return VerificationResult(VerificationStatus.SUPPORTED, best_score, best_ids, "sufficient factual token overlap")
+        return VerificationResult(VerificationStatus.UNSUPPORTED, best_score, best_ids, "no sufficiently matching factual evidence")
+
+
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, ToolSpec] = {}
@@ -160,6 +229,8 @@ class AgentAction:
     kind: str
     name: str = ""
     arguments: dict[str, Any] = field(default_factory=dict)
+    claim: str = ""
+    evidence_ids: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -179,12 +250,14 @@ class AgentResult:
 class AgentRuntime:
     """Bounded retrieve/tool loop with cancellation and evidence auditing."""
 
-    def __init__(self, memory: VectorMemory, tools: ToolRegistry, *, max_steps: int = 8) -> None:
+    def __init__(self, memory: VectorMemory, tools: ToolRegistry, *, max_steps: int = 8, verifier: ClaimVerifier | None = None, require_claims: bool = False) -> None:
         if max_steps <= 0:
             raise ValueError("max_steps must be positive")
         self.memory = memory
         self.tools = tools
         self.max_steps = int(max_steps)
+        self.verifier = verifier or ClaimVerifier()
+        self.require_claims = bool(require_claims)
         self._cancelled = False
 
     def cancel(self) -> None:
@@ -207,6 +280,16 @@ class AgentRuntime:
                     ledger.add(Evidence(f"memory:{hit.document_id}", hit.kind, hit.text, max(0.0, min(1.0, (hit.score + 1.0) / 2.0)), hit.provenance))
                 trace.append(AuditEvent(step, "retrieve", f"hits={len(hits)}"))
             elif action.kind == "tool":
+                if self.require_claims and not action.claim:
+                    trace.append(AuditEvent(step, "claim_verification", "blocked: missing claim"))
+                    return AgentResult("blocked_claim", ledger.records, tuple(trace))
+                if action.claim:
+                    verification = self.verifier.verify(action.claim, ledger, evidence_ids=action.evidence_ids)
+                    trace.append(AuditEvent(step, "claim_verification", f"{verification.status.value}:{verification.reason}"))
+                    if verification.status != VerificationStatus.SUPPORTED:
+                        return AgentResult("blocked_claim", ledger.records, tuple(trace))
+                else:
+                    trace.append(AuditEvent(step, "claim_verification", "skipped: no claim"))
                 result = self.tools.invoke(action.name, action.arguments, grants=grants)
                 evidence_id = f"tool:{step}:{action.name}"
                 ledger.add(Evidence(evidence_id, result.evidence_kind, result.content, result.confidence, result.provenance or (f"tool:{action.name}",)))
@@ -216,4 +299,4 @@ class AgentRuntime:
         return AgentResult("completed", ledger.records, tuple(trace))
 
 
-__all__ = ["AgentAction", "AgentResult", "AgentRuntime", "AuditEvent", "CapabilityError", "Evidence", "EvidenceKind", "EvidenceLedger", "MemoryDocument", "RetrievalHit", "ToolRegistry", "ToolResult", "ToolSpec", "VectorMemory"]
+__all__ = ["AgentAction", "AgentResult", "AgentRuntime", "AuditEvent", "CapabilityError", "ClaimVerifier", "Evidence", "EvidenceKind", "EvidenceLedger", "MemoryDocument", "RetrievalHit", "ToolRegistry", "ToolResult", "ToolSpec", "VectorMemory", "VerificationResult", "VerificationStatus"]
