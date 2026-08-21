@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import numpy as np
 
@@ -15,6 +15,7 @@ class QuantizedMatrix:
     packed: PackedNibbleFlow
     bits: int
     _raw_shape: tuple[int, int]
+    _reconstructed_weight: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
     def quantize(cls, weight: np.ndarray, bits: int, group_size: int) -> "QuantizedMatrix":
@@ -65,8 +66,9 @@ class QuantizedMatrix:
         if matrix.ndim != 2 or matrix.shape[1] != self._raw_shape[0]:
             raise ValueError("matrix dimension mismatch")
         if self.bits == 4:
-            reconstructed = self.packed.reconstruct()
-            return matrix @ reconstructed.T
+            if self._reconstructed_weight is None:
+                self._reconstructed_weight = np.ascontiguousarray(self.packed.reconstruct(), dtype=np.float32)
+            return matrix @ self._reconstructed_weight.T
         values = np.asarray(self.packed.values, dtype=np.float32)
         scales = np.asarray(self.packed.scales, dtype=np.float32)
         return (matrix @ values.T) * scales

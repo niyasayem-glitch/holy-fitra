@@ -36,6 +36,22 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         expected = self.calibration @ matrix._float32_weight
         np.testing.assert_allclose(batched, expected, rtol=0.0, atol=1e-6)
 
+    def test_int4_batched_matmul_caches_reconstruction(self):
+        class SpyPacked:
+            def __init__(self):
+                self.calls = 0
+
+            def reconstruct(self):
+                self.calls += 1
+                return np.eye(4, dtype=np.float32)
+
+        packed = SpyPacked()
+        matrix = QuantizedMatrix(packed, 4, (4, 4))
+        first = matrix.matmat(np.ones((3, 4), dtype=np.float32))
+        second = matrix.matmat(np.ones((3, 4), dtype=np.float32))
+        self.assertEqual(packed.calls, 1)
+        np.testing.assert_array_equal(first, second)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
