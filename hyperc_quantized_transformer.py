@@ -16,9 +16,11 @@ class QuantizedMatrix:
     bits: int
     _raw_shape: tuple[int, int]
     _reconstructed_weight: np.ndarray | None = field(default=None, init=False, repr=False, compare=False)
+    _reconstruction_dtype: str = field(default="f32", init=False, repr=False, compare=False)
+    _reconstruction_error: float = field(default=0.0, init=False, repr=False, compare=False)
 
     @classmethod
-    def quantize(cls, weight: np.ndarray, bits: int, group_size: int) -> "QuantizedMatrix":
+    def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None) -> "QuantizedMatrix":
         weight = np.asarray(weight, dtype=np.float32)
         if weight.ndim != 2:
             raise ValueError("weight must be rank-2 [in, out]")
@@ -35,7 +37,10 @@ class QuantizedMatrix:
             scales[scales == 0] = 1.0
             quantized = np.clip(np.rint(values / scales), -128, 127).astype(np.int8)
             packed = _PackedInt8(values.shape[1], values.shape[0], quantized, scales.reshape(-1))
-        return cls(packed, bits, tuple(weight.shape))
+        matrix = cls(packed, bits, tuple(weight.shape))
+        if reconstruction_dtype != "f32":
+            matrix.configure_reconstruction_cache(reconstruction_dtype, max_error=max_reconstruction_error)
+        return matrix
 
     @property
     def storage_bytes(self) -> int:
@@ -48,8 +53,44 @@ class QuantizedMatrix:
         return int(np.prod(self._raw_shape) * 4)
 
     @property
+    def reconstruction_cache_bytes(self) -> int:
+        return int(self._reconstructed_weight.nbytes) if self._reconstructed_weight is not None else 0
+
+    @property
+    def memory_bytes(self) -> int:
+        return self.storage_bytes + self.reconstruction_cache_bytes
+
+    @property
+    def reconstruction_cache_dtype(self) -> str | None:
+        return self._reconstruction_dtype if self._reconstructed_weight is not None else None
+
+    @property
+    def reconstruction_cache_error(self) -> float:
+        return self._reconstruction_error
+
+    @property
     def compression_ratio(self) -> float:
-        return self.raw_weight_bytes / max(1, self.storage_bytes)
+        return self.raw_weight_bytes / max(1, self.memory_bytes)
+
+    def clear_reconstruction_cache(self) -> None:
+        self._reconstructed_weight = None
+        self._reconstruction_dtype = "f32"
+        self._reconstruction_error = 0.0
+
+    def configure_reconstruction_cache(self, dtype: str = "f32", *, max_error: float | None = None) -> dict[str, float | int | str]:
+        if dtype not in {"f32", "f16"}:
+            raise ValueError("reconstruction cache dtype must be f32 or f16")
+        if dtype == "f16" and max_error is None:
+            raise ValueError("float16 reconstruction cache requires max_error")
+        reconstructed = np.ascontiguousarray(self.packed.reconstruct(), dtype=np.float32)
+        candidate = reconstructed if dtype == "f32" else np.ascontiguousarray(reconstructed, dtype=np.float16)
+        error = 0.0 if dtype == "f32" else float(np.max(np.abs(reconstructed - candidate.astype(np.float32))))
+        if max_error is not None and error > max_error:
+            raise ValueError(f"reconstruction cache error {error:.9g} exceeds gate {max_error:.9g}")
+        self._reconstructed_weight = candidate
+        self._reconstruction_dtype = dtype
+        self._reconstruction_error = error
+        return {"dtype": dtype, "cache_bytes": self.reconstruction_cache_bytes, "max_abs_error": error}
 
     def matvec(self, vector: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
         if hasattr(self.packed, "matvec_reference"):
@@ -67,7 +108,7 @@ class QuantizedMatrix:
             raise ValueError("matrix dimension mismatch")
         if self.bits == 4:
             if self._reconstructed_weight is None:
-                self._reconstructed_weight = np.ascontiguousarray(self.packed.reconstruct(), dtype=np.float32)
+                self.configure_reconstruction_cache("f32")
             return matrix @ self._reconstructed_weight.T
         values = np.asarray(self.packed.values, dtype=np.float32)
         scales = np.asarray(self.packed.scales, dtype=np.float32)
@@ -111,7 +152,7 @@ class QuantizedAndroidMHA:
 
     @property
     def weight_memory_bytes(self) -> int:
-        return sum(weight.storage_bytes for weight in self.weights)
+        return sum(weight.memory_bytes for weight in self.weights)
 
     @property
     def float_weight_memory_bytes(self) -> int:
@@ -147,7 +188,7 @@ class QuantizedFeedForward:
 
     @property
     def weight_memory_bytes(self) -> int:
-        return self.w1.storage_bytes + self.w2.storage_bytes
+        return self.w1.memory_bytes + self.w2.memory_bytes
 
     @property
     def float_weight_memory_bytes(self) -> int:

@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `6b25b1e` on `master` before the current iteration 6 changes are published.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `037c9e9` on `master` before the current iteration 7 changes are published.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -10,7 +10,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | 2 | Versioned canonical HyperIR text format, deterministic round-trip parser, explicit policy/evidence serialization, and bounded 64-entry verifier cache | 92 tests; canonical digest round-trip; cache-hit/invalidation tests; Termux/native/sanitizer gates; x86-64 warm verifier median 0.018248 ms versus cold median 0.023997 ms | `d05cad7` |
 | 3 | Deterministic recursive effect-cycle diagnostics with complete cycle paths | 93 tests; Termux/native/sanitizer gates; cycle diagnostic regression | `2ffe923` |
 | 5 | Schema-checked persistent LLVM cache recovery and atomic cache publication | 94 tests; Termux/native/sanitizer gates; disk-cache median 0.074403 ms versus 0.0753545 ms baseline; corruption recovery verified | `6b25b1e` |
-| 6 | Cache reconstructed int4 weights for repeated batched matmul | 95 tests; Termux/native/sanitizer gates; exact output equality; 176–637× faster repeated int4 matmul in sandbox benchmarks | Pending |
+| 6 | Cache reconstructed int4 weights for repeated batched matmul | 95 tests; Termux/native/sanitizer gates; exact output equality; 176–637× faster repeated int4 matmul in sandbox benchmarks | `037c9e9` |
+| 7 | Explicit quality-gated float16 reconstruction cache and resident-memory accounting | 97 tests; Termux/native/sanitizer gates; 50% cache-memory reduction in tested cases; output error gate enforced | Pending |
 
 ## Rejected work
 
@@ -18,7 +19,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **95 tests with 0 failures**.
+The current full applicable Python suite passes **97 tests with 0 failures**.
  Termux-compatible host validation passes compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. ASAN/UBSAN validation passes for the ragged scheduler executable and sanitized NibbleFlow shared-library build.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
@@ -26,6 +27,10 @@ The sandbox host is x86-64. AArch64 object emission and cross-compilation are va
 ## Loop policy
 
 Every candidate is evaluated against complete regression tests and applicable native gates. A candidate is retained only when it passes semantic and safety checks and does not introduce a measured regression. Quantization proof gates, evidence monotonicity, capability authorization, speculative-cache safety, and Android fallback contracts remain enforced.
+
+## Iteration 7 retained
+
+The explicit float16 reconstruction-cache mode cuts the cached reconstructed-weight footprint by 50% in tested cases. It requires a caller-supplied maximum reconstruction error and reports cache dtype, bytes, and error; callers can clear the cache deterministically. The default float32 mode remains unchanged because float16 was slower in the tested CPU path.
 
 ## Iteration 6 retained
 

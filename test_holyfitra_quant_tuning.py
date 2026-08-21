@@ -52,6 +52,23 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         self.assertEqual(packed.calls, 1)
         np.testing.assert_array_equal(first, second)
 
+    def test_float16_reconstruction_cache_is_explicit_and_memory_accounted(self):
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_dtype="f16", max_reconstruction_error=0.01)
+        self.assertEqual(matrix.reconstruction_cache_dtype, "f16")
+        self.assertGreater(matrix.reconstruction_cache_bytes, 0)
+        self.assertEqual(matrix.reconstruction_cache_bytes * 2, matrix.raw_weight_bytes)
+        self.assertLessEqual(matrix.reconstruction_cache_error, 0.01)
+        self.assertLess(matrix.memory_bytes, matrix.storage_bytes + matrix.raw_weight_bytes)
+        matrix.clear_reconstruction_cache()
+        self.assertEqual(matrix.reconstruction_cache_bytes, 0)
+        self.assertIsNone(matrix.reconstruction_cache_dtype)
+
+    def test_float16_reconstruction_cache_requires_quality_gate(self):
+        with self.assertRaises(ValueError):
+            QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_dtype="f16")
+        with self.assertRaises(ValueError):
+            QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_dtype="f16", max_reconstruction_error=0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
