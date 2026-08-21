@@ -22,6 +22,9 @@ class QuantizedMatrix:
     _hybrid_promote_after: int | None = field(default=None, init=False, repr=False, compare=False)
     _matmat_calls: int = field(default=0, init=False, repr=False, compare=False)
     _adaptive_promote_after: int | None = field(default=None, init=False, repr=False, compare=False)
+    _adaptive_base_promote_after: int = field(default=4, init=False, repr=False, compare=False)
+    _adaptive_demote_after_ns: int | None = field(default=None, init=False, repr=False, compare=False)
+    _adaptive_max_error: float | None = field(default=None, init=False, repr=False, compare=False)
     _adaptive_alpha: float = field(default=0.5, init=False, repr=False, compare=False)
     _adaptive_hysteresis: int = field(default=2, init=False, repr=False, compare=False)
     _adaptive_burst_window_ns: int = field(default=5_000_000, init=False, repr=False, compare=False)
@@ -31,7 +34,7 @@ class QuantizedMatrix:
     _adaptive_last_access_ns: int | None = field(default=None, init=False, repr=False, compare=False)
 
     @classmethod
-    def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None, reconstruction_mode: str = "f32", promote_after: int = 4, adaptive_alpha: float = 0.5, adaptive_hysteresis: int = 2, adaptive_burst_window_ms: float = 5.0) -> "QuantizedMatrix":
+    def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None, reconstruction_mode: str = "f32", promote_after: int = 4, adaptive_alpha: float = 0.5, adaptive_hysteresis: int = 2, adaptive_burst_window_ms: float = 5.0, adaptive_demote_after_ms: float | None = None) -> "QuantizedMatrix":
         weight = np.asarray(weight, dtype=np.float32)
         if weight.ndim != 2:
             raise ValueError("weight must be rank-2 [in, out]")
@@ -55,7 +58,7 @@ class QuantizedMatrix:
         elif mode == "hybrid":
             matrix.configure_hybrid_reconstruction_cache(max_error=max_reconstruction_error, promote_after=promote_after)
         elif mode == "adaptive_hybrid":
-            matrix.configure_adaptive_hybrid_cache(max_error=max_reconstruction_error, promote_after=promote_after, alpha=adaptive_alpha, hysteresis=adaptive_hysteresis, burst_window_ms=adaptive_burst_window_ms)
+            matrix.configure_adaptive_hybrid_cache(max_error=max_reconstruction_error, promote_after=promote_after, alpha=adaptive_alpha, hysteresis=adaptive_hysteresis, burst_window_ms=adaptive_burst_window_ms, demote_after_ms=adaptive_demote_after_ms)
         elif mode != "f32":
             raise ValueError("reconstruction_mode must be f32, f16, hybrid, or adaptive_hybrid")
         return matrix
@@ -97,16 +100,22 @@ class QuantizedMatrix:
         self._hybrid_promote_after = None
         self._matmat_calls = 0
         self._adaptive_promote_after = None
+        self._adaptive_base_promote_after = 4
+        self._adaptive_demote_after_ns = None
+        self._adaptive_max_error = None
         self._adaptive_frequency_ewma = 0.0
         self._adaptive_access_count = 0
         self._adaptive_hot_streak = 0
         self._adaptive_last_access_ns = None
 
-    def configure_adaptive_hybrid_cache(self, *, max_error: float | None = None, promote_after: int = 4, alpha: float = 0.5, hysteresis: int = 2, burst_window_ms: float = 5.0) -> dict[str, float | int | str]:
-        if promote_after <= 0 or not 0.0 < alpha <= 1.0 or hysteresis <= 0 or burst_window_ms <= 0.0:
+    def configure_adaptive_hybrid_cache(self, *, max_error: float | None = None, promote_after: int = 4, alpha: float = 0.5, hysteresis: int = 2, burst_window_ms: float = 5.0, demote_after_ms: float | None = None) -> dict[str, float | int | str]:
+        if promote_after <= 0 or not 0.0 < alpha <= 1.0 or hysteresis <= 0 or burst_window_ms <= 0.0 or (demote_after_ms is not None and demote_after_ms <= 0.0):
             raise ValueError("invalid adaptive promotion policy")
         result = self.configure_reconstruction_cache("f16", max_error=max_error)
         self._adaptive_promote_after = promote_after
+        self._adaptive_base_promote_after = promote_after
+        self._adaptive_demote_after_ns = None if demote_after_ms is None else int(demote_after_ms * 1_000_000.0)
+        self._adaptive_max_error = max_error
         self._adaptive_alpha = alpha
         self._adaptive_hysteresis = hysteresis
         self._adaptive_burst_window_ns = int(burst_window_ms * 1_000_000.0)
@@ -114,7 +123,7 @@ class QuantizedMatrix:
         self._adaptive_access_count = 0
         self._adaptive_hot_streak = 0
         self._adaptive_last_access_ns = None
-        return {**result, "mode": "adaptive_hybrid", "promote_after": promote_after, "alpha": alpha, "hysteresis": hysteresis, "burst_window_ms": burst_window_ms}
+        return {**result, "mode": "adaptive_hybrid", "promote_after": promote_after, "alpha": alpha, "hysteresis": hysteresis, "burst_window_ms": burst_window_ms, "demote_after_ms": demote_after_ms}
 
     def configure_hybrid_reconstruction_cache(self, *, max_error: float | None = None, promote_after: int = 4) -> dict[str, float | int | str]:
         if promote_after <= 0:
@@ -123,6 +132,26 @@ class QuantizedMatrix:
         self._hybrid_promote_after = promote_after
         self._matmat_calls = 0
         return {**result, "mode": "hybrid", "promote_after": promote_after}
+
+    def demote_reconstruction_cache(self, *, max_error: float | None = None) -> dict[str, float | int | str]:
+        if self._reconstructed_weight is None:
+            return {"dtype": "none", "cache_bytes": 0, "max_abs_error": 0.0}
+        reconstructed = np.ascontiguousarray(self._reconstructed_weight, dtype=np.float32)
+        candidate = np.ascontiguousarray(reconstructed, dtype=np.float16)
+        error = float(np.max(np.abs(reconstructed - candidate.astype(np.float32))))
+        gate = self._adaptive_max_error if max_error is None else max_error
+        if gate is None:
+            raise ValueError("demotion requires max_error")
+        if error > gate:
+            raise ValueError(f"demotion error {error:.9g} exceeds gate {gate:.9g}")
+        self._reconstructed_weight = candidate
+        self._reconstruction_dtype = "f16"
+        self._reconstruction_error = error
+        self._adaptive_promote_after = self._adaptive_base_promote_after
+        self._adaptive_access_count = 0
+        self._adaptive_hot_streak = 0
+        self._adaptive_frequency_ewma = 0.0
+        return {"dtype": "f16", "cache_bytes": self.reconstruction_cache_bytes, "max_abs_error": error}
 
     def configure_reconstruction_cache(self, dtype: str = "f32", *, max_error: float | None = None) -> dict[str, float | int | str]:
         if dtype not in {"f32", "f16"}:
@@ -158,7 +187,7 @@ class QuantizedMatrix:
     @property
     def adaptive_promotion_stats(self) -> dict[str, float | int | str | None]:
         batch_mode = "adaptive_hybrid" if self._adaptive_promote_after is not None else self.reconstruction_cache_mode
-        return {"mode": batch_mode, "access_count": self._adaptive_access_count, "hot_streak": self._adaptive_hot_streak, "frequency_ewma": self._adaptive_frequency_ewma, "promoted": self._adaptive_promote_after is None and self._reconstructed_weight is not None and self._reconstruction_dtype == "f32", "threshold": self._adaptive_promote_after}
+        return {"mode": batch_mode, "access_count": self._adaptive_access_count, "hot_streak": self._adaptive_hot_streak, "frequency_ewma": self._adaptive_frequency_ewma, "promoted": self._adaptive_promote_after is None and self._reconstructed_weight is not None and self._reconstruction_dtype == "f32", "threshold": self._adaptive_promote_after, "demote_after_ns": self._adaptive_demote_after_ns}
 
     @property
     def reconstruction_cache_mode(self) -> str:
@@ -185,6 +214,11 @@ class QuantizedMatrix:
         if self.bits == 4:
             if self._reconstructed_weight is None:
                 self.configure_reconstruction_cache("f32")
+            if self._adaptive_demote_after_ns is not None and self._reconstruction_dtype == "f32" and self._adaptive_last_access_ns is not None:
+                now_ns = time.perf_counter_ns() if access_timestamp_ns is None else access_timestamp_ns
+                if now_ns - self._adaptive_last_access_ns > self._adaptive_demote_after_ns:
+                    self.demote_reconstruction_cache()
+                    self._adaptive_last_access_ns = now_ns
             if self._adaptive_promote_after is not None:
                 if self._observe_adaptive_access(matrix.shape[0], now_ns=access_timestamp_ns):
                     self.configure_reconstruction_cache("f32")

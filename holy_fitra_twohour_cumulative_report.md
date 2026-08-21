@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `899b963` on `master` before the current round 10 changes are published.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `48a0b2d` on `master` before the current round 11 changes are published.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -14,7 +14,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | 7 | Explicit quality-gated float16 reconstruction cache and resident-memory accounting | 97 tests; Termux/native/sanitizer gates; 50% cache-memory reduction in tested cases; output error gate enforced | `993b8aa` |
 | 8 | Adaptive float16-cold/float32-hot reconstruction cache | 99 tests; Termux/native/sanitizer gates; 50% cold-cache memory reduction; hot small-batch median 0.006840 ms versus float32 0.006870 ms | `16d2773` |
 | 9 | EWMA query-frequency and access-pattern promotion tuning | 102 tests; Termux/native/sanitizer gates; cold one-shot/spaced retention; burst promotion one access earlier than fixed policy | `899b963` |
-| 10 | Caller-supplied adaptive access timestamps | 103 tests; Termux/native/sanitizer gates; identical promotion decisions; hot-path median 0.0212665 ms versus 0.0277815 ms internal-clock baseline | Pending |
+| 10 | Caller-supplied adaptive access timestamps | 103 tests; Termux/native/sanitizer gates; identical promotion decisions; hot-path median 0.0212665 ms versus 0.0277815 ms internal-clock baseline | `48a0b2d` |
+| 11 | Bounded inactivity demotion from float32 to quality-gated float16 | 105 tests; Termux/native/sanitizer gates; 24,576 bytes reclaimed in the measured 128×96 cache | Pending |
 
 ## Rejected work
 
@@ -22,7 +23,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **103 tests with 0 failures**.
+The current full applicable Python suite passes **105 tests with 0 failures**.
  Termux-compatible host validation passes compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. ASAN/UBSAN validation passes for the ragged scheduler executable and sanitized NibbleFlow shared-library build.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
@@ -30,6 +31,10 @@ The sandbox host is x86-64. AArch64 object emission and cross-compilation are va
 ## Loop policy
 
 Every candidate is evaluated against complete regression tests and applicable native gates. A candidate is retained only when it passes semantic and safety checks and does not introduce a measured regression. Quantization proof gates, evidence monotonicity, capability authorization, speculative-cache safety, and Android fallback contracts remain enforced.
+
+## Round 11 retained
+
+Promoted float32 caches can now demote to quality-gated float16 after a bounded inactivity interval, reclaiming half the reconstructed-cache memory in the measured case. Manual demotion is also available.
 
 ## Round 10 retained
 

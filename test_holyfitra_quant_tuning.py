@@ -117,6 +117,23 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
             matrix.matmat(self.calibration, access_timestamp_ns=0)
         self.assertEqual(matrix.adaptive_promotion_stats["access_count"], 1)
 
+    def test_adaptive_cache_demotes_after_inactivity(self):
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="adaptive_hybrid", max_reconstruction_error=0.01, promote_after=2, adaptive_hysteresis=1, adaptive_demote_after_ms=10.0)
+        with patch("hyperc_quantized_transformer.time.perf_counter_ns", side_effect=[0, 1_000_000, 20_000_000]):
+            matrix.matmat(self.calibration, access_timestamp_ns=0)
+            matrix.matmat(self.calibration, access_timestamp_ns=1_000_000)
+            self.assertEqual(matrix.reconstruction_cache_mode, "f32")
+            matrix.matmat(self.calibration, access_timestamp_ns=20_000_000)
+        self.assertEqual(matrix.reconstruction_cache_mode, "adaptive_cold")
+        self.assertEqual(matrix.reconstruction_cache_bytes * 2, matrix.raw_weight_bytes)
+        self.assertFalse(matrix.adaptive_promotion_stats["promoted"])
+
+    def test_manual_demotion_requires_quality_gate(self):
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4)
+        matrix.matmat(self.calibration)
+        with self.assertRaises(ValueError):
+            matrix.demote_reconstruction_cache()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
