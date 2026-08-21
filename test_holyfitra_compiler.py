@@ -281,6 +281,19 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(project.name, "demo_project")
             self.assertEqual(project.entry.name, "main.hf")
             self.assertEqual(project.target, "x86_64-pc-linux-gnu")
+            self.assertTrue((root / "tests" / "smoke.hf").is_file())
+
+    def test_cli_test_runs_project_smoke_suite(self):
+        root = Path(__file__).parent
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary) / "test_project"
+            init_project(directory, "test_project")
+            completed = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "test", str(directory)], capture_output=True, text=True)
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["count"], 1)
+            self.assertTrue(payload["tests"][0]["passed"])
 
     def test_legacy_tensor_frontend_remains_available(self):
         source = """

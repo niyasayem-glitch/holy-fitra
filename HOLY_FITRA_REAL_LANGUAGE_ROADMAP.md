@@ -73,13 +73,13 @@ The key architectural rule is that AI features enter at typed HIR/MIR boundaries
 A real Holy Fitra installation must support the following ordinary-language workflow without Python:
 
 ```bash
-holyfitra new my_app
+holyfitra init my_app
 cd my_app
-holyfitra check
-holyfitra test
-holyfitra build --release
-holyfitra run
-holyfitra package
+holyfitra check .
+holyfitra test .
+holyfitra build . -o build/my_app
+holyfitra run .
+holyfitra package . -o build/my_app.hfp
 ```
 
 `holyfitra check` must load all imported modules, resolve names across module boundaries, type-check the complete graph, and report stable diagnostics. `holyfitra build` must compile through typed HIR/MIR to LLVM and invoke the platform backend. `holyfitra test` must compile and run deterministic test functions in isolated processes. `holyfitra package` must include source or canonical IR, module metadata, compiler schema, target, runtime ABI, and content digest.

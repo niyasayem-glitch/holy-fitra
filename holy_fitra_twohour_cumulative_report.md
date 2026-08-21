@@ -246,3 +246,9 @@ The native LLVM emitter now lowers locals and parameters into typed stack slots,
 The current checkout’s test discovery reports 132 Python tests; earlier cumulative milestones may contain larger historical counts from additional suites. The validation host is x86-64. AArch64 checks remain artifact validation only, with no physical Android execution or device-performance claim.
 
 This is a real-language foundation wave, not yet the self-hosted compiler fixed point. The next implementation target is the self-hosted semantic core: token metadata, AST arena, deterministic symbols/scopes, canonical type IDs, and typed HIR snapshots.
+
+## Real-language developer workflow milestone retained
+
+Project initialization now creates a `tests/` directory with a deterministic native smoke test, and the compiler exposes `holyfitra test <project>` to discover sorted standalone `.hf` test programs, build each test through the native compiler, run it in an isolated temporary executable path, and emit a structured JSON result. A failing build, timeout, non-zero test status, or missing project test is reported fail-closed.
+
+The focused compiler suite passed **25 tests with 0 failures** after this addition. The complete applicable Python suite passed **133 tests with 0 failures**, and the Termux-compatible host gate passed **129 tests**. The workflow remains Python-hosted at this stage; the test protocol is intentionally simple so it can later be reimplemented by the self-hosted Stage-1 driver.

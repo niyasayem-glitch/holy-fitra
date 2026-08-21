@@ -19,7 +19,9 @@ fn main() -> i32 { return add(40, 2) }
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -1137,14 +1139,39 @@ def init_project(root: Path, name: str | None = None) -> int:
     project_name = name or root.name
     source_dir = root / "src"
     source_dir.mkdir(exist_ok=True)
+    tests_dir = root / "tests"
+    tests_dir.mkdir(exist_ok=True)
     manifest = root / "holyfitra.toml"
     source = source_dir / "main.hf"
     if manifest.exists() or source.exists():
         raise HolyFitraError(f"project already exists: {root}")
     manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "x86_64-pc-linux-gnu"\n''', encoding="utf-8")
     source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
-    print(json.dumps({"ok": True, "project": str(root), "entry": str(source)}, sort_keys=True))
+    smoke_test = tests_dir / "smoke.hf"
+    smoke_test.write_text(f"module {project_name}_tests\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "project": str(root), "entry": str(source), "tests": str(tests_dir)}, sort_keys=True))
     return 0
+
+
+def test_project(source_path: Path, target: str | None = None) -> int:
+    project = load_project(source_path)
+    tests_dir = project.root / "tests"
+    test_sources = sorted(tests_dir.glob("*.hf")) if tests_dir.is_dir() else []
+    results: list[dict[str, object]] = []
+    with tempfile.TemporaryDirectory(prefix="holyfitra-tests-") as temporary:
+        temporary_root = Path(temporary)
+        for test_source in test_sources:
+            executable = temporary_root / test_source.stem
+            try:
+                with contextlib.redirect_stdout(io.StringIO()):
+                    build(test_source, executable, target or project.target)
+                completed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
+                results.append({"name": test_source.stem, "source": str(test_source), "status": completed.returncode, "passed": completed.returncode == 0})
+            except (HolyFitraError, OSError, subprocess.SubprocessError) as error:
+                results.append({"name": test_source.stem, "source": str(test_source), "status": None, "passed": False, "error": str(error)})
+    passed = all(bool(result["passed"]) for result in results)
+    print(json.dumps({"ok": passed, "project": str(project.root), "tests": results, "count": len(results)}, indent=2, sort_keys=True))
+    return 0 if passed else 1
 
 
 def package_file(source_path: Path, output: Path, version: str, target: str | None = None) -> int:
@@ -1247,6 +1274,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
     plan_parser.add_argument("source", type=Path)
     plan_parser.add_argument("-o", "--output", type=Path)
+    test_parser = subparsers.add_parser("test", help="build and run standalone Holy Fitra tests in a project")
+    test_parser.add_argument("source", type=Path)
+    test_parser.add_argument("--target")
     package_parser = subparsers.add_parser("package", help="create an integrity-checked Holy Fitra package manifest")
     package_parser.add_argument("source", type=Path)
     package_parser.add_argument("-o", "--output", type=Path, required=True)
@@ -1294,6 +1324,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return check_file(args.source)
         if args.command == "plan":
             return plan_file(args.source, args.output)
+        if args.command == "test":
+            return test_project(args.source, args.target)
         if args.command == "package":
             return package_file(args.source, args.output, args.version, args.target)
         if args.command == "emit-llvm":
