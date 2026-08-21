@@ -111,6 +111,12 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             matrix.configure_adaptive_hybrid_cache(max_error=0.01, alpha=1.5)
 
+    def test_adaptive_cache_accepts_runtime_timestamp_without_clock_read(self):
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="adaptive_hybrid", max_reconstruction_error=0.01, promote_after=3)
+        with patch("hyperc_quantized_transformer.time.perf_counter_ns", side_effect=AssertionError("duplicate clock read")):
+            matrix.matmat(self.calibration, access_timestamp_ns=0)
+        self.assertEqual(matrix.adaptive_promotion_stats["access_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

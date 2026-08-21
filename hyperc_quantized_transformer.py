@@ -178,7 +178,7 @@ class QuantizedMatrix:
             return out
         return result
 
-    def matmat(self, matrix: np.ndarray) -> np.ndarray:
+    def matmat(self, matrix: np.ndarray, *, access_timestamp_ns: int | None = None) -> np.ndarray:
         matrix = np.ascontiguousarray(matrix, dtype=np.float32)
         if matrix.ndim != 2 or matrix.shape[1] != self._raw_shape[0]:
             raise ValueError("matrix dimension mismatch")
@@ -186,7 +186,7 @@ class QuantizedMatrix:
             if self._reconstructed_weight is None:
                 self.configure_reconstruction_cache("f32")
             if self._adaptive_promote_after is not None:
-                if self._observe_adaptive_access(matrix.shape[0]):
+                if self._observe_adaptive_access(matrix.shape[0], now_ns=access_timestamp_ns):
                     self.configure_reconstruction_cache("f32")
             elif self._hybrid_promote_after is not None:
                 self._matmat_calls += 1
