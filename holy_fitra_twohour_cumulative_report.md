@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `73e648e` on `master` before the current learning milestone is published.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `1b59d86` on `master` before the current reinforcement-learning milestone is published.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -17,7 +17,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | 10 | Caller-supplied adaptive access timestamps | 103 tests; Termux/native/sanitizer gates; identical promotion decisions; hot-path median 0.0212665 ms versus 0.0277815 ms internal-clock baseline | `48a0b2d` |
 | 11 | Bounded inactivity demotion from float32 to quality-gated float16 | 105 tests; Termux/native/sanitizer gates; 24,576 bytes reclaimed in the measured 128×96 cache | `a4a423a` |
 | 12 | Batch-size-aware adaptive promotion bonus | 106 tests; Termux/native/sanitizer gates; small 24-row burst stayed cold while large 512-row burst promoted | `73e648e` |
-| Learning 1 | Trainable MLP, Adam, mini-batch updates, replay, checkpoints, and evaluation | 111 tests; Termux/native/sanitizer gates; MSE 9.63383 → 0.009044; checkpoint prediction error 0.0 | Pending |
+| Learning 1 | Trainable MLP, Adam, mini-batch updates, replay, checkpoints, and evaluation | 111 tests; Termux/native/sanitizer gates; MSE 9.63383 → 0.009044; checkpoint prediction error 0.0 | `1b59d86` |
+| RL 1 | Bounded REINFORCE controller for dynamic cache thresholds and large-batch bonus | 116 tests; Termux/native/sanitizer gates; live policy updates over actual QuantizedMatrix traces; policy checkpoint round-trip | Pending |
 
 ## Rejected work
 
@@ -25,7 +26,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **111 tests with 0 failures**.
+The current full applicable Python suite passes **116 tests with 0 failures**.
  Termux-compatible host validation passes compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. ASAN/UBSAN validation passes for the ragged scheduler executable and sanitized NibbleFlow shared-library build.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
@@ -33,6 +34,10 @@ The sandbox host is x86-64. AArch64 object emission and cross-compilation are va
 ## Loop policy
 
 Every candidate is evaluated against complete regression tests and applicable native gates. A candidate is retained only when it passes semantic and safety checks and does not introduce a measured regression. Quantization proof gates, evidence monotonicity, capability authorization, speculative-cache safety, and Android fallback contracts remain enforced.
+
+## RL threshold milestone retained
+
+Holy Fitra now includes a bounded linear-softmax REINFORCE controller for dynamic promotion thresholds. It uses runtime access frequency, hot streak, batch-size load, promotion state, and cache-memory ratio; applies bounded actions; updates from latency/memory/quality rewards; and persists policy state in checkpoints. The controller cannot bypass reconstruction-error or memory-safety gates.
 
 ## Learning milestone retained
 

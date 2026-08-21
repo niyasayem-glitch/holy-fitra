@@ -131,6 +131,18 @@ class QuantizedMatrix:
         self._adaptive_last_access_ns = None
         return {**result, "mode": "adaptive_hybrid", "promote_after": promote_after, "alpha": alpha, "hysteresis": hysteresis, "burst_window_ms": burst_window_ms, "demote_after_ms": demote_after_ms, "large_batch_rows": large_batch_rows, "large_batch_bonus": large_batch_bonus}
 
+    def set_adaptive_policy(self, *, promote_after: int | None = None, large_batch_bonus: int | None = None) -> dict[str, int]:
+        if self._adaptive_max_error is None and self._adaptive_promote_after is None:
+            raise ValueError("adaptive policy requires an adaptive hybrid cache")
+        threshold = self._adaptive_promote_after if promote_after is None else int(promote_after)
+        bonus = self._adaptive_large_batch_bonus if large_batch_bonus is None else int(large_batch_bonus)
+        if threshold is None or threshold <= 0 or threshold > 64 or bonus < 0 or bonus > 16:
+            raise ValueError("adaptive policy action is outside safety bounds")
+        self._adaptive_promote_after = threshold
+        self._adaptive_base_promote_after = threshold
+        self._adaptive_large_batch_bonus = bonus
+        return {"promote_after": threshold, "large_batch_bonus": bonus}
+
     def configure_hybrid_reconstruction_cache(self, *, max_error: float | None = None, promote_after: int = 4) -> dict[str, float | int | str]:
         if promote_after <= 0:
             raise ValueError("promote_after must be positive")
@@ -193,12 +205,14 @@ class QuantizedMatrix:
 
     @property
     def adaptive_promotion_stats(self) -> dict[str, float | int | str | None]:
-        batch_mode = "adaptive_hybrid" if self._adaptive_promote_after is not None else self.reconstruction_cache_mode
-        return {"mode": batch_mode, "access_count": self._adaptive_access_count, "hot_streak": self._adaptive_hot_streak, "frequency_ewma": self._adaptive_frequency_ewma, "promoted": self._adaptive_promote_after is None and self._reconstructed_weight is not None and self._reconstruction_dtype == "f32", "threshold": self._adaptive_promote_after, "demote_after_ns": self._adaptive_demote_after_ns, "large_batch_rows": self._adaptive_large_batch_rows, "large_batch_bonus": self._adaptive_large_batch_bonus}
+        batch_mode = "adaptive_hybrid" if self._adaptive_max_error is not None and self._reconstruction_dtype != "f32" else self.reconstruction_cache_mode
+        return {"mode": batch_mode, "access_count": self._adaptive_access_count, "hot_streak": self._adaptive_hot_streak, "frequency_ewma": self._adaptive_frequency_ewma, "promoted": self._adaptive_max_error is not None and self._reconstructed_weight is not None and self._reconstruction_dtype == "f32", "threshold": self._adaptive_promote_after, "demote_after_ns": self._adaptive_demote_after_ns, "large_batch_rows": self._adaptive_large_batch_rows, "large_batch_bonus": self._adaptive_large_batch_bonus}
 
     @property
     def reconstruction_cache_mode(self) -> str:
-        if self._adaptive_promote_after is not None:
+        if self._reconstruction_dtype == "f32":
+            return "f32"
+        if self._adaptive_promote_after is not None or self._adaptive_max_error is not None:
             return "adaptive_cold"
         if self._hybrid_promote_after is not None:
             return "hybrid_cold"

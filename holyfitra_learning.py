@@ -238,7 +238,7 @@ def _validate_dataset(inputs: np.ndarray, targets: np.ndarray, input_dim: int, o
     return np.ascontiguousarray(x), np.ascontiguousarray(y)
 
 
-def train_supervised(model: TrainableMLP, inputs: np.ndarray, targets: np.ndarray, *, config: TrainingConfig | None = None, optimizer: Adam | None = None, replay: ReplayBuffer | None = None, eval_data: tuple[np.ndarray, np.ndarray] | None = None, checkpoint_path: str | os.PathLike[str] | None = None) -> TrainingHistory:
+def train_supervised(model: TrainableMLP, inputs: np.ndarray, targets: np.ndarray, *, config: TrainingConfig | None = None, optimizer: Adam | None = None, replay: ReplayBuffer | None = None, eval_data: tuple[np.ndarray, np.ndarray] | None = None, checkpoint_path: str | os.PathLike[str] | None = None, threshold_controller: Any | None = None) -> TrainingHistory:
     config = config or TrainingConfig()
     x, y = _validate_dataset(inputs, targets, model.input_dim, model.output_dim)
     if eval_data is not None:
@@ -275,13 +275,13 @@ def train_supervised(model: TrainableMLP, inputs: np.ndarray, targets: np.ndarra
         if eval_data is not None:
             history.eval_losses.append(evaluate_mse(model, eval_data[0], eval_data[1]))
         if checkpoint_path is not None and config.checkpoint_every and (epoch + 1) % config.checkpoint_every == 0:
-            save_checkpoint(checkpoint_path, model, optimizer, replay=replay, step=epoch + 1, metadata={"loss": history.losses[-1]})
+            save_checkpoint(checkpoint_path, model, optimizer, replay=replay, threshold_controller=threshold_controller, step=epoch + 1, metadata={"loss": history.losses[-1]})
     if checkpoint_path is not None:
-        save_checkpoint(checkpoint_path, model, optimizer, replay=replay, step=config.epochs, metadata={"loss": history.final_loss})
+        save_checkpoint(checkpoint_path, model, optimizer, replay=replay, threshold_controller=threshold_controller, step=config.epochs, metadata={"loss": history.final_loss})
     return history
 
 
-def save_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer: Adam, *, replay: ReplayBuffer | None = None, step: int = 0, metadata: dict[str, Any] | None = None) -> None:
+def save_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer: Adam, *, replay: ReplayBuffer | None = None, threshold_controller: Any | None = None, step: int = 0, metadata: dict[str, Any] | None = None) -> None:
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     arrays: dict[str, np.ndarray] = {}
@@ -294,7 +294,7 @@ def save_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer
         replay_state = replay.state_dict()
         arrays["replay_inputs"] = replay_state["inputs"]
         arrays["replay_targets"] = replay_state["targets"]
-    manifest = {"version": 1, "step": int(step), "model": {"input_dim": model.input_dim, "hidden_dim": model.hidden_dim, "output_dim": model.output_dim}, "optimizer": {"step_count": optimizer.step_count}, "replay": None if replay is None else {"capacity": replay.capacity, "seen": replay.seen}, "metadata": metadata or {}}
+    manifest = {"version": 1, "step": int(step), "model": {"input_dim": model.input_dim, "hidden_dim": model.hidden_dim, "output_dim": model.output_dim}, "optimizer": {"step_count": optimizer.step_count}, "replay": None if replay is None else {"capacity": replay.capacity, "seen": replay.seen}, "threshold_controller": None if threshold_controller is None else threshold_controller.state_dict(), "metadata": metadata or {}}
     with tempfile.NamedTemporaryFile(prefix=destination.name + ".", suffix=".tmp", dir=destination.parent, delete=False) as handle:
         temporary = Path(handle.name)
         np.savez_compressed(handle, manifest=np.asarray(json.dumps(manifest, sort_keys=True)), **arrays)
@@ -303,7 +303,7 @@ def save_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer
     os.replace(temporary, destination)
 
 
-def load_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer: Adam, *, replay: ReplayBuffer | None = None) -> dict[str, Any]:
+def load_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer: Adam, *, replay: ReplayBuffer | None = None, threshold_controller: Any | None = None) -> dict[str, Any]:
     with np.load(path, allow_pickle=False) as archive:
         manifest = json.loads(str(archive["manifest"].item()))
         if manifest.get("version") != 1 or manifest.get("model") != {"input_dim": model.input_dim, "hidden_dim": model.hidden_dim, "output_dim": model.output_dim}:
@@ -314,6 +314,8 @@ def load_checkpoint(path: str | os.PathLike[str], model: TrainableMLP, optimizer
         optimizer.load_state_dict(optimizer_state, model.parameters)
         if replay is not None and "replay_inputs" in archive and "replay_targets" in archive:
             replay.load_state_dict({"inputs": np.asarray(archive["replay_inputs"]), "targets": np.asarray(archive["replay_targets"]), "seen": int(manifest.get("replay", {}).get("seen", 0))})
+        if threshold_controller is not None and manifest.get("threshold_controller") is not None:
+            threshold_controller.load_state_dict(manifest["threshold_controller"])
         return manifest
 
 
