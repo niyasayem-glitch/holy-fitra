@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `3dee993` on `master`, containing the aggregate seed-substrate milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `19891df` on `master`, containing the typed dynamic-array and source-I/O substrate milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -173,3 +173,12 @@ Holy Fitra now has an expanded no-Python C++17 Stage-0 seed compiler in `holyfit
 `bootstrap/test_bootstrap.sh` validates strict C++17 compilation, host execution with exit code 42, control-flow execution with exit code 1, aggregate execution with exit code 42, fail-closed type diagnostics, non-empty `aarch64-linux-android21` object generation, and operation with Python removed from the environment and `PATH`. The measured AArch64 fixture object was 1,040 bytes in the x86-64 sandbox. The full Termux-compatible gate passed **129 tests** and included the aggregate bootstrap gate.
 
 This is **not yet the fully self-compiled compiler**. The seed still lacks dynamic arrays, pointers/handles, imports, file/process APIs, effects, tasks, hybrids, tensors, and the compiler-core standard library. The next retained self-hosting milestone is a minimal `compiler/main.hf` compiler core compiled by this seed, followed by Stage-1 self-rebuild and fixed-point verification. No physical Android execution or performance claim is made.
+
+
+## Source-I/O and typed heap-handle substrate
+
+The no-Python Stage-0 seed now supports typed `dyn<i32>` handles, bounded dynamic-array runtime calls, read-only `file` handles, source-file loading, and LLVM declarations for the runtime ABI. The runtime implements `hf_dyn_i32_new`, `hf_dyn_i32_push`, `hf_dyn_i32_len`, `hf_dyn_i32_get`, `hf_dyn_i32_free`, `hf_file_open`, `hf_file_read_all`, `hf_file_close`, and `hf_read_text`.
+
+The `bootstrap/io.hf` fixture allocates a dynamic array, pushes two values, reads an element, opens and reads a source file through both convenience and explicit file-handle APIs, releases the dynamic handle, and exits with status 2. The runtime contract test passed under ASAN/UBSAN, including zero/oversized capacity rejection, push-overflow rejection, indexed reads, release, and missing-file behavior. The bootstrap gate also emitted a non-empty `aarch64-linux-android21` object from the I/O LLVM.
+
+The full Termux-compatible host gate passed **129 tests**. Validation occurred on x86-64; AArch64 object generation is an artifact check only, and no physical Android execution, performance, thermal, or battery claim is made. This is still a compiler-core substrate milestone, not a complete self-hosting claim. The milestone commit is `19891df`.

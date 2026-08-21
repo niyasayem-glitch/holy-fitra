@@ -1,0 +1,15 @@
+module io
+
+fn main() -> i32 {
+    let path: string = "bootstrap/source_sample.hf"
+    let source: string = hf_read_text(path)
+    let file: file = hf_file_open(path)
+    let second_read: string = hf_file_read_all(file)
+    hf_file_close(file)
+    let values: dyn<i32> = hf_dyn_i32_new(4)
+    let first_ok: bool = hf_dyn_i32_push(values, 40)
+    let second_ok: bool = hf_dyn_i32_push(values, 2)
+    let answer: i32 = hf_dyn_i32_get(values, 1)
+    hf_dyn_i32_free(values)
+    return answer
+}

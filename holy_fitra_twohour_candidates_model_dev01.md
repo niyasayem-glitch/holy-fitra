@@ -131,3 +131,10 @@ The no-Python Stage-0 compiler now supports named structs, fixed arrays, string 
 The bootstrap gate passed strict C++17 compilation, scalar and control-flow fixtures, aggregate execution, fail-closed invalid-type diagnostics, AArch64 object generation, and Python-free invocation. The full Termux-compatible host gate passed **129 tests** and included the updated aggregate bootstrap gate. The measured AArch64 fixture object was 1,040 bytes on the x86-64 sandbox.
 
 This remains a compiler-core substrate milestone rather than a complete self-hosting claim. Dynamic arrays, pointer/handle APIs, file/process services, imports, effects, tasks, hybrids, and the `compiler/main.hf` self-hosted compiler core remain to be implemented.
+
+
+## Dynamic arrays and source-file I/O verification
+
+The Stage-0 seed now exposes typed opaque `dyn<i32>` handles and `file` handles. The compiler validates builtin names, argument counts, handle types, integer capacities/indices, and return types, then emits LLVM declarations and direct calls. The dependency-free C runtime bounds dynamic capacity at one million i32 elements and file reads at 64 MiB. Invalid handles and out-of-bounds dynamic reads fail closed without undefined memory access.
+
+The `bootstrap/io.hf` fixture passed native execution with exit code 2 after allocating, pushing, reading, and freeing a dynamic array and opening/reading/closing a source file. The runtime safety test passed ASAN/UBSAN. The bootstrap gate passed host, aggregate, I/O, invalid-diagnostic, Python-free, and AArch64-object checks. The complete Termux-compatible host gate passed **129 tests**. This remains a compiler-core substrate milestone; arbitrary element types, dynamic resizing, general pointers, write-mode files, and the self-hosted compiler core remain future work.

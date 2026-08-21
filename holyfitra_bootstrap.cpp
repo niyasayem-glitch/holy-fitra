@@ -21,6 +21,7 @@
 #include <optional>
 #include <sstream>
 #include <stdexcept>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -114,7 +115,7 @@ private:
     int column_ = 1;
 };
 
-enum class TypeKind { I32, I64, Bool, Void, String, Array, Struct };
+enum class TypeKind { I32, I64, Bool, Void, String, Handle, File, Array, DynamicArray, Struct };
 
 struct Type final {
     TypeKind kind = TypeKind::Void;
@@ -125,12 +126,13 @@ struct Type final {
 
     static Type scalar(TypeKind kind) { Type type; type.kind = kind; return type; }
     static Type array(std::size_t count, Type element) { Type type; type.kind = TypeKind::Array; type.count = count; type.element = std::make_shared<Type>(std::move(element)); return type; }
+    static Type dynamicArray(Type element) { Type type; type.kind = TypeKind::DynamicArray; type.element = std::make_shared<Type>(std::move(element)); return type; }
     static Type structure(std::string name, std::vector<std::pair<std::string, Type>> fields = {}) { Type type; type.kind = TypeKind::Struct; type.name = std::move(name); type.fields = std::move(fields); return type; }
 
     bool operator==(const Type& other) const {
         if (kind != other.kind) return false;
         if (kind == TypeKind::Struct) return name == other.name;
-        if (kind == TypeKind::Array) return count == other.count && element && other.element && *element == *other.element;
+        if (kind == TypeKind::Array || kind == TypeKind::DynamicArray) return count == other.count && element && other.element && *element == *other.element;
         return true;
     }
     bool operator!=(const Type& other) const { return !(*this == other); }
@@ -142,7 +144,10 @@ struct Type final {
             case TypeKind::Bool: return "bool";
             case TypeKind::Void: return "void";
             case TypeKind::String: return "string";
+            case TypeKind::Handle: return "handle";
+            case TypeKind::File: return "file";
             case TypeKind::Array: return "[" + std::to_string(count) + "]" + element->display();
+            case TypeKind::DynamicArray: return "dyn<" + element->display() + ">";
             case TypeKind::Struct: return name;
         }
         return "unknown";
@@ -154,7 +159,10 @@ struct Type final {
             case TypeKind::Bool: return "i1";
             case TypeKind::Void: return "void";
             case TypeKind::String: return "ptr";
+            case TypeKind::Handle: return "ptr";
+            case TypeKind::File: return "ptr";
             case TypeKind::Array: return "[" + std::to_string(count) + " x " + element->llvm() + "]";
+            case TypeKind::DynamicArray: return "ptr";
             case TypeKind::Struct: return "%struct." + name;
         }
         return "void";
@@ -198,8 +206,30 @@ struct WhileStatement final : Statement { WhileStatement(ExprPtr c,std::vector<S
 struct ExpressionStatement final : Statement { ExpressionStatement(ExprPtr e,int l,int c):Statement(Kind::Expression,l,c),expression(std::move(e)){} ExprPtr expression; };
 
 struct Parameter final { std::string name; Type type; };
-struct Function final { std::string name; std::vector<Parameter> parameters; Type return_type; std::vector<StatementPtr> body; int line = 0; };
+struct Function final { std::string name; std::vector<Parameter> parameters; Type return_type; std::vector<StatementPtr> body; int line = 0; bool builtin = false; };
 struct Program final { std::string module = "anonymous"; std::vector<StructDecl> structs; std::vector<Function> functions; };
+
+static const std::vector<Function>& builtinFunctions() {
+    static const std::vector<Function> functions = [] {
+        std::vector<Function> result;
+        result.emplace_back(Function{"hf_dyn_i32_new", {{"capacity", Type::scalar(TypeKind::I64)}}, Type::dynamicArray(Type::scalar(TypeKind::I32)), {}, 0, true});
+        result.emplace_back(Function{"hf_dyn_i32_push", {{"array", Type::dynamicArray(Type::scalar(TypeKind::I32))}, {"value", Type::scalar(TypeKind::I32)}}, Type::scalar(TypeKind::Bool), {}, 0, true});
+        result.emplace_back(Function{"hf_dyn_i32_len", {{"array", Type::dynamicArray(Type::scalar(TypeKind::I32))}}, Type::scalar(TypeKind::I64), {}, 0, true});
+        result.emplace_back(Function{"hf_dyn_i32_get", {{"array", Type::dynamicArray(Type::scalar(TypeKind::I32))}, {"index", Type::scalar(TypeKind::I64)}}, Type::scalar(TypeKind::I32), {}, 0, true});
+        result.emplace_back(Function{"hf_dyn_i32_free", {{"array", Type::dynamicArray(Type::scalar(TypeKind::I32))}}, Type::scalar(TypeKind::Void), {}, 0, true});
+        result.emplace_back(Function{"hf_file_open", {{"path", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::File), {}, 0, true});
+        result.emplace_back(Function{"hf_file_read_all", {{"file", Type::scalar(TypeKind::File)}}, Type::scalar(TypeKind::String), {}, 0, true});
+        result.emplace_back(Function{"hf_file_close", {{"file", Type::scalar(TypeKind::File)}}, Type::scalar(TypeKind::Void), {}, 0, true});
+        result.emplace_back(Function{"hf_read_text", {{"path", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::String), {}, 0, true});
+        return result;
+    }();
+    return functions;
+}
+
+static const Function* findBuiltin(const std::string& name) {
+    for (const auto& function : builtinFunctions()) if (function.name == name) return &function;
+    return nullptr;
+}
 
 class Parser final {
 public:
@@ -237,7 +267,7 @@ private:
     }
     Type parseType() {
         if(accept(TokenKind::Punctuation,"[")) { Token n=expect(TokenKind::Integer,"array length"); expectText(TokenKind::Punctuation,"]"); std::size_t count=static_cast<std::size_t>(std::stoull(n.text)); if(count==0) fail("array length must be positive",n.line,n.column); return Type::array(count,parseType()); }
-        Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); return Type::structure(t.text);
+        Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); if(t.text=="handle")return Type::scalar(TypeKind::Handle); if(t.text=="file")return Type::scalar(TypeKind::File); if(t.text=="dyn"){expectText(TokenKind::Operator,"<");Type element=parseType();expectText(TokenKind::Operator,">");return Type::dynamicArray(std::move(element));} return Type::structure(t.text);
     }
     std::vector<StatementPtr> parseBlock() { expectText(TokenKind::Punctuation,"{"); std::vector<StatementPtr> body; while(!accept(TokenKind::Punctuation,"}")){if(is(TokenKind::Eof))unexpected("'}'");body.push_back(parseStatement());}return body; }
     StatementPtr parseStatement() {
@@ -270,9 +300,10 @@ std::vector<ExprPtr> e;if(!accept(TokenKind::Punctuation,"]")){while(true){e.pus
 
 class Validator final {
 public:
-    void run(const Program& program){structs_.clear();functions_.clear();for(const auto& s:program.structs){if(structs_.count(s.name))fail("duplicate struct '"+s.name+"'",s.line,1);structs_[s.name]=&s;}for(const auto& f:program.functions){if(functions_.count(f.name))fail("duplicate function '"+f.name+"'",f.line,1);functions_[f.name]=&f;}for(const auto& f:program.functions)validateFunction(f);}
+    void run(const Program& program){structs_.clear();functions_.clear();for(const auto& s:program.structs){if(structs_.count(s.name))fail("duplicate struct '"+s.name+"'",s.line,1);structs_[s.name]=&s;}for(const auto& f:program.functions){if(functions_.count(f.name)||findBuiltin(f.name))fail("reserved or duplicate function '"+f.name+"'",f.line,1);functions_[f.name]=&f;}for(const auto& f:program.functions)validateFunction(f);}
 private:
     bool compatible(const Expr& e,const Type& a,const Type& b)const{return a==b||(e.kind==Expr::Kind::Integer&&a.kind==TypeKind::I32&&b.kind==TypeKind::I64);}
+    const Function* findFunction(const std::string& name) const { auto i=functions_.find(name); return i!=functions_.end()?i->second:findBuiltin(name); }
     const StructDecl& structure(const std::string& n,int l,int c)const{auto i=structs_.find(n);if(i==structs_.end())fail("unknown struct '"+n+"'",l,c);return *i->second;}
     Type infer(const Expr& e,std::unordered_map<std::string,Type>& vars)const{
         switch(e.kind){
@@ -280,11 +311,11 @@ private:
             case Expr::Kind::Name:{auto n=static_cast<const NameExpr&>(e).name;auto i=vars.find(n);if(i==vars.end())fail("unknown value '"+n+"'",e.line,e.column);return i->second;}
             case Expr::Kind::Unary:{auto&x=static_cast<const UnaryExpr&>(e);auto t=infer(*x.operand,vars);if(x.op=="-"&&(t.kind!=TypeKind::I32&&t.kind!=TypeKind::I64))fail("unary '-' requires integer",e.line,e.column);if(x.op=="!"&&t.kind!=TypeKind::Bool)fail("unary '!' requires bool",e.line,e.column);return t;}
             case Expr::Kind::Binary:{auto&x=static_cast<const BinaryExpr&>(e);auto a=infer(*x.left,vars),b=infer(*x.right,vars);if(a!=b)fail("binary operands have different types",e.line,e.column);if(x.op=="&&"||x.op=="||"){if(a.kind!=TypeKind::Bool)fail("logical operators require bool",e.line,e.column);return Type::scalar(TypeKind::Bool);}if(x.op=="=="||x.op=="!="||x.op=="<"||x.op=="<="||x.op==">"||x.op==">="){if(a.kind!=TypeKind::I32&&a.kind!=TypeKind::I64&&a.kind!=TypeKind::Bool)fail("unsupported comparison type",e.line,e.column);return Type::scalar(TypeKind::Bool);}if(a.kind!=TypeKind::I32&&a.kind!=TypeKind::I64)fail("arithmetic requires integer",e.line,e.column);return a;}
-            case Expr::Kind::Call:{auto&x=static_cast<const CallExpr&>(e);auto fi=functions_.find(x.name);if(fi==functions_.end())fail("unknown function '"+x.name+"'",e.line,e.column);const auto&f=*fi->second;if(x.arguments.size()!=f.parameters.size())fail("wrong argument count",e.line,e.column);for(std::size_t i=0;i<x.arguments.size();++i){auto a=infer(*x.arguments[i],vars);if(!compatible(*x.arguments[i],a,f.parameters[i].type))fail("argument type mismatch",e.line,e.column);}return f.return_type;}
+            case Expr::Kind::Call:{auto&x=static_cast<const CallExpr&>(e);const Function* fp=findFunction(x.name);if(!fp)fail("unknown function '"+x.name+"'",e.line,e.column);const auto&f=*fp;if(x.arguments.size()!=f.parameters.size())fail("wrong argument count",e.line,e.column);for(std::size_t i=0;i<x.arguments.size();++i){auto a=infer(*x.arguments[i],vars);if(!compatible(*x.arguments[i],a,f.parameters[i].type))fail("argument type mismatch",e.line,e.column);}return f.return_type;}
             case Expr::Kind::Array:{auto&x=static_cast<const ArrayExpr&>(e);if(x.elements.empty())fail("empty arrays require an explicit type",e.line,e.column);auto t=infer(*x.elements[0],vars);for(const auto&v:x.elements){auto a=infer(*v,vars);if(!compatible(*v,a,t))fail("array elements have different types",v->line,v->column);}return Type::array(x.elements.size(),t);}
             case Expr::Kind::Struct:{auto&x=static_cast<const StructExpr&>(e);auto&s=structure(x.name,e.line,e.column);if(x.fields.size()!=s.fields.size())fail("wrong struct field count",e.line,e.column);for(std::size_t i=0;i<s.fields.size();++i){if(x.fields[i].first!=s.fields[i].first)fail("struct fields must be in declaration order",e.line,e.column);auto a=infer(*x.fields[i].second,vars);if(!compatible(*x.fields[i].second,a,s.fields[i].second))fail("struct field type mismatch",e.line,e.column);}return Type::structure(x.name,s.fields);}
             case Expr::Kind::Field:{auto&x=static_cast<const FieldExpr&>(e);auto t=infer(*x.base,vars);if(t.kind!=TypeKind::Struct)fail("field access requires struct",e.line,e.column);for(auto&f:t.fields)if(f.first==x.field)return f.second;const auto&s=structure(t.name,e.line,e.column);for(auto&f:s.fields)if(f.first==x.field)return f.second;fail("unknown struct field",e.line,e.column);}
-            case Expr::Kind::Index:{auto&x=static_cast<const IndexExpr&>(e);auto t=infer(*x.base,vars);if(t.kind!=TypeKind::Array)fail("indexing requires fixed array",e.line,e.column);if(infer(*x.index,vars).kind!=TypeKind::I32)fail("array index must be i32",e.line,e.column);return *t.element;}
+            case Expr::Kind::Index:{auto&x=static_cast<const IndexExpr&>(e);auto t=infer(*x.base,vars);if(t.kind!=TypeKind::Array&&t.kind!=TypeKind::DynamicArray)fail("indexing requires an array",e.line,e.column);Type index=infer(*x.index,vars);if(index.kind!=TypeKind::I32&&index.kind!=TypeKind::I64)fail("array index must be an integer",e.line,e.column);return *t.element;}
         }fail("unsupported expression",e.line,e.column);
     }
     bool block(const std::vector<StatementPtr>& ss,std::unordered_map<std::string,Type>& vars,const Type& ret)const{bool r=false;for(const auto&sp:ss){if(r)break;switch(sp->kind){case Statement::Kind::Let:{auto&x=static_cast<const LetStatement&>(*sp);if(vars.count(x.name))fail("duplicate local",x.line,x.column);auto a=infer(*x.value,vars);if(x.declared&&!compatible(*x.value,a,*x.declared))fail("declared type does not match initializer",x.line,x.column);vars[x.name]=x.declared.value_or(a);break;}case Statement::Kind::Return:{auto&x=static_cast<const ReturnStatement&>(*sp);if(ret.kind==TypeKind::Void){if(x.value)fail("void function cannot return value",x.line,x.column);}else{if(!x.value)fail("missing return value",x.line,x.column);auto a=infer(*x.value,vars);if(!compatible(*x.value,a,ret))fail("return type mismatch",x.line,x.column);}r=true;break;}case Statement::Kind::If:{auto&x=static_cast<const IfStatement&>(*sp);if(infer(*x.condition,vars).kind!=TypeKind::Bool)fail("if condition must be bool",x.line,x.column);auto a=vars,b=vars;bool ar=block(x.then_body,a,ret),br=!x.else_body.empty()&&block(x.else_body,b,ret);r=ar&&br;break;}case Statement::Kind::While:{auto&x=static_cast<const WhileStatement&>(*sp);if(infer(*x.condition,vars).kind!=TypeKind::Bool)fail("while condition must be bool",x.line,x.column);auto a=vars;block(x.body,a,ret);break;}case Statement::Kind::Expression:infer(*static_cast<const ExpressionStatement&>(*sp).expression,vars);break;}}return r;}
@@ -295,12 +326,13 @@ private:
 class LLVMEmitter final {
 public:
     LLVMEmitter(const Program& p,std::string target):program_(p),target_(std::move(target)){for(const auto&f:p.functions)functions_[f.name]=&f;for(const auto&s:p.structs)structs_[s.name]=&s;}
-    std::string emit(){collectStrings();std::ostringstream o;o<<"; Holy Fitra Stage-0 aggregate bootstrap module "<<program_.module<<"\n; target: "<<target_<<"\n";if(target_.rfind("aarch64",0)==0)o<<"; ABI: AAPCS64\n; vector capability: NEON when available\n";o<<"target triple = \""<<target_<<"\"\n\n";for(const auto&s:program_.structs){o<<"%struct."<<s.name<<" = type { ";for(std::size_t i=0;i<s.fields.size();++i){if(i)o<<", ";o<<s.fields[i].second.llvm();}o<<" }\n";}if(!program_.structs.empty())o<<"\n";for(const auto&g:strings_)o<<"@.str."<<g.second<<" = private unnamed_addr constant ["<<g.first.size()+1<<" x i8] c\""<<escape(g.first)<<"\\00\"\n";if(!strings_.empty())o<<"\n";for(const auto&f:program_.functions){emitFunction(f,o);o<<"\n";}return o.str();}
+    std::string emit(){collectStrings();std::ostringstream o;o<<"; Holy Fitra Stage-0 aggregate bootstrap module "<<program_.module<<"\n; target: "<<target_<<"\n";if(target_.rfind("aarch64",0)==0)o<<"; ABI: AAPCS64\n; vector capability: NEON when available\n";o<<"target triple = \""<<target_<<"\"\n\n";for(const auto&s:program_.structs){o<<"%struct."<<s.name<<" = type { ";for(std::size_t i=0;i<s.fields.size();++i){if(i)o<<", ";o<<s.fields[i].second.llvm();}o<<" }\n";}if(!program_.structs.empty())o<<"\n";for(const auto&g:strings_)o<<"@.str."<<g.second<<" = private unnamed_addr constant ["<<g.first.size()+1<<" x i8] c\""<<escape(g.first)<<"\\00\"\n";if(!strings_.empty())o<<"\n";for(const auto&f:builtinFunctions()){o<<"declare "<<f.return_type.llvm()<<" @"<<f.name<<"(";for(std::size_t i=0;i<f.parameters.size();++i){if(i)o<<", ";o<<f.parameters[i].type.llvm();}o<<")\n";}if(!builtinFunctions().empty())o<<"\n";for(const auto&f:program_.functions){emitFunction(f,o);o<<"\n";}return o.str();}
 private:
     struct Local{Type type;std::string addr;};
+    const Function& function(const std::string& name) const { auto i=functions_.find(name); if(i!=functions_.end()) return *i->second; if(const Function* b=findBuiltin(name)) return *b; fail("unknown function '"+name+"'"); }
     std::string tmp(){return "%t"+std::to_string(temp_++);}std::string label(const std::string&p){return p+std::to_string(label_++);}static std::string escape(const std::string&s){std::ostringstream o;for(unsigned char c:s){if(c=='\\')o<<"\\5C";else if(c=='"')o<<"\\22";else if(c=='\n')o<<"\\0A";else if(c<32||c>126){const char*hex="0123456789ABCDEF";o<<"\\"<<hex[c>>4]<<hex[c&15];}else o<<c;}return o.str();}
     void collectStrings(){for(const auto&f:program_.functions)collectBlock(f.body);}void collectBlock(const std::vector<StatementPtr>&ss){for(const auto&sp:ss){if(sp->kind==Statement::Kind::Let)collectExpr(*static_cast<const LetStatement&>(*sp).value);else if(sp->kind==Statement::Kind::Return&&static_cast<const ReturnStatement&>(*sp).value)collectExpr(*static_cast<const ReturnStatement&>(*sp).value);else if(sp->kind==Statement::Kind::Expression)collectExpr(*static_cast<const ExpressionStatement&>(*sp).expression);else if(sp->kind==Statement::Kind::If){auto&x=static_cast<const IfStatement&>(*sp);collectExpr(*x.condition);collectBlock(x.then_body);collectBlock(x.else_body);}else if(sp->kind==Statement::Kind::While){auto&x=static_cast<const WhileStatement&>(*sp);collectExpr(*x.condition);collectBlock(x.body);}}}void collectExpr(const Expr&e){if(e.kind==Expr::Kind::String){auto&s=static_cast<const StringExpr&>(e).value;if(!strings_.count(s))strings_[s]=strings_.size();}else if(e.kind==Expr::Kind::Unary)collectExpr(*static_cast<const UnaryExpr&>(e).operand);else if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);collectExpr(*x.left);collectExpr(*x.right);}else if(e.kind==Expr::Kind::Call){for(auto&x:static_cast<const CallExpr&>(e).arguments)collectExpr(*x);}else if(e.kind==Expr::Kind::Array){for(auto&x:static_cast<const ArrayExpr&>(e).elements)collectExpr(*x);}else if(e.kind==Expr::Kind::Struct){for(auto&x:static_cast<const StructExpr&>(e).fields)collectExpr(*x.second);}else if(e.kind==Expr::Kind::Field)collectExpr(*static_cast<const FieldExpr&>(e).base);else if(e.kind==Expr::Kind::Index){auto&x=static_cast<const IndexExpr&>(e);collectExpr(*x.base);collectExpr(*x.index);}}
-    Type localType(const Expr&e)const{if(e.kind==Expr::Kind::Integer)return Type::scalar(TypeKind::I32);if(e.kind==Expr::Kind::Boolean)return Type::scalar(TypeKind::Bool);if(e.kind==Expr::Kind::String)return Type::scalar(TypeKind::String);if(e.kind==Expr::Kind::Array){auto&x=static_cast<const ArrayExpr&>(e);return Type::array(x.elements.size(),localType(*x.elements[0]));}if(e.kind==Expr::Kind::Struct)return Type::structure(static_cast<const StructExpr&>(e).name);if(e.kind==Expr::Kind::Call)return functions_.at(static_cast<const CallExpr&>(e).name)->return_type;if(e.kind==Expr::Kind::Name)return locals_.at(static_cast<const NameExpr&>(e).name).type;if(e.kind==Expr::Kind::Field){auto&x=static_cast<const FieldExpr&>(e);Type b=localType(*x.base);auto&s=*structs_.at(b.name);for(auto&f:s.fields)if(f.first==x.field)return f.second;}if(e.kind==Expr::Kind::Index)return *localType(*static_cast<const IndexExpr&>(e).base).element;return Type::scalar(TypeKind::I32);}
+    Type localType(const Expr&e)const{if(e.kind==Expr::Kind::Integer)return Type::scalar(TypeKind::I32);if(e.kind==Expr::Kind::Boolean)return Type::scalar(TypeKind::Bool);if(e.kind==Expr::Kind::String)return Type::scalar(TypeKind::String);if(e.kind==Expr::Kind::Array){auto&x=static_cast<const ArrayExpr&>(e);return Type::array(x.elements.size(),localType(*x.elements[0]));}if(e.kind==Expr::Kind::Struct)return Type::structure(static_cast<const StructExpr&>(e).name);if(e.kind==Expr::Kind::Call)return function(static_cast<const CallExpr&>(e).name).return_type;if(e.kind==Expr::Kind::Name)return locals_.at(static_cast<const NameExpr&>(e).name).type;if(e.kind==Expr::Kind::Field){auto&x=static_cast<const FieldExpr&>(e);Type b=localType(*x.base);auto&s=*structs_.at(b.name);for(auto&f:s.fields)if(f.first==x.field)return f.second;}if(e.kind==Expr::Kind::Index)return *localType(*static_cast<const IndexExpr&>(e).base).element;return Type::scalar(TypeKind::I32);}
     std::pair<std::string,Type> expr(const Expr&e,std::ostringstream&o,std::optional<Type> expected=std::nullopt){
         if(e.kind==Expr::Kind::Integer){return {std::to_string(static_cast<const IntegerExpr&>(e).value),expected.value_or(Type::scalar(TypeKind::I32))};}
         if(e.kind==Expr::Kind::Boolean){return {static_cast<const BooleanExpr&>(e).value?"1":"0",expected.value_or(Type::scalar(TypeKind::Bool))
@@ -308,9 +340,10 @@ private:
         if(e.kind==Expr::Kind::String){auto&s=static_cast<const StringExpr&>(e).value;auto id=strings_.at(s);auto r=tmp();o<<"  "<<r<<" = getelementptr inbounds ["<<s.size()+1<<" x i8], ptr @.str."<<id<<", i64 0, i64 0\n";return {r,Type::scalar(TypeKind::String)};}
         if(e.kind==Expr::Kind::Name){auto&n=static_cast<const NameExpr&>(e).name;auto&l=locals_.at(n);auto r=tmp();o<<"  "<<r<<" = load "<<l.type.llvm()<<", ptr "<<l.addr<<"\n";return {r,l.type};}
         if(e.kind==Expr::Kind::Unary){auto&x=static_cast<const UnaryExpr&>(e);auto a=expr(*x.operand,o);auto r=tmp();if(x.op=="-")o<<"  "<<r<<" = sub "<<a.second.llvm()<<" 0, "<<a.first<<"\n";else o<<"  "<<r<<" = xor i1 "<<a.first<<", 1\n";return {r,a.second};}
-        if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);auto a=expr(*x.left,o),b=expr(*x.right,o);auto r=tmp();if(x.op=="&&"||x.op=="||")o<<"  "<<r<<" = "<<(x.op=="&&"?"and":"or")<<" i1 "<<a.first<<", "<<b.first<<"\n";else if(x.op=="+"||x.op=="-"||x.op=="*"||x.op=="/")o<<"  "<<r<<" = "<<(x.op=="+"?"add":x.op=="-"?"sub":x.op=="*"?"mul":"sdiv")<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";else{o<<"  "<<r<<" = icmp "<<std::map<std::string,std::string>{{"==","eq"},{"!=","ne"},{"<","slt"},{"<=","sle"},{">","sgt"},{">=","sge"}}.at(x.op)<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";return {r,Type::scalar(TypeKind::Bool)};}return {r,(x.op=="&&"||x.op=="||")?Type::scalar(TypeKind::Bool):a.second};}
-        if(e.kind==Expr::Kind::Call){auto&x=static_cast<const CallExpr&>(e);auto&f=*functions_.at(x.name);std::vector<std::pair<std::string,Type>>a;for(std::size_t i=0;i<x.arguments.size();++i)a.push_back(expr(*x.arguments[i],o,f.parameters[i].type));std::ostringstream args;for(std::size_t i=0;i<a.size();++i){if(i)args<<", ";args<<f.parameters[i].type.llvm()<<" "<<a[i].first;}if(f.return_type.kind==TypeKind::Void){o<<"  call void @"<<f.name<<"("<<args.str()<<")\n";return {"",f.return_type};}auto r=tmp();o<<"  "<<r<<" = call "<<f.return_type.llvm()<<" @"<<f.name<<"("<<args.str()<<")\n";return {r,f.return_type};}
+        if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);auto a=expr(*x.left,o),b=expr(*x.right,o,a.second);auto r=tmp();if(x.op=="&&"||x.op=="||")o<<"  "<<r<<" = "<<(x.op=="&&"?"and":"or")<<" i1 "<<a.first<<", "<<b.first<<"\n";else if(x.op=="+"||x.op=="-"||x.op=="*"||x.op=="/")o<<"  "<<r<<" = "<<(x.op=="+"?"add":x.op=="-"?"sub":x.op=="*"?"mul":"sdiv")<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";else{o<<"  "<<r<<" = icmp "<<std::map<std::string,std::string>{{"==","eq"},{"!=","ne"},{"<","slt"},{"<=","sle"},{">","sgt"},{">=","sge"}}.at(x.op)<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";return {r,Type::scalar(TypeKind::Bool)};}return {r,(x.op=="&&"||x.op=="||")?Type::scalar(TypeKind::Bool):a.second};}
+        if(e.kind==Expr::Kind::Call){auto&x=static_cast<const CallExpr&>(e);const auto&f=function(x.name);std::vector<std::pair<std::string,Type>>a;for(std::size_t i=0;i<x.arguments.size();++i)a.push_back(expr(*x.arguments[i],o,f.parameters[i].type));std::ostringstream args;for(std::size_t i=0;i<a.size();++i){if(i)args<<", ";args<<f.parameters[i].type.llvm()<<" "<<a[i].first;}if(f.return_type.kind==TypeKind::Void){o<<"  call void @"<<f.name<<"("<<args.str()<<")\n";return {"",f.return_type};}auto r=tmp();o<<"  "<<r<<" = call "<<f.return_type.llvm()<<" @"<<f.name<<"("<<args.str()<<")\n";return {r,f.return_type};}
         if(e.kind==Expr::Kind::Array||e.kind==Expr::Kind::Struct){return {aggregate(e,expected.value_or(localType(e)),o),expected.value_or(localType(e))};}
+        if(e.kind==Expr::Kind::Index){auto&x=static_cast<const IndexExpr&>(e);Type base=localType(*x.base);if(base.kind==TypeKind::DynamicArray&&base.element->kind==TypeKind::I32){auto a=expr(*x.base,o);auto i=expr(*x.index,o,Type::scalar(TypeKind::I64));auto r=tmp();o<<"  "<<r<<" = call i32 @hf_dyn_i32_get(ptr "<<a.first<<", i64 "<<i.first<<")\n";return {r,Type::scalar(TypeKind::I32)};}}
         if(e.kind==Expr::Kind::Field||e.kind==Expr::Kind::Index){auto a=address(e,o);auto r=tmp();Type t=localType(e);o<<"  "<<r<<" = load "<<t.llvm()<<", ptr "<<a.first<<"\n";return {r,t};}
         fail("unsupported aggregate expression",e.line,e.column);
     }
