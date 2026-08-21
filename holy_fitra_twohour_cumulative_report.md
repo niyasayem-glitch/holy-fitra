@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `beb84d9` on `master`, containing the quality-gated QAT and deterministic deployment milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `8f05f39` on `master`, containing the first-class hybrid-function milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -26,7 +26,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | Verifier 1 | Deterministic pre-tool claim verifier with factual overlap, contradiction detection, confidence threshold, and audit gating | 141 tests; Termux/native/sanitizer gates; unsupported claim blocked; zero tool invocations; 0.046871 ms block benchmark | `9964e05` |
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic pruning, manifests, merge/export equivalence, and resource budgets | 145 tests; x86-64 benchmark MSE 0.1532496512 → 0.0827450603; 25% sparsity; merged error 0.0 | `5df1127` |
 | Dataset 1 | Repeatable streaming sources, deterministic hash splits, bounded-buffer epoch shuffling, fixed batches, streaming evaluation, and streaming training integration | 151 tests; 112 Termux host tests; malformed/non-finite samples rejected; deterministic epoch and split tests passed; no physical Android measurements claimed | `5ec9bd4` |
-| QAT/Export 1 | Quality-gated int4/int8 fake quantization with straight-through training, deterministic HOLYFITRA deployment artifacts, atomic export, SHA-256 identity, and round-trip loader validation | 156 tests; 117 Termux host tests; deterministic byte-identical export; QAT/deployment focused suite passed; no physical Android measurements claimed | `beb84d9` |
+| QAT/Export 1 | Quality-gated int4/int8 fake quantization with straight-through training, deterministic HOLYFITRA deployment artifacts, atomic export, SHA-256 identity, and round-trip loader validation | 156 tests; 117 Termux host tests; deterministic byte-identical export; QAT/deployment focused suite passed; no physical Android measurements claimed | `af62545` |
+| Hybrid 1 | First-class typed hybrid functions in Holy Fitra source plus direct runtime composition with deterministic plans, transitive effects, and bounded execution | 162 tests; 123 Termux host tests; compiler emits direct call chains; invalid arity/type/effect/component contracts rejected; no physical Android measurements claimed | `8f05f39` |
 
 ## Rejected work
 
@@ -34,7 +35,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **156 tests with 0 failures**. The Termux-compatible host gate passes **117 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current model-development stack now includes streaming training, quality-gated fake quantization, and deterministic deployment export coverage.
+The current full applicable Python suite passes **162 tests with 0 failures**. The Termux-compatible host gate passes **123 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current stack now includes deterministic hybrid composition in both the language compiler and runtime.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
 
@@ -108,6 +109,14 @@ Whole-program validation memoization was tested and rejected. Repeated equivalen
 
 
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic magnitude pruning, model manifests, adapter merge/export equivalence, and fail-closed resource budgets | x86-64 benchmark: initial MSE 0.1532496512 → final MSE 0.0827450603; 48 trainable versus 136 frozen-base parameters; 25% deterministic sparsity; merged maximum absolute error 0.0; 145 Python tests; 106 Termux host tests; ragged ASAN/UBSAN and sanitized NibbleFlow build passed; no physical Android measurements claimed | Pending |
+
+## Hybrid-function milestone retained
+
+Holy Fitra now supports first-class hybrid functions using declarations such as `hybrid fn pipeline(x: i32) -> i32 using [double, increment]`. The compiler checks that a hybrid contains at least two unique components, verifies the first component against the hybrid input signature, verifies every later component against the preceding return type, requires the final type to match, and propagates component effects through the existing fail-closed transitive effect checker. LLVM lowering emits the component calls as a deterministic direct chain, and ordinary Holy Fitra code calls the hybrid by its single public name.
+
+The dependency-free `holyfitra_hybrid.py` runtime provides equivalent composition for host/native integration. The first callable consumes the original arguments, subsequent callables consume the previous result, and `HybridPlan` exposes component order, input arity, effects, and a step budget. Invalid component counts, duplicate names, arity mismatches, recursive self-composition, and undersized execution budgets fail closed.
+
+The focused hybrid suite passed **5 tests**, the complete applicable Python suite passed **162 tests with 0 failures**, and `termux-build.sh --host-tests` passed **123 tests**. Existing AArch64 object emission, NibbleFlow, ragged attention, scheduler, and CLI checks passed. The validation host is x86-64; no physical Android performance measurement is claimed.
 
 ## QAT and deterministic deployment milestone retained
 

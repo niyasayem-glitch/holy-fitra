@@ -78,3 +78,15 @@ Validation was performed on the x86-64 sandbox. The native checks validate exist
 ## QAT/deployment retention decision
 
 **Retain.** Quantization is explicit, measurable, and quality-gated rather than silently degrading model behavior. Export is deterministic and fail-closed on malformed artifacts, making the model ready for a later native Android loader without claiming that device integration has already been measured.
+
+## Hybrid-function verification
+
+Holy Fitra now supports first-class hybrid functions in the native language with syntax such as `hybrid fn pipeline(x: i32) -> i32 using [double, increment]`. The compiler validates that at least two unique components exist, the first component matches the hybrid input signature, each later component accepts the previous result, the final result matches the declared return type, and all component effects are declared transitively. LLVM lowering emits a direct deterministic call chain, so ordinary code can call the hybrid as one function.
+
+The dependency-free runtime module `holyfitra_hybrid.py` provides the same composition model for Python/native integration: the first callable receives the original arguments, each subsequent callable receives the prior result, and a bounded execution plan exposes component names, input arity, effects, and step budget. Invalid arity, duplicate components, missing components, recursive composition, and undersized budgets fail closed.
+
+The focused compiler/runtime hybrid suite passed **5 tests**, the full applicable Python regression suite passed **162 tests with 0 failures**, and the Termux-compatible host gate passed **123 tests**. Existing LLVM, AArch64 object, NibbleFlow, ragged attention, scheduler, and CLI validations passed. Validation was performed on the x86-64 sandbox; no physical Android performance measurement is claimed.
+
+## Hybrid-function retention decision
+
+**Retain.** Hybrid functions are now directly callable, statically checked, effect-aware, deterministic, and available both in Holy Fitra source and the dependency-free runtime layer.

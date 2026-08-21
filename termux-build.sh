@@ -20,6 +20,7 @@ python3 -m unittest -q \
   test_holyfitra_ui.py \
   test_holyfitra_data.py \
   test_holyfitra_qat_deploy.py \
+  test_holyfitra_hybrid.py \
   test_language_core.py \
   test_hyperir.py \
   test_package.py \

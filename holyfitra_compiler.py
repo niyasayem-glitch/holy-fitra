@@ -136,6 +136,12 @@ class TaskMetadata:
 
 
 @dataclass(frozen=True)
+class HybridSpec:
+    components: tuple[str, ...]
+    strategy: str = "pipe"
+
+
+@dataclass(frozen=True)
 class Function:
     name: str
     parameters: tuple[tuple[str, Type], ...]
@@ -144,6 +150,7 @@ class Function:
     line: int
     effects: tuple[str, ...] = ()
     task: TaskMetadata | None = None
+    hybrid: HybridSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -222,6 +229,10 @@ class Parser:
             if self.accept("IDENT", "budget"):
                 self._skip_to_statement_end()
                 continue
+            if self.accept("IDENT", "hybrid"):
+                self.expect("IDENT", "fn")
+                functions.append(self.parse_function(hybrid=True))
+                continue
             if self.accept("IDENT", "fn"):
                 functions.append(self.parse_function())
                 continue
@@ -249,7 +260,7 @@ class Parser:
             self.advance()
         self.accept("PUNCT", ";")
 
-    def parse_function(self) -> Function:
+    def parse_function(self, *, hybrid: bool = False) -> Function:
         name_token = self.expect("IDENT")
         self.expect("PUNCT", "(")
         parameters: list[tuple[str, Type]] = []
@@ -301,6 +312,18 @@ class Parser:
                 cancelable=bool(values.get("cancelable", True)),
                 supervised=bool(values.get("supervised", False)),
             )
+        if hybrid:
+            self.expect("IDENT", "using")
+            self.expect("PUNCT", "[")
+            components: list[str] = []
+            if not self.accept("PUNCT", "]"):
+                while True:
+                    components.append(self.expect("IDENT").text)
+                    if self.accept("PUNCT", "]"):
+                        break
+                    self.expect("PUNCT", ",")
+            self.accept("PUNCT", ";")
+            return Function(name_token.text, tuple(parameters), return_type, (), name_token.line, tuple(effects), task, HybridSpec(tuple(components)))
         body = self.parse_block()
         return Function(name_token.text, tuple(parameters), return_type, body, name_token.line, tuple(effects), task)
 
@@ -441,7 +464,10 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
         _EFFECT_GRAPH_CACHE.move_to_end(cache_key)
         return cached
     functions = {function.name: function for function in program.functions}
-    direct = {name: _direct_calls_block(function.body) for name, function in functions.items()}
+    direct = {
+        name: (set(function.hybrid.components) if function.hybrid is not None else _direct_calls_block(function.body))
+        for name, function in functions.items()
+    }
     for name, calls in direct.items():
         unknown = calls - functions.keys()
         if unknown:
@@ -549,6 +575,39 @@ def validate_native(program: Program) -> None:
                 raise HolyFitraError(f"function {function.name} task deadline must be positive")
         if function.return_type.name not in {"i32", "i64", "bool", "void"}:
             raise HolyFitraError(f"function {function.name} has unsupported return type {function.return_type.name}")
+        if function.hybrid is not None:
+            if len(function.hybrid.components) < 2:
+                raise HolyFitraError(f"hybrid function {function.name} requires at least two components")
+            if len(set(function.hybrid.components)) != len(function.hybrid.components):
+                raise HolyFitraError(f"hybrid function {function.name} contains duplicate components")
+            if function.name in function.hybrid.components:
+                raise HolyFitraError(f"hybrid function {function.name} cannot contain itself")
+            components = [functions.get(component) for component in function.hybrid.components]
+            if any(component is None for component in components):
+                missing = sorted(set(function.hybrid.components) - functions.keys())
+                raise HolyFitraError(f"hybrid function {function.name} uses unknown components: {', '.join(missing)}")
+            first = components[0]
+            assert first is not None
+            if len(first.parameters) != len(function.parameters):
+                raise HolyFitraError(f"hybrid function {function.name} input arity does not match {first.name}")
+            for (_, expected), (_, actual) in zip(function.parameters, first.parameters):
+                if not _same_value_type(expected, actual):
+                    raise HolyFitraError(f"hybrid function {function.name} input type does not match {first.name}")
+            previous = first.return_type
+            if previous.name == "void":
+                raise HolyFitraError(f"hybrid component {first.name} must return a value")
+            for component in components[1:]:
+                assert component is not None
+                if len(component.parameters) != 1:
+                    raise HolyFitraError(f"hybrid component {component.name} must accept exactly one value")
+                if not _same_value_type(previous, component.parameters[0][1]):
+                    raise HolyFitraError(f"hybrid component {component.name} expects {component.parameters[0][1].name}, got {previous.name}")
+                previous = component.return_type
+                if previous.name == "void" and component is not components[-1]:
+                    raise HolyFitraError(f"hybrid component {component.name} cannot produce void before the end")
+            if not _same_value_type(previous, function.return_type):
+                raise HolyFitraError(f"hybrid function {function.name} returns {previous.name}, expected {function.return_type.name}")
+            continue
         variables = dict(function.parameters)
 
         def validate_block(statements: tuple[Statement, ...], scope: dict[str, Type]) -> bool:
@@ -615,6 +674,23 @@ class LLVMEmitter:
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 
+    def emit_call_values(self, name: str, arguments: list[tuple[str, Type]]) -> tuple[str, Type]:
+        function = self.functions[name]
+        if len(arguments) != len(function.parameters):
+            raise HolyFitraError(f"call argument count mismatch for {name}")
+        rendered: list[str] = []
+        for (value, actual), (_, expected) in zip(arguments, function.parameters):
+            if not _same_value_type(actual, expected):
+                raise HolyFitraError(f"call argument type mismatch for {name}")
+            rendered.append(f"{expected.llvm} {value}")
+        result_type = function.return_type
+        if result_type.name == "void":
+            self.current_lines.append(f"  call void @{name}({', '.join(rendered)})")
+            return "", result_type
+        result = self.temp()
+        self.current_lines.append(f"  {result} = call {result_type.llvm} @{name}({', '.join(rendered)})")
+        return result, result_type
+
     def emit_expr(self, expression: Expr) -> tuple[str, Type]:
         if isinstance(expression, BoolLiteral):
             return ("1" if expression.value else "0"), Type("bool")
@@ -664,19 +740,13 @@ class LLVMEmitter:
             return result, type_
         if isinstance(expression, CallExpr):
             function = self.functions[expression.name]
-            args: list[str] = []
+            arguments: list[tuple[str, Type]] = []
             for argument, (_, parameter_type) in zip(expression.arguments, function.parameters):
                 value, actual_type = self.emit_expr(argument)
+                arguments.append((value, actual_type))
                 if not _same_value_type(actual_type, parameter_type):
                     raise HolyFitraError("call argument type mismatch")
-                args.append(f"{parameter_type.llvm} {value}")
-            result_type = function.return_type
-            if result_type.name == "void":
-                self.current_lines.append(f"  call void @{function.name}({', '.join(args)})")
-                return "", result_type
-            result = self.temp()
-            self.current_lines.append(f"  {result} = call {result_type.llvm} @{function.name}({', '.join(args)})")
-            return result, result_type
+            return self.emit_call_values(function.name, arguments)
         raise HolyFitraError("unsupported expression")
 
     def emit_function(self, function: Function) -> list[str]:
@@ -690,9 +760,18 @@ class LLVMEmitter:
         effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
         ownership_comment = "; ownership: " + ", ".join(f"{name}:{type_.mode}" for name, type_ in function.parameters) if function.parameters else "; ownership: none"
         task_comment = "; task: " + (json.dumps({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised}, sort_keys=True) if function.task else "sync")
-        lines = [effect_comment, ownership_comment, task_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
+        hybrid_comment = "; hybrid: " + json.dumps(list(function.hybrid.components), separators=(",", ":"), sort_keys=False) if function.hybrid else "; hybrid: none"
+        lines = [effect_comment, ownership_comment, task_comment, hybrid_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
-        self.emit_block(function.body)
+        if function.hybrid is not None:
+            current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
+            current_value, current_type = self.emit_call_values(function.hybrid.components[0], current_arguments)
+            for component_name in function.hybrid.components[1:]:
+                current_value, current_type = self.emit_call_values(component_name, [(current_value, current_type)])
+            self.current_lines.append(f"  ret {current_type.llvm} {current_value}")
+            self.terminated = True
+        else:
+            self.emit_block(function.body)
         if not self.terminated and function.return_type.name == "void":
             lines.append("  ret void")
         elif not self.terminated:

@@ -23,6 +23,43 @@ fn main() -> i32 {
 }
 """
 
+    def test_hybrid_function_composes_multiple_typed_functions(self):
+        source = """
+module hybrid_test
+fn double(x: i32) -> i32 { return x * 2 }
+fn increment(x: i32) -> i32 { return x + 1 }
+hybrid fn pipeline(x: i32) -> i32 using [double, increment]
+fn main() -> i32 { return pipeline(20) }
+"""
+        program = parse_native(source)
+        validate_native(program)
+        self.assertEqual(program.functions[2].hybrid.components, ("double", "increment"))
+        llvm = emit_llvm(program)
+        self.assertIn('; hybrid: ["double","increment"]', llvm)
+        self.assertIn("call i32 @double(i32 %x)", llvm)
+        self.assertIn("call i32 @increment(i32 %t0)", llvm)
+        self.assertIn("call i32 @pipeline(i32 20)", llvm)
+
+    def test_hybrid_effects_are_transitive(self):
+        source = """
+module hybrid_effects
+fn encode(x: i32) -> i32 effects [model] { return x }
+fn guard(x: i32) -> i32 effects [memory] { return x }
+hybrid fn secure(x: i32) -> i32 effects [model, memory] using [encode, guard]
+fn main() -> i32 effects [model, memory] { return secure(1) }
+"""
+        validate_native(parse_native(source))
+
+    def test_hybrid_contracts_fail_closed(self):
+        cases = [
+            "fn a(x: i32) -> i32 { return x }\nhybrid fn h(x: i32) -> i32 using [a]",
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i64) -> i64 { return x }\nhybrid fn h(x: i32) -> i32 using [a, b]",
+            "hybrid fn h(x: i32) -> i32 using [missing, other]\n",
+        ]
+        for source in cases:
+            with self.assertRaises(HolyFitraError):
+                validate_native(parse_native(source))
+
     def test_lexer_parser_and_typecheck(self):
         program = parse_native(self.SOURCE)
         self.assertEqual(program.module, "arithmetic")
