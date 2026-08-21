@@ -100,6 +100,16 @@ fn main() -> i32 {
         with self.assertRaises(HolyFitraError):
             validate_native(parse_native(source))
 
+    def test_recursive_effect_cycle_reports_full_deterministic_path(self):
+        source = """
+module cycle
+fn a() -> i32 effects [model] { return b() }
+fn b() -> i32 effects [model] { return a() }
+fn main() -> i32 effects [model] { return a() }
+"""
+        with self.assertRaisesRegex(HolyFitraError, r"recursive effect cycle: a -> b -> a"):
+            validate_native(parse_native(source))
+
     def test_ownership_and_task_annotations_are_preserved(self):
         source = (
             'module contracts_test\n'

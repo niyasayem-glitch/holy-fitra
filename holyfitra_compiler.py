@@ -446,18 +446,22 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
         if unknown:
             raise HolyFitraError(f"function {name} calls unknown functions: {', '.join(sorted(unknown))}")
     memo: dict[str, set[str]] = {}
-    active: set[str] = set()
+    active: list[str] = []
 
     def closure(name: str) -> set[str]:
         if name in memo:
             return set(memo[name])
         if name in active:
-            return set()
-        active.add(name)
-        result = set(functions[name].effects)
-        for callee in direct[name]:
-            result.update(closure(callee))
-        active.remove(name)
+            start = active.index(name)
+            cycle = active[start:] + [name]
+            raise HolyFitraError(f"recursive effect cycle: {' -> '.join(cycle)}")
+        active.append(name)
+        try:
+            result = set(functions[name].effects)
+            for callee in sorted(direct[name]):
+                result.update(closure(callee))
+        finally:
+            active.pop()
         memo[name] = result
         return set(result)
 
