@@ -684,6 +684,7 @@ class LLVMEmitter:
         self.terminated = False
         self.variables: dict[str, str] = {}
         self.types: dict[str, Type] = {}
+        self.target = "x86_64-pc-linux-gnu"
 
     def temp(self) -> str:
         value = f"%t{self.counter}"
@@ -698,7 +699,11 @@ class LLVMEmitter:
     def emit(self, target: str | None = None) -> str:
         validate_native(self.program)
         triple = target or "x86_64-pc-linux-gnu"
-        lines = [f"; Holy Fitra module {self.program.module}", f'target triple = "{triple}"', ""]
+        self.target = triple
+        target_lines = [f"; Holy Fitra target: {triple}"]
+        if triple.startswith("aarch64"):
+            target_lines.extend(("; Holy Fitra ABI: AAPCS64", "; Holy Fitra vector capability: NEON when available", "; Parallel hybrid lowering: independent branch calls followed by typed reducer"))
+        lines = [f"; Holy Fitra module {self.program.module}", *target_lines, f'target triple = "{triple}"', ""]
         for function in self.program.functions:
             lines.extend(self.emit_function(function))
             lines.append("")
@@ -790,7 +795,13 @@ class LLVMEmitter:
         effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
         ownership_comment = "; ownership: " + ", ".join(f"{name}:{type_.mode}" for name, type_ in function.parameters) if function.parameters else "; ownership: none"
         task_comment = "; task: " + (json.dumps({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised}, sort_keys=True) if function.task else "sync")
-        hybrid_comment = "; hybrid: " + json.dumps({"mode": function.hybrid.strategy, "components": list(function.hybrid.components), "reducer": function.hybrid.reducer, "max_workers": function.hybrid.max_workers}, separators=(",", ":"), sort_keys=True) if function.hybrid else "; hybrid: none"
+        if function.hybrid:
+            hybrid_payload = {"mode": function.hybrid.strategy, "components": list(function.hybrid.components), "reducer": function.hybrid.reducer, "max_workers": function.hybrid.max_workers}
+            if self.target.startswith("aarch64") and function.hybrid.strategy == "parallel":
+                hybrid_payload.update({"native_abi": "aapcs64", "native_vector": "neon", "native_lowering": "branch_calls_then_reducer"})
+            hybrid_comment = "; hybrid: " + json.dumps(hybrid_payload, separators=(",", ":"), sort_keys=True)
+        else:
+            hybrid_comment = "; hybrid: none"
         lines = [effect_comment, ownership_comment, task_comment, hybrid_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
         if function.hybrid is not None:

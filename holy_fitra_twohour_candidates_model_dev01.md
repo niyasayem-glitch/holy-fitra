@@ -100,3 +100,16 @@ The complete applicable Python suite passed **167 tests with 0 failures**. The T
 ## Parallel hybrid retention decision
 
 **Retain.** Parallel branches are bounded, cancelable, reducer-typed, deterministic at the reduction boundary, and fail closed on invalid signatures, worker limits, cancellation, and branch errors.
+
+
+## AArch64 parallel-hybrid lowering verification
+
+The LLVM emitter now carries the requested target triple into target-aware lowering. For `aarch64-linux-android21`, generated IR records AAPCS64 ABI intent, NEON capability metadata, and the parallel-hybrid branch-call/reducer lowering contract. The branch calls remain independent in emitted IR and the typed reducer is emitted afterward; actual runtime thread execution remains a host/runtime concern rather than an unverified device claim.
+
+The focused compiler suite passed **23 tests**, including cross-compilation of generated parallel-hybrid LLVM IR into a non-empty AArch64 object. The complete applicable Python regression suite passed **168 tests with 0 failures**. The Termux-compatible host gate passed **129 tests**, and the requested ragged scheduler ASAN/UBSAN executable passed. Existing NibbleFlow numerical validation, AArch64 kernel object emission, ragged scalar/NEON/SVE checks, scheduler execution, and CLI workflows passed.
+
+The validation host is x86-64. Successful AArch64 object generation is artifact evidence only; no physical Android execution, NEON runtime measurement, thermal measurement, or device throughput claim is made.
+
+## AArch64 lowering retention decision
+
+**Retain.** Parallel hybrid reducers now lower through the target-aware LLVM path and are cross-compiled into AArch64 objects under the declared ABI/vector metadata, while fail-closed type, effect, reducer, and worker contracts remain intact.

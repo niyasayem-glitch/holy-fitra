@@ -61,6 +61,30 @@ fn main() -> i32 effects [model, memory] { return fanout(5) }
         self.assertIn("call i32 @right(i32 %x)", llvm)
         self.assertIn("call i32 @combine(i32 %t0, i32 %t1)", llvm)
 
+    def test_parallel_hybrid_emits_aarch64_object(self):
+        source = """
+module arm_parallel_hybrid
+fn left(x: i32) -> i32 { return x + 1 }
+fn right(x: i32) -> i32 { return x * 2 }
+fn combine(a: i32, b: i32) -> i32 { return a + b }
+hybrid parallel fn fanout(x: i32) -> i32 using [left, right] reduce combine workers=2
+fn main() -> i32 { return fanout(5) }
+"""
+        llvm = emit_llvm(parse_native(source), "aarch64-linux-android21")
+        self.assertIn("target triple = \"aarch64-linux-android21\"", llvm)
+        self.assertIn("Holy Fitra ABI: AAPCS64", llvm)
+        self.assertIn("Holy Fitra vector capability: NEON", llvm)
+        self.assertIn('"native_abi":"aapcs64"', llvm)
+        self.assertIn('"native_lowering":"branch_calls_then_reducer"', llvm)
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            ll_path = directory / "parallel.ll"
+            object_path = directory / "parallel.aarch64.o"
+            ll_path.write_text(llvm, encoding="utf-8")
+            result = subprocess.run(["clang", "--target=aarch64-linux-android21", "-c", str(ll_path), "-o", str(object_path)], capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(object_path.stat().st_size > 0)
+
     def test_parallel_hybrid_contracts_fail_closed(self):
         cases = [
             "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nfn r(a: i32) -> i32 { return a }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r",

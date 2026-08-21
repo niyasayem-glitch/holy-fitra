@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `5881b0b` on `master`, containing the parallel-hybrid branch milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `48d2cf0` on `master`, containing the target-aware AArch64 lowering milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -28,7 +28,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | Dataset 1 | Repeatable streaming sources, deterministic hash splits, bounded-buffer epoch shuffling, fixed batches, streaming evaluation, and streaming training integration | 151 tests; 112 Termux host tests; malformed/non-finite samples rejected; deterministic epoch and split tests passed; no physical Android measurements claimed | `5ec9bd4` |
 | QAT/Export 1 | Quality-gated int4/int8 fake quantization with straight-through training, deterministic HOLYFITRA deployment artifacts, atomic export, SHA-256 identity, and round-trip loader validation | 156 tests; 117 Termux host tests; deterministic byte-identical export; QAT/deployment focused suite passed; no physical Android measurements claimed | `af62545` |
 | Hybrid 1 | First-class typed hybrid functions in Holy Fitra source plus direct runtime composition with deterministic plans, transitive effects, and bounded execution | 162 tests; 123 Termux host tests; compiler emits direct call chains; invalid arity/type/effect/component contracts rejected; no physical Android measurements claimed | `288e066` |
-| Parallel Hybrid 1 | Bounded parallel hybrid branches, typed reducers, deterministic declaration-order reduction, cancellation, failure wrapping, and compiler syntax/lowering | 167 tests; 128 Termux host tests; parallel branch/reducer contracts passed; no physical Android measurements claimed | `5881b0b` |
+| Parallel Hybrid 1 | Bounded parallel hybrid branches, typed reducers, deterministic declaration-order reduction, cancellation, failure wrapping, and compiler syntax/lowering | 167 tests; 128 Termux host tests; parallel branch/reducer contracts passed; no physical Android measurements claimed | `84bd18d` |
+| AArch64 Lowering 1 | Target-aware LLVM metadata and native AArch64 object lowering for parallel hybrid branch calls followed by typed reducers | 168 tests; 129 Termux host tests; generated hybrid IR cross-compiled to a non-empty AArch64 object; ragged ASAN/UBSAN passed; no physical Android measurements claimed | `48d2cf0` |
 
 ## Rejected work
 
@@ -36,7 +37,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **167 tests with 0 failures**. The Termux-compatible host gate passes **128 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current stack now includes bounded parallel hybrid branches and typed reducer lowering.
+The current full applicable Python suite passes **168 tests with 0 failures**. The Termux-compatible host gate passes **129 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, target-aware parallel hybrid LLVM lowering, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current stack now includes native AArch64 artifact generation for parallel hybrid reducers.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
 
@@ -152,3 +153,12 @@ Holy Fitra now supports lightweight model specialization rather than inference a
 The measured benchmark ran on the x86-64 sandbox and used a 16×8 base matrix, rank 2, 64 examples, and 180 Adam updates. It reduced MSE from 0.1532496512 to 0.0827450603, reported 48 trainable LoRA parameters versus 136 base parameters, and rejected a deliberately undersized trainable-parameter budget. The full applicable Python regression suite passed **145 tests with 0 failures**. The Termux-compatible host gate passed **106 tests**, including compiler/runtime workflows, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE checks, scheduler execution, and CLI workflows. Ragged scheduler ASAN/UBSAN execution passed, and the sanitized NibbleFlow shared library was produced successfully.
 
 The host is x86-64. AArch64 object emission and cross-compilation validate generated artifacts only; they are not evidence of physical Android execution, thermal behavior, battery use, latency, or throughput.
+
+
+## AArch64 parallel-hybrid lowering milestone retained
+
+The native LLVM pipeline now carries target identity into parallel hybrid lowering. For `aarch64-linux-android21`, the emitter records the target triple, AAPCS64 ABI intent, NEON capability metadata, and the branch-call-then-reducer lowering contract. Independent branch calls and the typed reducer remain explicit in generated IR, while runtime parallel execution remains bounded by the previously validated host runtime implementation.
+
+The focused compiler suite passed **23 tests**, including cross-compilation of generated parallel-hybrid LLVM IR into a non-empty AArch64 object. The complete applicable Python suite passed **168 tests with 0 failures**, and `termux-build.sh --host-tests` passed **129 tests**. The ragged scheduler ASAN/UBSAN executable passed, and existing NibbleFlow numerical validation, AArch64 kernel object emission, ragged scalar/NEON/SVE checks, scheduler execution, and CLI workflows passed.
+
+The validation host is x86-64. AArch64 object generation and cross-compilation validate artifacts only; no physical Android execution, NEON runtime, thermal, battery, latency, or throughput measurement is claimed.
