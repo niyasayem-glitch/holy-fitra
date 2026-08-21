@@ -139,6 +139,8 @@ class TaskMetadata:
 class HybridSpec:
     components: tuple[str, ...]
     strategy: str = "pipe"
+    reducer: str | None = None
+    max_workers: int = 1
 
 
 @dataclass(frozen=True)
@@ -230,8 +232,9 @@ class Parser:
                 self._skip_to_statement_end()
                 continue
             if self.accept("IDENT", "hybrid"):
+                strategy = "parallel" if self.accept("IDENT", "parallel") else "pipe"
                 self.expect("IDENT", "fn")
-                functions.append(self.parse_function(hybrid=True))
+                functions.append(self.parse_function(hybrid=True, strategy=strategy))
                 continue
             if self.accept("IDENT", "fn"):
                 functions.append(self.parse_function())
@@ -260,7 +263,7 @@ class Parser:
             self.advance()
         self.accept("PUNCT", ";")
 
-    def parse_function(self, *, hybrid: bool = False) -> Function:
+    def parse_function(self, *, hybrid: bool = False, strategy: str = "pipe") -> Function:
         name_token = self.expect("IDENT")
         self.expect("PUNCT", "(")
         parameters: list[tuple[str, Type]] = []
@@ -322,8 +325,16 @@ class Parser:
                     if self.accept("PUNCT", "]"):
                         break
                     self.expect("PUNCT", ",")
+            reducer = None
+            max_workers = 1
+            if strategy == "parallel":
+                self.expect("IDENT", "reduce")
+                reducer = self.expect("IDENT").text
+                if self.accept("IDENT", "workers"):
+                    self.expect("OP", "=")
+                    max_workers = int(self.expect("INT").text)
             self.accept("PUNCT", ";")
-            return Function(name_token.text, tuple(parameters), return_type, (), name_token.line, tuple(effects), task, HybridSpec(tuple(components)))
+            return Function(name_token.text, tuple(parameters), return_type, (), name_token.line, tuple(effects), task, HybridSpec(tuple(components), strategy, reducer, max_workers))
         body = self.parse_block()
         return Function(name_token.text, tuple(parameters), return_type, body, name_token.line, tuple(effects), task)
 
@@ -465,7 +476,7 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
         return cached
     functions = {function.name: function for function in program.functions}
     direct = {
-        name: (set(function.hybrid.components) if function.hybrid is not None else _direct_calls_block(function.body))
+        name: ((set(function.hybrid.components) | ({function.hybrid.reducer} if function.hybrid.reducer else set())) if function.hybrid is not None else _direct_calls_block(function.body))
         for name, function in functions.items()
     }
     for name, calls in direct.items():
@@ -593,20 +604,39 @@ def validate_native(program: Program) -> None:
             for (_, expected), (_, actual) in zip(function.parameters, first.parameters):
                 if not _same_value_type(expected, actual):
                     raise HolyFitraError(f"hybrid function {function.name} input type does not match {first.name}")
-            previous = first.return_type
-            if previous.name == "void":
-                raise HolyFitraError(f"hybrid component {first.name} must return a value")
-            for component in components[1:]:
-                assert component is not None
-                if len(component.parameters) != 1:
-                    raise HolyFitraError(f"hybrid component {component.name} must accept exactly one value")
-                if not _same_value_type(previous, component.parameters[0][1]):
-                    raise HolyFitraError(f"hybrid component {component.name} expects {component.parameters[0][1].name}, got {previous.name}")
-                previous = component.return_type
-                if previous.name == "void" and component is not components[-1]:
-                    raise HolyFitraError(f"hybrid component {component.name} cannot produce void before the end")
-            if not _same_value_type(previous, function.return_type):
-                raise HolyFitraError(f"hybrid function {function.name} returns {previous.name}, expected {function.return_type.name}")
+            if function.hybrid.strategy == "parallel":
+                if function.hybrid.reducer is None or function.hybrid.reducer not in functions:
+                    raise HolyFitraError(f"parallel hybrid {function.name} requires a known reducer")
+                if function.hybrid.max_workers <= 0 or function.hybrid.max_workers > 32:
+                    raise HolyFitraError(f"parallel hybrid {function.name} workers must be between 1 and 32")
+                reducer = functions[function.hybrid.reducer]
+                if reducer.hybrid is not None:
+                    raise HolyFitraError(f"parallel reducer {reducer.name} cannot itself be a hybrid")
+                if len(reducer.parameters) != len(components):
+                    raise HolyFitraError(f"reducer {reducer.name} expects {len(reducer.parameters)} branch values")
+                for component, (_, reducer_type) in zip(components, reducer.parameters):
+                    assert component is not None
+                    if component.return_type.name == "void":
+                        raise HolyFitraError(f"parallel component {component.name} must return a value")
+                    if not _same_value_type(component.return_type, reducer_type):
+                        raise HolyFitraError(f"reducer {reducer.name} expects {reducer_type.name}, got {component.return_type.name}")
+                if not _same_value_type(reducer.return_type, function.return_type):
+                    raise HolyFitraError(f"parallel hybrid {function.name} returns {reducer.return_type.name}, expected {function.return_type.name}")
+            else:
+                previous = first.return_type
+                if previous.name == "void":
+                    raise HolyFitraError(f"hybrid component {first.name} must return a value")
+                for component in components[1:]:
+                    assert component is not None
+                    if len(component.parameters) != 1:
+                        raise HolyFitraError(f"hybrid component {component.name} must accept exactly one value")
+                    if not _same_value_type(previous, component.parameters[0][1]):
+                        raise HolyFitraError(f"hybrid component {component.name} expects {component.parameters[0][1].name}, got {previous.name}")
+                    previous = component.return_type
+                    if previous.name == "void" and component is not components[-1]:
+                        raise HolyFitraError(f"hybrid component {component.name} cannot produce void before the end")
+                if not _same_value_type(previous, function.return_type):
+                    raise HolyFitraError(f"hybrid function {function.name} returns {previous.name}, expected {function.return_type.name}")
             continue
         variables = dict(function.parameters)
 
@@ -760,14 +790,18 @@ class LLVMEmitter:
         effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
         ownership_comment = "; ownership: " + ", ".join(f"{name}:{type_.mode}" for name, type_ in function.parameters) if function.parameters else "; ownership: none"
         task_comment = "; task: " + (json.dumps({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised}, sort_keys=True) if function.task else "sync")
-        hybrid_comment = "; hybrid: " + json.dumps(list(function.hybrid.components), separators=(",", ":"), sort_keys=False) if function.hybrid else "; hybrid: none"
+        hybrid_comment = "; hybrid: " + json.dumps({"mode": function.hybrid.strategy, "components": list(function.hybrid.components), "reducer": function.hybrid.reducer, "max_workers": function.hybrid.max_workers}, separators=(",", ":"), sort_keys=True) if function.hybrid else "; hybrid: none"
         lines = [effect_comment, ownership_comment, task_comment, hybrid_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
         if function.hybrid is not None:
             current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
-            current_value, current_type = self.emit_call_values(function.hybrid.components[0], current_arguments)
-            for component_name in function.hybrid.components[1:]:
-                current_value, current_type = self.emit_call_values(component_name, [(current_value, current_type)])
+            if function.hybrid.strategy == "parallel":
+                branch_values = [self.emit_call_values(component_name, current_arguments) for component_name in function.hybrid.components]
+                current_value, current_type = self.emit_call_values(function.hybrid.reducer or "", branch_values)
+            else:
+                current_value, current_type = self.emit_call_values(function.hybrid.components[0], current_arguments)
+                for component_name in function.hybrid.components[1:]:
+                    current_value, current_type = self.emit_call_values(component_name, [(current_value, current_type)])
             self.current_lines.append(f"  ret {current_type.llvm} {current_value}")
             self.terminated = True
         else:

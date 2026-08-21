@@ -90,3 +90,13 @@ The focused compiler/runtime hybrid suite passed **5 tests**, the full applicabl
 ## Hybrid-function retention decision
 
 **Retain.** Hybrid functions are now directly callable, statically checked, effect-aware, deterministic, and available both in Holy Fitra source and the dependency-free runtime layer.
+
+## Parallel hybrid branch verification
+
+Parallel hybrids now execute independent runtime branches through a bounded thread pool and pass their results to a typed reducer. Branch results are collected in declaration order even when completion order differs, making reductions deterministic. The runtime supports pre-cancellation, branch-failure wrapping, reducer output-type checks, and a maximum of 32 workers. Compiler syntax is `hybrid parallel fn fanout(x: i32) -> i32 using [left, right] reduce combine workers=2`; compiler validation checks branch input signatures, reducer arity and types, final return type, worker bounds, and transitive effects. LLVM emission lowers the branches as independent direct calls followed by the typed reducer call.
+
+The complete applicable Python suite passed **167 tests with 0 failures**. The Termux-compatible host gate passed **128 tests**, and the focused hybrid compiler/runtime tests passed 9 tests. Existing AArch64 object emission, NibbleFlow, ragged attention, scheduler, and CLI validations passed. Validation was performed on the x86-64 sandbox; no physical Android performance claim is made.
+
+## Parallel hybrid retention decision
+
+**Retain.** Parallel branches are bounded, cancelable, reducer-typed, deterministic at the reduction boundary, and fail closed on invalid signatures, worker limits, cancellation, and branch errors.

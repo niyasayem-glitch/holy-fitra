@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `8f05f39` on `master`, containing the first-class hybrid-function milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `5881b0b` on `master`, containing the parallel-hybrid branch milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -27,7 +27,8 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic pruning, manifests, merge/export equivalence, and resource budgets | 145 tests; x86-64 benchmark MSE 0.1532496512 → 0.0827450603; 25% sparsity; merged error 0.0 | `5df1127` |
 | Dataset 1 | Repeatable streaming sources, deterministic hash splits, bounded-buffer epoch shuffling, fixed batches, streaming evaluation, and streaming training integration | 151 tests; 112 Termux host tests; malformed/non-finite samples rejected; deterministic epoch and split tests passed; no physical Android measurements claimed | `5ec9bd4` |
 | QAT/Export 1 | Quality-gated int4/int8 fake quantization with straight-through training, deterministic HOLYFITRA deployment artifacts, atomic export, SHA-256 identity, and round-trip loader validation | 156 tests; 117 Termux host tests; deterministic byte-identical export; QAT/deployment focused suite passed; no physical Android measurements claimed | `af62545` |
-| Hybrid 1 | First-class typed hybrid functions in Holy Fitra source plus direct runtime composition with deterministic plans, transitive effects, and bounded execution | 162 tests; 123 Termux host tests; compiler emits direct call chains; invalid arity/type/effect/component contracts rejected; no physical Android measurements claimed | `8f05f39` |
+| Hybrid 1 | First-class typed hybrid functions in Holy Fitra source plus direct runtime composition with deterministic plans, transitive effects, and bounded execution | 162 tests; 123 Termux host tests; compiler emits direct call chains; invalid arity/type/effect/component contracts rejected; no physical Android measurements claimed | `288e066` |
+| Parallel Hybrid 1 | Bounded parallel hybrid branches, typed reducers, deterministic declaration-order reduction, cancellation, failure wrapping, and compiler syntax/lowering | 167 tests; 128 Termux host tests; parallel branch/reducer contracts passed; no physical Android measurements claimed | `5881b0b` |
 
 ## Rejected work
 
@@ -35,7 +36,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **162 tests with 0 failures**. The Termux-compatible host gate passes **123 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current stack now includes deterministic hybrid composition in both the language compiler and runtime.
+The current full applicable Python suite passes **167 tests with 0 failures**. The Termux-compatible host gate passes **128 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current stack now includes bounded parallel hybrid branches and typed reducer lowering.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
 
@@ -109,6 +110,14 @@ Whole-program validation memoization was tested and rejected. Repeated equivalen
 
 
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic magnitude pruning, model manifests, adapter merge/export equivalence, and fail-closed resource budgets | x86-64 benchmark: initial MSE 0.1532496512 → final MSE 0.0827450603; 48 trainable versus 136 frozen-base parameters; 25% deterministic sparsity; merged maximum absolute error 0.0; 145 Python tests; 106 Termux host tests; ragged ASAN/UBSAN and sanitized NibbleFlow build passed; no physical Android measurements claimed | Pending |
+
+## Parallel hybrid milestone retained
+
+Holy Fitra hybrid functions now support a parallel mode. Runtime branches execute through a bounded thread pool with a maximum of 32 workers. Results are collected in declared branch order, not completion order, and are passed to a `TypedReducer` that validates branch input values and reducer output type. Pre-cancellation, branch failures, reducer type failures, and worker-bound violations fail closed.
+
+The compiler accepts `hybrid parallel fn fanout(x: i32) -> i32 using [left, right] reduce combine workers=2`. It checks identical branch input signatures, reducer existence, reducer arity, branch-to-reducer type compatibility, final return type, worker bounds, and transitive effects. LLVM emission makes the independent branch calls explicit and invokes the typed reducer afterward. This is deterministic lowering; actual host parallel execution is provided by the runtime layer.
+
+The complete applicable Python suite passed **167 tests with 0 failures**, and `termux-build.sh --host-tests` passed **128 tests**. The validation host is x86-64; no physical Android parallel-performance measurement is claimed.
 
 ## Hybrid-function milestone retained
 

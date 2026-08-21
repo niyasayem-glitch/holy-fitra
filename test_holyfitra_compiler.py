@@ -35,10 +35,41 @@ fn main() -> i32 { return pipeline(20) }
         validate_native(program)
         self.assertEqual(program.functions[2].hybrid.components, ("double", "increment"))
         llvm = emit_llvm(program)
-        self.assertIn('; hybrid: ["double","increment"]', llvm)
+        self.assertIn('; hybrid: {"components":["double","increment"],"max_workers":1,"mode":"pipe","reducer":null}', llvm)
         self.assertIn("call i32 @double(i32 %x)", llvm)
         self.assertIn("call i32 @increment(i32 %t0)", llvm)
         self.assertIn("call i32 @pipeline(i32 20)", llvm)
+
+    def test_parallel_hybrid_uses_typed_reducer_and_direct_branch_calls(self):
+        source = """
+module parallel_hybrid
+fn left(x: i32) -> i32 effects [model] { return x + 1 }
+fn right(x: i32) -> i32 effects [memory] { return x * 2 }
+fn combine(a: i32, b: i32) -> i32 effects [model, memory] { return a + b }
+hybrid parallel fn fanout(x: i32) -> i32 effects [model, memory] using [left, right] reduce combine workers=2
+fn main() -> i32 effects [model, memory] { return fanout(5) }
+"""
+        program = parse_native(source)
+        validate_native(program)
+        hybrid = program.functions[3]
+        self.assertEqual(hybrid.hybrid.strategy, "parallel")
+        self.assertEqual(hybrid.hybrid.reducer, "combine")
+        self.assertEqual(hybrid.hybrid.max_workers, 2)
+        llvm = emit_llvm(program)
+        self.assertIn('"mode":"parallel"', llvm)
+        self.assertIn("call i32 @left(i32 %x)", llvm)
+        self.assertIn("call i32 @right(i32 %x)", llvm)
+        self.assertIn("call i32 @combine(i32 %t0, i32 %t1)", llvm)
+
+    def test_parallel_hybrid_contracts_fail_closed(self):
+        cases = [
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nfn r(a: i32) -> i32 { return a }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r",
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i64) -> i64 { return x }\nfn r(a: i32, b: i32) -> i32 { return a + b }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r",
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nfn r(a: i32, b: i32) -> i64 { return a + b }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r workers=33",
+        ]
+        for source in cases:
+            with self.assertRaises(HolyFitraError):
+                validate_native(parse_native(source))
 
     def test_hybrid_effects_are_transitive(self):
         source = """
