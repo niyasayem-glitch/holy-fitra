@@ -1,0 +1,677 @@
+#!/usr/bin/env python3
+"""Holy Fitra compiler driver.
+
+This is the first native compiler layer for Holy Fitra.  It deliberately keeps
+hyperc_language_core.py as the compatibility frontend for tensor/HyperIR
+programs, while adding a real lexer, recursive-descent parser, typed scalar
+AST, LLVM IR emitter, cache, and build/run CLI for executable programs.
+
+Supported native source subset:
+
+module name
+fn add(a: i32, b: i32) -> i32 {
+    let c = a + b
+    return c
+}
+
+fn main() -> i32 { return add(40, 2) }
+"""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Iterable, Sequence
+
+
+class HolyFitraError(Exception):
+    """A user-facing compilation error."""
+
+
+@dataclass(frozen=True)
+class Token:
+    kind: str
+    text: str
+    line: int
+    column: int
+
+
+@dataclass(frozen=True)
+class Type:
+    name: str
+
+    @property
+    def llvm(self) -> str:
+        mapping = {"i32": "i32", "i64": "i64"}
+        if self.name not in mapping:
+            raise HolyFitraError(f"native LLVM backend does not yet support type {self.name}")
+        return mapping[self.name]
+
+
+@dataclass(frozen=True)
+class Expr:
+    pass
+
+
+@dataclass(frozen=True)
+class IntLiteral(Expr):
+    value: int
+
+
+@dataclass(frozen=True)
+class NameExpr(Expr):
+    name: str
+
+
+@dataclass(frozen=True)
+class BinaryExpr(Expr):
+    operator: str
+    left: Expr
+    right: Expr
+
+
+@dataclass(frozen=True)
+class CallExpr(Expr):
+    name: str
+    arguments: tuple[Expr, ...]
+
+
+@dataclass(frozen=True)
+class LetStmt:
+    name: str
+    type: Type | None
+    value: Expr
+    line: int
+
+
+@dataclass(frozen=True)
+class ReturnStmt:
+    value: Expr | None
+    line: int
+
+
+Statement = LetStmt | ReturnStmt
+
+
+@dataclass(frozen=True)
+class Function:
+    name: str
+    parameters: tuple[tuple[str, Type], ...]
+    return_type: Type
+    body: tuple[Statement, ...]
+    line: int
+
+
+@dataclass(frozen=True)
+class Program:
+    module: str
+    functions: tuple[Function, ...]
+
+
+_TOKEN_RE = re.compile(
+    r"(?P<ws>\s+)|(?P<comment>//[^\n]*|#[^\n]*)|(?P<float>\d+\.\d+)|(?P<int>\d+)|"
+    r"(?P<ident>[A-Za-z_][A-Za-z0-9_.]*)|(?P<arrow>->)|(?P<le><=)|(?P<op>[+\-*/=<>])|"
+    r"(?P<punct>[{}(),:;])|(?P<string>\"(?:\\.|[^\"\\])*\")"
+)
+
+
+def lex(source: str) -> tuple[Token, ...]:
+    tokens: list[Token] = []
+    position = 0
+    line = 1
+    column = 1
+    while position < len(source):
+        match = _TOKEN_RE.match(source, position)
+        if match is None:
+            raise HolyFitraError(f"unexpected character at {line}:{column}: {source[position]!r}")
+        text = match.group(0)
+        kind = match.lastgroup or ""
+        if kind not in {"ws", "comment"}:
+            normalized = "ARROW" if kind == "arrow" else "LE" if kind == "le" else kind.upper()
+            tokens.append(Token(normalized, text, line, column))
+        newlines = text.count("\n")
+        if newlines:
+            line += newlines
+            column = len(text.rsplit("\n", 1)[1]) + 1
+        else:
+            column += len(text)
+        position = match.end()
+    tokens.append(Token("EOF", "", line, column))
+    return tuple(tokens)
+
+
+class Parser:
+    def __init__(self, tokens: Sequence[Token]):
+        self.tokens = tokens
+        self.index = 0
+
+    @property
+    def current(self) -> Token:
+        return self.tokens[self.index]
+
+    def advance(self) -> Token:
+        token = self.current
+        self.index += 1
+        return token
+
+    def accept(self, kind: str, text: str | None = None) -> Token | None:
+        if self.current.kind == kind and (text is None or self.current.text == text):
+            return self.advance()
+        return None
+
+    def expect(self, kind: str, text: str | None = None) -> Token:
+        token = self.accept(kind, text)
+        if token is None:
+            expected = text or kind
+            raise HolyFitraError(f"expected {expected} at {self.current.line}:{self.current.column}, got {self.current.text!r}")
+        return token
+
+    def parse(self) -> Program:
+        module = "anonymous"
+        if self.accept("IDENT", "module"):
+            module = self.expect("IDENT").text
+        functions: list[Function] = []
+        while self.current.kind != "EOF":
+            if self.accept("IDENT", "capability"):
+                self._skip_balanced_block()
+                continue
+            if self.accept("IDENT", "budget"):
+                self._skip_to_statement_end()
+                continue
+            if self.accept("IDENT", "fn"):
+                functions.append(self.parse_function())
+                continue
+            token = self.current
+            raise HolyFitraError(f"unexpected top-level token {token.text!r} at {token.line}:{token.column}")
+        if not functions:
+            raise HolyFitraError("program must declare at least one function")
+        return Program(module, tuple(functions))
+
+    def _skip_balanced_block(self) -> None:
+        if self.accept("PUNCT", "{") is None:
+            self._skip_to_statement_end()
+            return
+        depth = 1
+        while depth and self.current.kind != "EOF":
+            if self.accept("PUNCT", "{"):
+                depth += 1
+            elif self.accept("PUNCT", "}"):
+                depth -= 1
+            else:
+                self.advance()
+
+    def _skip_to_statement_end(self) -> None:
+        while self.current.kind not in {"EOF", "PUNCT"} or self.current.text not in {";", "}"}:
+            self.advance()
+        self.accept("PUNCT", ";")
+
+    def parse_function(self) -> Function:
+        name_token = self.expect("IDENT")
+        self.expect("PUNCT", "(")
+        parameters: list[tuple[str, Type]] = []
+        if not self.accept("PUNCT", ")"):
+            while True:
+                parameter_name = self.expect("IDENT").text
+                self.expect("PUNCT", ":")
+                parameters.append((parameter_name, self.parse_type()))
+                if self.accept("PUNCT", ")"):
+                    break
+                self.expect("PUNCT", ",")
+        self.expect("ARROW")
+        return_type = self.parse_type()
+        self.expect("PUNCT", "{")
+        body: list[Statement] = []
+        while not self.accept("PUNCT", "}"):
+            if self.current.kind == "EOF":
+                raise HolyFitraError(f"unterminated function {name_token.text}")
+            body.append(self.parse_statement())
+        return Function(name_token.text, tuple(parameters), return_type, tuple(body), name_token.line)
+
+    def parse_type(self) -> Type:
+        token = self.expect("IDENT")
+        return Type(token.text)
+
+    def parse_statement(self) -> Statement:
+        if self.accept("IDENT", "let") or self.accept("IDENT", "var"):
+            name = self.expect("IDENT")
+            declared_type = None
+            if self.accept("PUNCT", ":"):
+                declared_type = self.parse_type()
+            self.expect("OP", "=")
+            value = self.parse_expression()
+            self.accept("PUNCT", ";")
+            return LetStmt(name.text, declared_type, value, name.line)
+        if self.accept("IDENT", "return"):
+            line = self.tokens[self.index - 1].line
+            if self.current.kind == "PUNCT" and self.current.text in {";", "}"}:
+                value = None
+            else:
+                value = self.parse_expression()
+            self.accept("PUNCT", ";")
+            return ReturnStmt(value, line)
+        token = self.current
+        raise HolyFitraError(f"expected let, var, or return at {token.line}:{token.column}")
+
+    def parse_expression(self) -> Expr:
+        return self.parse_additive()
+
+    def parse_additive(self) -> Expr:
+        expression = self.parse_multiplicative()
+        while self.current.kind == "OP" and self.current.text in {"+", "-"}:
+            operator = self.advance().text
+            expression = BinaryExpr(operator, expression, self.parse_multiplicative())
+        return expression
+
+    def parse_multiplicative(self) -> Expr:
+        expression = self.parse_primary()
+        while self.current.kind == "OP" and self.current.text in {"*", "/"}:
+            operator = self.advance().text
+            expression = BinaryExpr(operator, expression, self.parse_primary())
+        return expression
+
+    def parse_primary(self) -> Expr:
+        if self.current.kind == "INT":
+            return IntLiteral(int(self.advance().text))
+        if self.current.kind == "IDENT":
+            name = self.advance().text
+            if self.accept("PUNCT", "("):
+                arguments: list[Expr] = []
+                if not self.accept("PUNCT", ")"):
+                    while True:
+                        arguments.append(self.parse_expression())
+                        if self.accept("PUNCT", ")"):
+                            break
+                        self.expect("PUNCT", ",")
+                return CallExpr(name, tuple(arguments))
+            return NameExpr(name)
+        if self.accept("PUNCT", "("):
+            expression = self.parse_expression()
+            self.expect("PUNCT", ")")
+            return expression
+        token = self.current
+        raise HolyFitraError(f"expected expression at {token.line}:{token.column}")
+
+
+def parse_native(source: str) -> Program:
+    return Parser(lex(source)).parse()
+
+
+def _function_map(program: Program) -> dict[str, Function]:
+    functions: dict[str, Function] = {}
+    for function in program.functions:
+        if function.name in functions:
+            raise HolyFitraError(f"duplicate function {function.name}")
+        functions[function.name] = function
+    return functions
+
+
+def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[str, Function]) -> Type:
+    if isinstance(expr, IntLiteral):
+        return Type("i32")
+    if isinstance(expr, NameExpr):
+        if expr.name not in variables:
+            raise HolyFitraError(f"unknown value {expr.name}")
+        return variables[expr.name]
+    if isinstance(expr, BinaryExpr):
+        left = _infer_expression(expr.left, variables, functions)
+        right = _infer_expression(expr.right, variables, functions)
+        if left != right:
+            raise HolyFitraError(f"operator {expr.operator} requires matching types, got {left.name} and {right.name}")
+        if left.name not in {"i32", "i64"}:
+            raise HolyFitraError(f"native arithmetic currently supports i32 and i64, not {left.name}")
+        return left
+    if isinstance(expr, CallExpr):
+        if expr.name not in functions:
+            raise HolyFitraError(f"unknown function {expr.name}")
+        function = functions[expr.name]
+        if len(expr.arguments) != len(function.parameters):
+            raise HolyFitraError(f"function {expr.name} expects {len(function.parameters)} arguments")
+        for argument, (_, parameter_type) in zip(expr.arguments, function.parameters):
+            actual = _infer_expression(argument, variables, functions)
+            if actual != parameter_type:
+                raise HolyFitraError(f"argument to {expr.name} requires {parameter_type.name}, got {actual.name}")
+        return function.return_type
+    raise HolyFitraError("unsupported expression")
+
+
+def validate_native(program: Program) -> None:
+    functions = _function_map(program)
+    for function in program.functions:
+        if function.return_type.name not in {"i32", "i64", "void"}:
+            raise HolyFitraError(f"function {function.name} has unsupported return type {function.return_type.name}")
+        variables = dict(function.parameters)
+        saw_return = False
+        for statement in function.body:
+            if isinstance(statement, LetStmt):
+                actual = _infer_expression(statement.value, variables, functions)
+                if statement.type is not None and actual != statement.type:
+                    raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
+                variables[statement.name] = statement.type or actual
+            else:
+                saw_return = True
+                if function.return_type.name == "void":
+                    if statement.value is not None:
+                        raise HolyFitraError(f"void function {function.name} cannot return a value")
+                else:
+                    if statement.value is None:
+                        raise HolyFitraError(f"function {function.name} must return {function.return_type.name}")
+                    actual = _infer_expression(statement.value, variables, functions)
+                    if actual != function.return_type:
+                        raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
+        if function.return_type.name != "void" and not saw_return:
+            raise HolyFitraError(f"function {function.name} does not return a value")
+
+
+class LLVMEmitter:
+    def __init__(self, program: Program):
+        self.program = program
+        self.functions = _function_map(program)
+        self.counter = 0
+        self.variables: dict[str, str] = {}
+        self.types: dict[str, Type] = {}
+
+    def temp(self) -> str:
+        value = f"%t{self.counter}"
+        self.counter += 1
+        return value
+
+    def emit(self, target: str | None = None) -> str:
+        validate_native(self.program)
+        triple = target or "x86_64-pc-linux-gnu"
+        lines = [f"; Holy Fitra module {self.program.module}", f'target triple = "{triple}"', ""]
+        for function in self.program.functions:
+            lines.extend(self.emit_function(function))
+            lines.append("")
+        return "\n".join(lines).rstrip() + "\n"
+
+    def emit_expr(self, expression: Expr) -> tuple[str, Type]:
+        if isinstance(expression, IntLiteral):
+            return str(expression.value), Type("i32")
+        if isinstance(expression, NameExpr):
+            if expression.name not in self.variables:
+                raise HolyFitraError(f"unknown value {expression.name}")
+            return self.variables[expression.name], self.types[expression.name]
+        if isinstance(expression, BinaryExpr):
+            if isinstance(expression.left, IntLiteral) and isinstance(expression.right, IntLiteral):
+                if expression.operator == "+":
+                    return str(expression.left.value + expression.right.value), Type("i32")
+                if expression.operator == "-":
+                    return str(expression.left.value - expression.right.value), Type("i32")
+                if expression.operator == "*":
+                    return str(expression.left.value * expression.right.value), Type("i32")
+                if expression.operator == "/":
+                    if expression.right.value == 0:
+                        raise HolyFitraError("division by zero in constant expression")
+                    return str(expression.left.value // expression.right.value), Type("i32")
+            left, type_ = self.emit_expr(expression.left)
+            right, right_type = self.emit_expr(expression.right)
+            if type_ != right_type:
+                raise HolyFitraError("binary operands have different types")
+            opcode = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv"}[expression.operator]
+            result = self.temp()
+            lines = getattr(self, "current_lines", None)
+            if lines is None:
+                raise HolyFitraError("internal emitter state error")
+            lines.append(f"  {result} = {opcode} {type_.llvm} {left}, {right}")
+            return result, type_
+        if isinstance(expression, CallExpr):
+            function = self.functions[expression.name]
+            args: list[str] = []
+            for argument, (_, parameter_type) in zip(expression.arguments, function.parameters):
+                value, actual_type = self.emit_expr(argument)
+                if actual_type != parameter_type:
+                    raise HolyFitraError("call argument type mismatch")
+                args.append(f"{parameter_type.llvm} {value}")
+            result_type = function.return_type
+            if result_type.name == "void":
+                self.current_lines.append(f"  call void @{function.name}({', '.join(args)})")
+                return "", result_type
+            result = self.temp()
+            self.current_lines.append(f"  {result} = call {result_type.llvm} @{function.name}({', '.join(args)})")
+            return result, result_type
+        raise HolyFitraError("unsupported expression")
+
+    def emit_function(self, function: Function) -> list[str]:  # type: ignore[override]
+        validate_native(self.program)
+        self.counter = 0
+        self.variables = {name: f"%{name}" for name, _ in function.parameters}
+        self.types = dict(function.parameters)
+        parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
+        return_type = "void" if function.return_type.name == "void" else function.return_type.llvm
+        lines = [f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
+        self.current_lines = lines
+        returned = False
+        for statement in function.body:
+            if isinstance(statement, LetStmt):
+                value, value_type = self.emit_expr(statement.value)
+                self.variables[statement.name] = value
+                self.types[statement.name] = statement.type or value_type
+            else:
+                if statement.value is None:
+                    lines.append("  ret void")
+                else:
+                    value, value_type = self.emit_expr(statement.value)
+                    lines.append(f"  ret {value_type.llvm} {value}")
+                returned = True
+        if not returned and function.return_type.name == "void":
+            lines.append("  ret void")
+        lines.append("}")
+        return lines
+
+
+def emit_llvm(program: Program, target: str | None = None) -> str:
+    return LLVMEmitter(program).emit(target)
+
+
+def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
+    source = source_path.read_text(encoding="utf-8")
+    cache_identity = source + "\\0" + (target or "x86_64-pc-linux-gnu")
+    digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
+    if cache_dir is None:
+        cache_dir = source_path.parent / ".holyfitra" / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_path = cache_dir / f"{digest}.json"
+    if cache_path.exists():
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        return parse_native(source), cached["llvm"], digest
+    program = parse_native(source)
+    llvm = emit_llvm(program, target)
+    cache_path.write_text(json.dumps({"digest": digest, "llvm": llvm}, sort_keys=True), encoding="utf-8")
+    return program, llvm, digest
+
+
+def write_llvm(source_path: Path, output: Path, target: str | None = None) -> int:
+    _, llvm, digest = compile_native_file(source_path, target=target)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_text(llvm, encoding="utf-8")
+    print(json.dumps({"ok": True, "source": str(source_path), "output": str(output), "digest": digest}, sort_keys=True))
+    return 0
+
+
+def build(source_path: Path, output: Path, target: str | None = None, keep_llvm: bool = False) -> int:
+    program, llvm, digest = compile_native_file(source_path, target=target)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    main = next((function for function in program.functions if function.name == "main"), None)
+    if main is None or main.parameters or main.return_type.name not in {"i32", "i64"}:
+        raise HolyFitraError("build/run requires fn main() -> i32 or fn main() -> i64")
+    with tempfile.TemporaryDirectory(prefix="holyfitra-") as temporary:
+        llvm_path = Path(temporary) / f"{source_path.stem}.ll"
+        llvm_path.write_text(llvm, encoding="utf-8")
+        command = ["clang", "-O2"]
+        if target:
+            command.append(f"--target={target}")
+        command += [str(llvm_path), "-o", str(output)]
+        completed = subprocess.run(command, text=True, capture_output=True)
+        if completed.returncode:
+            raise HolyFitraError(completed.stderr.strip() or "clang failed")
+        if keep_llvm:
+            persistent_llvm = output.with_suffix(output.suffix + ".ll")
+            persistent_llvm.write_text(llvm, encoding="utf-8")
+    print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host"}, sort_keys=True))
+    return 0
+
+
+@dataclass(frozen=True)
+class Project:
+    root: Path
+    name: str
+    entry: Path
+    target: str | None = None
+
+
+def load_project(path: Path) -> Project:
+    root = path if path.is_dir() else path.parent
+    manifest = root / "holyfitra.toml"
+    if not manifest.exists():
+        if path.is_file():
+            return Project(path.parent, path.stem, path, None)
+        raise HolyFitraError(f"no holyfitra.toml found in {root}")
+    try:
+        document = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        raise HolyFitraError(f"invalid holyfitra.toml: {error}") from error
+    project = document.get("project", {})
+    build_config = document.get("build", {})
+    name = project.get("name") or root.name
+    entry = root / project.get("entry", "src/main.hf")
+    if not entry.is_file():
+        raise HolyFitraError(f"project entry does not exist: {entry}")
+    return Project(root, str(name), entry, build_config.get("target"))
+
+
+def init_project(root: Path, name: str | None = None) -> int:
+    root.mkdir(parents=True, exist_ok=True)
+    project_name = name or root.name
+    source_dir = root / "src"
+    source_dir.mkdir(exist_ok=True)
+    manifest = root / "holyfitra.toml"
+    source = source_dir / "main.hf"
+    if manifest.exists() or source.exists():
+        raise HolyFitraError(f"project already exists: {root}")
+    manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "x86_64-pc-linux-gnu"\n''', encoding="utf-8")
+    source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
+    print(json.dumps({"ok": True, "project": str(root), "entry": str(source)}, sort_keys=True))
+    return 0
+
+
+def package_file(source_path: Path, output: Path, version: str, target: str | None = None) -> int:
+    project = load_project(source_path)
+    from hyperc_package import HyperPackageBuilder
+    relative_entry = project.entry.relative_to(project.root).as_posix()
+    builder = HyperPackageBuilder(project.name, version, target or project.target or "host")
+    builder.add_file(project.root, relative_entry, "source")
+    builder.set_metadata(compiler="holyfitra", frontend="native+hyperir", entry=relative_entry)
+    package = builder.build()
+    secret = os.environ.get("HOLYFITRA_PACKAGE_SECRET")
+    if secret:
+        package.sign_hmac(secret.encode("utf-8"))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    package.write_manifest(output)
+    print(json.dumps({"ok": True, "manifest": str(output), "digest": package.digest(), "signed": bool(secret)}, sort_keys=True))
+    return 0
+
+
+def plan_file(source_path: Path, output: Path | None = None) -> int:
+    project = load_project(source_path)
+    source = project.entry.read_text(encoding="utf-8")
+    from hyperc_language_core import compile_source
+    result = compile_source(source)
+    rendered = json.dumps(result, indent=2, sort_keys=True, default=str)
+    if output is None:
+        print(rendered)
+    else:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(rendered + "\n", encoding="utf-8")
+        print(json.dumps({"ok": bool(result["valid"]), "output": str(output), "hyperir_digest": result["hyperir_digest"]}, sort_keys=True))
+    return 0 if result["valid"] else 1
+
+
+def check_file(source_path: Path) -> int:
+    project = load_project(source_path)
+    source_path = project.entry
+    source = source_path.read_text(encoding="utf-8")
+    try:
+        # Tensor/HyperIR programs remain fully supported by the existing frontend.
+        if "Tensor" in source or "capability" in source or "budget" in source:
+            from hyperc_language_core import compile_source
+            result = compile_source(source)
+            print(json.dumps(result, indent=2, sort_keys=True, default=str))
+            return 0 if result["valid"] else 1
+        program = parse_native(source)
+        validate_native(program)
+        print(json.dumps({"valid": True, "module": program.module, "functions": [function.name for function in program.functions]}, indent=2))
+        return 0
+    except (HolyFitraError, ValueError) as error:
+        print(json.dumps({"valid": False, "error": str(error)}, indent=2))
+        return 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="holyfitra", description="Holy Fitra compiler and runtime driver")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    init_parser = subparsers.add_parser("init", help="create a new Holy Fitra project")
+    init_parser.add_argument("directory", type=Path)
+    init_parser.add_argument("--name")
+    check_parser = subparsers.add_parser("check", help="parse and validate a Holy Fitra source file or project directory")
+    check_parser.add_argument("source", type=Path)
+    plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
+    plan_parser.add_argument("source", type=Path)
+    plan_parser.add_argument("-o", "--output", type=Path)
+    package_parser = subparsers.add_parser("package", help="create an integrity-checked Holy Fitra package manifest")
+    package_parser.add_argument("source", type=Path)
+    package_parser.add_argument("-o", "--output", type=Path, required=True)
+    package_parser.add_argument("--version", default="0.1.0")
+    package_parser.add_argument("--target")
+    llvm_parser = subparsers.add_parser("emit-llvm", help="emit LLVM IR for the native scalar subset")
+    llvm_parser.add_argument("source", type=Path)
+    llvm_parser.add_argument("-o", "--output", type=Path, required=True)
+    llvm_parser.add_argument("--target")
+    build_parser = subparsers.add_parser("build", help="compile and link an executable")
+    build_parser.add_argument("source", type=Path)
+    build_parser.add_argument("-o", "--output", type=Path, required=True)
+    build_parser.add_argument("--target")
+    build_parser.add_argument("--keep-llvm", action="store_true")
+    run_parser = subparsers.add_parser("run", help="build and execute a zero-argument main function")
+    run_parser.add_argument("source", type=Path)
+    run_parser.add_argument("--target")
+    run_parser.add_argument("--keep-llvm", action="store_true")
+    args = parser.parse_args(argv)
+    try:
+        if args.command == "init":
+            return init_project(args.directory, args.name)
+        if args.command == "check":
+            return check_file(args.source)
+        if args.command == "plan":
+            return plan_file(args.source, args.output)
+        if args.command == "package":
+            return package_file(args.source, args.output, args.version, args.target)
+        if args.command == "emit-llvm":
+            project = load_project(args.source)
+            return write_llvm(project.entry, args.output, args.target or project.target)
+        if args.command == "build":
+            project = load_project(args.source)
+            return build(project.entry, args.output, args.target or project.target, args.keep_llvm)
+        if args.command == "run":
+            project = load_project(args.source)
+            with tempfile.TemporaryDirectory(prefix="holyfitra-run-") as temporary:
+                executable = Path(temporary) / "program"
+                build(project.entry, executable, args.target or project.target, args.keep_llvm)
+                completed = subprocess.run([str(executable)])
+                return completed.returncode
+    except (HolyFitraError, OSError, subprocess.SubprocessError) as error:
+        print(f"holyfitra: error: {error}", file=sys.stderr)
+        return 1
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

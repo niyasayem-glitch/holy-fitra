@@ -1,0 +1,168 @@
+# Holy Fitra
+
+Holy Fitra is an AI-native programming language and runtime stack inspired by HolyC. It combines a fast native compiler path, typed tensor/effect planning, proof-carrying quantization, speculative decoding, privacy and consent contracts, ragged ARM64 attention, heterogeneous scheduling, JNI, and Android-facing Kotlin APIs.
+
+The repository now includes a real command-line compiler driver for a native scalar subset. Tensor/effect source is lowered into verified HyperIR plans, while the AI and Android runtime layers provide numerical execution and optimized native kernels.
+
+## Quick start on Linux or Termux
+
+```bash
+git clone https://github.com/niyasayem-glitch/holy-fitra.git
+cd holy-fitra
+bash termux-setup.sh --dry-run   # inspect packages without installing
+python3 holyfitra_compiler.py --help
+```
+
+On a normal Linux host:
+
+```bash
+sudo pip3 install -e .
+holyfitra --help
+```
+
+On Termux, run:
+
+```bash
+bash termux-setup.sh
+source "$HOME/.local/bin/holyfitra-env" 2>/dev/null || true
+```
+
+The setup script uses Termux `pkg` packages rather than `sudo`, installs Python/Clang/LLVM/CMake tooling, and prefers the Termux NumPy package when available.
+
+## Create and build a project
+
+```bash
+holyfitra init hello --name hello
+holyfitra check hello
+holyfitra build hello -o hello/app
+./hello/app
+```
+
+The generated source is:
+
+```holyfitra
+module hello
+
+fn main() -> i32 {
+    return 0
+}
+```
+
+## Native language subset
+
+The current native LLVM backend supports `i32`, `i64`, and `void`, typed function parameters, local declarations, function calls, integer arithmetic, returns, comments, constant folding, and deterministic content/target caching.
+
+```holyfitra
+module arithmetic
+
+fn add(a: i32, b: i32) -> i32 {
+    let c = a + b
+    return c
+}
+
+fn main() -> i32 {
+    return add(40, 2)
+}
+```
+
+Compile and run:
+
+```bash
+holyfitra check arithmetic.hf
+holyfitra emit-llvm arithmetic.hf -o arithmetic.ll
+holyfitra build arithmetic.hf -o arithmetic
+./arithmetic
+```
+
+For AArch64-oriented LLVM output:
+
+```bash
+holyfitra emit-llvm arithmetic.hf \
+  --target=aarch64-linux-android21 \
+  -o arithmetic.android.ll
+```
+
+A complete Android executable still requires the Android NDK/sysroot or the Android application’s CMake toolchain. Termux can compile the host-side native runtime and emit target IR, but Termux itself is not a replacement for the NDK when producing APK-linked native libraries.
+
+## Tensor, capability, and HyperIR planning
+
+```holyfitra
+module tensor_demo
+
+capability PublicRead {
+    allow files.read("/data/public/")
+    deny files.write
+}
+
+fn infer(x: Tensor<[1, 4], f16, device=neon>) -> Tensor<[1, 4], f16> {
+    budget memory <= 32 MiB
+    let w: Tensor<[4, 4], int4, device=neon>
+    let y = matmul(x, w)
+}
+```
+
+Use:
+
+```bash
+holyfitra check tensor_demo.hf
+holyfitra plan tensor_demo.hf -o tensor_demo.plan.json
+```
+
+The plan contains validation diagnostics, budgets, effects, HyperIR digest, and selected kernel lowering. The tensor planner and scalar LLVM backend are deliberately separate until the tensor pointer/shape ABI is completed.
+
+## AI runtime demonstrations
+
+```bash
+python3 hyperc_nn.py
+python3 hyperc_transformer.py
+python3 hyperc_proof_quant.py
+python3 hyperc_hybrid_quant.py --tokens 32 --calibration-samples 64
+python3 hyperc_adaptive_speculative.py
+python3 holy_fitra_runtime.py
+python3 holy_fitra_execution_plan.py
+```
+
+The AI stack includes dense layers and autodiff, transformer attention and KV caching, int4/int8/f16 selection with calibration gates, adaptive speculative decoding, privacy-flow and consent contracts, reversible receipts, and deterministic execution plans.
+
+## Native and Android validation
+
+```bash
+python3 validate_nibbleflow.py
+python3 validate_holy_fitra_ragged.py
+bash termux-build.sh --host-tests
+```
+
+The Android NDK integration is represented by `CMakeLists.txt`, `CMakeLists_benchmark.txt`, JNI sources, and Kotlin wrappers. Physical ARM64 Android validation is required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
+
+## Package a project
+
+```bash
+export HOLYFITRA_PACKAGE_SECRET='store this outside the repository'
+holyfitra package hello \
+  --version 0.1.0 \
+  --target android.arm64 \
+  -o hello.hfpkg.json
+```
+
+The package manifest is content-addressed and can be verified with the existing `hyperc_package.py` API. Do not commit signing secrets.
+
+## Test suite
+
+```bash
+python3 -m unittest -v \
+  test_holyfitra_compiler.py \
+  test_language_core.py \
+  test_hyperir.py \
+  test_package.py \
+  test_holy_fitra_runtime.py \
+  test_holy_fitra_execution_plan.py \
+  test_holy_fitra_ragged.py \
+  test_holy_fitra_dynamic_prefill.py \
+  test_smooth_runtime.py
+```
+
+Native scheduler tests require Clang and the ragged kernel object. `termux-build.sh --host-tests` performs this build on Termux or Linux.
+
+## Current boundary
+
+Holy Fitra is beyond a documentation-only prototype: it has an installable CLI that parses, checks, plans, emits LLVM, links native executables, initializes projects, caches compilation, and creates signed package manifests. The remaining major compiler milestone is a self-hosted frontend with full tensor ABI lowering, richer control flow and data types, dependency-aware incremental compilation, and direct Android NDK library packaging.

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "holyfitra"
+version = "0.1.0"
+description = "Holy Fitra AI-native compiler and runtime tools"
+requires-python = ">=3.11"
+dependencies = ["numpy>=1.24"]
+
+[project.scripts]
+holyfitra = "holyfitra_compiler:main"
+
+[tool.setuptools]
+py-modules = [
+  "holyfitra_compiler",
+  "hyperc_language_core",
+  "hyperc_hyperir",
+  "hyperc_nn",
+  "hyperc_transformer",
+  "hyperc_quantized_transformer",
+  "hyperc_awq",
+  "hyperc_hybrid_quant",
+  "hyperc_proof_quant",
+  "hyperc_speculative",
+  "hyperc_adaptive_speculative",
+  "holy_fitra_runtime",
+  "holy_fitra_fabric",
+  "holy_fitra_execution_plan",
+  "nibbleflow",
+]

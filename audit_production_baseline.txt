@@ -1,0 +1,331 @@
+=== git status ===
+fatal: not a git repository (or any of the parent directories): .git
+=== top-level files ===
+CMakeLists.txt
+CMakeLists_benchmark.txt
+HOLY_FITRA_QUICKSTART.md
+HolyFitraBenchmark.kt
+HolyFitraRuntime.kt
+NibbleFlow.kt
+all_powerful_regression.log
+audit_production_baseline.txt
+benchmark_holy_fitra_adaptive_chunk.cpp
+benchmark_holy_fitra_dispatch.cpp
+benchmark_holy_fitra_dynamic_prefill.py
+benchmark_holy_fitra_fused.cpp
+breakthrough_implementation_report.md
+breakthrough_regression.log
+e2e_android_benchmark.py
+e2e_breakthrough.log
+holy_fitra_20_iteration_report.md
+holy_fitra_adaptive_chunk_benchmark
+holy_fitra_adaptive_chunk_loop3
+holy_fitra_android_topology.cpp
+holy_fitra_android_topology.h
+holy_fitra_autonomous_loop_report.md
+holy_fitra_batch_san
+holy_fitra_batch_test
+holy_fitra_brainstorm_loop_report.md
+holy_fitra_breakthrough_blueprint.md
+holy_fitra_breakthrough_report.md
+holy_fitra_cross_layer_performance_report.md
+holy_fitra_device_benchmark.cpp
+holy_fitra_device_benchmark.h
+holy_fitra_device_benchmark.o
+holy_fitra_device_benchmark_jni.cpp
+holy_fitra_device_benchmark_jni.o
+holy_fitra_device_benchmark_loop
+holy_fitra_device_benchmark_test
+holy_fitra_dispatch.cpp
+holy_fitra_dispatch.h
+holy_fitra_dispatch.o
+holy_fitra_dispatch_benchmark
+holy_fitra_dispatch_report.md
+holy_fitra_dispatch_san
+holy_fitra_dispatch_test
+holy_fitra_dynamic_prefill.py
+holy_fitra_dynamic_prefill_report.md
+holy_fitra_enhanced_breakthroughs.md
+holy_fitra_enhanced_report.md
+holy_fitra_enhanced_validation.log
+holy_fitra_execution_plan.py
+holy_fitra_execution_plan_report.md
+holy_fitra_fused_benchmark
+holy_fitra_jni.cpp
+holy_fitra_loop2_candidates.md
+holy_fitra_loop2_report.md
+holy_fitra_loop_candidates.md
+holy_fitra_ragged_attention.py
+holy_fitra_ragged_attention_report.md
+holy_fitra_ragged_kernel.c
+holy_fitra_ragged_kernel.h
+holy_fitra_ragged_scheduler.cpp
+holy_fitra_ragged_scheduler.h
+holy_fitra_ragged_scheduler_loop2_san
+holy_fitra_ragged_scheduler_loop2_test
+holy_fitra_ragged_scheduler_loop3_san
+holy_fitra_ragged_scheduler_loop3_test
+holy_fitra_ragged_scheduler_loop_san
+holy_fitra_ragged_scheduler_loop_test
+holy_fitra_ragged_scheduler_report.md
+holy_fitra_ragged_scheduler_san
+holy_fitra_ragged_scheduler_test
+holy_fitra_runtime.cpp
+holy_fitra_runtime.h
+holy_fitra_runtime.py
+holy_fitra_runtime_san
+holy_fitra_runtime_test
+holy_fitra_self_improve.py
+holy_fitra_self_improvement_report.json
+holy_fitra_self_improvement_v2.log
+holy_fitra_self_improvement_v3.log
+holy_fitra_smooth_corrected.log
+holy_fitra_smooth_performance_report.md
+holy_fitra_smooth_validation.log
+holy_fitra_topology_test
+holy_fitra_validation.log
+holyfitra_android_build.gradle.kts
+holyfitra_android_end_to_end_report.md
+holyfitra_android_runtime_integration.md
+holyfitra_benchmark_build.gradle.kts
+holyfitra_device_benchmark_guide.md
+hyperc_adaptive_speculative.py
+hyperc_all_powerful_architecture.md
+hyperc_all_powerful_report.md
+hyperc_breakthrough_blueprint.md
+hyperc_hardened_execution_plan.md
+hyperc_hybrid_quant.py
+hyperc_hyperir.py
+hyperc_language_core.py
+hyperc_package.py
+hyperc_proof_quant.py
+hyperc_smooth_runtime.py
+hyperc_speculative.py
+nibbleflow.py
+nibbleflow_android.cpp
+nibbleflow_android.h
+nibbleflow_android_host_test.cpp
+nibbleflow_android_integration.md
+nibbleflow_jni.cpp
+nibbleflow_kernel.c
+nibbleflow_report.md
+nn_benchmark.py
+test_holy_fitra_batch_runtime.cpp
+test_holy_fitra_device_benchmark.cpp
+test_holy_fitra_dispatch.cpp
+test_holy_fitra_dynamic_prefill.py
+test_holy_fitra_execution_plan.py
+test_holy_fitra_ragged.py
+test_holy_fitra_ragged_scheduler.cpp
+test_holy_fitra_runtime.cpp
+test_holy_fitra_runtime.py
+test_holy_fitra_topology.cpp
+test_hyperir.py
+test_language_core.py
+test_package.py
+test_smooth_runtime.py
+validate_holy_fitra_ragged.py
+validate_nibbleflow.py
+verify_transformer.py
+=== compiler/runtime files ===
+CMakeLists.txt
+CMakeLists_benchmark.txt
+benchmark_holy_fitra_adaptive_chunk.cpp
+benchmark_holy_fitra_dispatch.cpp
+benchmark_holy_fitra_dynamic_prefill.py
+benchmark_holy_fitra_fused.cpp
+holy_fitra_20_iteration_report.md
+holy_fitra_adaptive_chunk_benchmark
+holy_fitra_adaptive_chunk_loop3
+holy_fitra_android_topology.cpp
+holy_fitra_android_topology.h
+holy_fitra_autonomous_loop_report.md
+holy_fitra_batch_san
+holy_fitra_batch_test
+holy_fitra_brainstorm_loop_report.md
+holy_fitra_breakthrough_blueprint.md
+holy_fitra_breakthrough_report.md
+holy_fitra_cross_layer_performance_report.md
+holy_fitra_device_benchmark.cpp
+holy_fitra_device_benchmark.h
+holy_fitra_device_benchmark.o
+holy_fitra_device_benchmark_jni.cpp
+holy_fitra_device_benchmark_jni.o
+holy_fitra_device_benchmark_loop
+holy_fitra_device_benchmark_test
+holy_fitra_dispatch.cpp
+holy_fitra_dispatch.h
+holy_fitra_dispatch.o
+holy_fitra_dispatch_benchmark
+holy_fitra_dispatch_report.md
+holy_fitra_dispatch_san
+holy_fitra_dispatch_test
+holy_fitra_dynamic_prefill.py
+holy_fitra_dynamic_prefill_report.md
+holy_fitra_enhanced_breakthroughs.md
+holy_fitra_enhanced_report.md
+holy_fitra_enhanced_validation.log
+holy_fitra_execution_plan.py
+holy_fitra_execution_plan_report.md
+holy_fitra_fused_benchmark
+holy_fitra_jni.cpp
+holy_fitra_loop2_candidates.md
+holy_fitra_loop2_report.md
+holy_fitra_loop_candidates.md
+holy_fitra_ragged_attention.py
+holy_fitra_ragged_attention_report.md
+holy_fitra_ragged_kernel.c
+holy_fitra_ragged_kernel.h
+holy_fitra_ragged_scheduler.cpp
+holy_fitra_ragged_scheduler.h
+holy_fitra_ragged_scheduler_loop2_san
+holy_fitra_ragged_scheduler_loop2_test
+holy_fitra_ragged_scheduler_loop3_san
+holy_fitra_ragged_scheduler_loop3_test
+holy_fitra_ragged_scheduler_loop_san
+holy_fitra_ragged_scheduler_loop_test
+holy_fitra_ragged_scheduler_report.md
+holy_fitra_ragged_scheduler_san
+holy_fitra_ragged_scheduler_test
+holy_fitra_runtime.cpp
+holy_fitra_runtime.h
+holy_fitra_runtime.py
+holy_fitra_runtime_san
+holy_fitra_runtime_test
+holy_fitra_self_improve.py
+holy_fitra_self_improvement_report.json
+holy_fitra_self_improvement_v2.log
+holy_fitra_self_improvement_v3.log
+holy_fitra_smooth_corrected.log
+holy_fitra_smooth_performance_report.md
+holy_fitra_smooth_validation.log
+holy_fitra_topology_test
+holy_fitra_validation.log
+hyperc_adaptive_speculative.py
+hyperc_all_powerful_architecture.md
+hyperc_all_powerful_report.md
+hyperc_breakthrough_blueprint.md
+hyperc_hardened_execution_plan.md
+hyperc_hybrid_quant.py
+hyperc_hyperir.py
+hyperc_language_core.py
+hyperc_package.py
+hyperc_proof_quant.py
+hyperc_smooth_runtime.py
+hyperc_speculative.py
+test_holy_fitra_batch_runtime.cpp
+test_holy_fitra_device_benchmark.cpp
+test_holy_fitra_dispatch.cpp
+test_holy_fitra_dynamic_prefill.py
+test_holy_fitra_execution_plan.py
+test_holy_fitra_ragged.py
+test_holy_fitra_ragged_scheduler.cpp
+test_holy_fitra_runtime.cpp
+test_holy_fitra_runtime.py
+test_holy_fitra_topology.cpp
+validate_holy_fitra_ragged.py
+=== test inventory ===
+holy_fitra_batch_test
+holy_fitra_device_benchmark_test
+holy_fitra_dispatch_test
+holy_fitra_ragged_scheduler_loop2_test
+holy_fitra_ragged_scheduler_loop3_test
+holy_fitra_ragged_scheduler_loop_test
+holy_fitra_ragged_scheduler_test
+holy_fitra_runtime_test
+holy_fitra_topology_test
+nibbleflow_android_host_test.cpp
+test_holy_fitra_batch_runtime.cpp
+test_holy_fitra_device_benchmark.cpp
+test_holy_fitra_dispatch.cpp
+test_holy_fitra_dynamic_prefill.py
+test_holy_fitra_execution_plan.py
+test_holy_fitra_ragged.py
+test_holy_fitra_ragged_scheduler.cpp
+test_holy_fitra_runtime.cpp
+test_holy_fitra_runtime.py
+test_holy_fitra_topology.cpp
+test_hyperir.py
+test_language_core.py
+test_package.py
+test_smooth_runtime.py
+=== Python compile entry points ===
+./test_holy_fitra_runtime.py:120:if __name__ == "__main__":
+./holy_fitra_runtime.py:396:if __name__ == "__main__":
+./test_language_core.py:6:from hyperc_language_core import compile_source, parse_module
+./test_language_core.py:19:        result = compile_source(source)
+./test_language_core.py:32:        result = compile_source(source)
+./test_language_core.py:44:        result = compile_source(source)
+./test_language_core.py:55:        module = parse_module(source)
+./test_language_core.py:67:        module = parse_module(source)
+./test_language_core.py:75:if __name__ == "__main__":
+./hyperc_package.py:137:if __name__ == "__main__":
+./test_package.py:53:if __name__ == "__main__":
+./hyperc_language_core.py:110:def parse_module(source: str) -> HyperModule:
+./hyperc_language_core.py:222:def compile_source(source: str) -> dict[str, Any]:
+./hyperc_language_core.py:223:    return parse_module(source).compile_plan()
+./hyperc_language_core.py:242:if __name__ == "__main__":
+./hyperc_language_core.py:243:    print(json.dumps(compile_source(demo_source()), indent=2, sort_keys=True))
+./e2e_android_benchmark.py:11:import argparse
+./e2e_android_benchmark.py:116:def main() -> int:
+./e2e_android_benchmark.py:117:    parser = argparse.ArgumentParser()
+./e2e_android_benchmark.py:241:if __name__ == "__main__":
+./test_hyperir.py:137:if __name__ == "__main__":
+./hyperc_adaptive_speculative.py:91:if __name__ == "__main__":
+./hyperc_speculative.py:14:import argparse
+./hyperc_speculative.py:259:def main() -> int:
+./hyperc_speculative.py:260:    parser = argparse.ArgumentParser()
+./hyperc_speculative.py:320:if __name__ == "__main__":
+./hyperc_hybrid_quant.py:10:import argparse
+./hyperc_hybrid_quant.py:115:def main() -> int:
+./hyperc_hybrid_quant.py:116:    parser = argparse.ArgumentParser()
+./hyperc_hybrid_quant.py:159:if __name__ == "__main__":
+./hyperc_hyperir.py:318:if __name__ == "__main__":
+./hyperc_proof_quant.py:104:if __name__ == "__main__":
+./hyperc_smooth_runtime.py:206:if __name__ == "__main__":
+./test_smooth_runtime.py:51:if __name__ == "__main__":
+./nibbleflow.py:182:if __name__ == "__main__":
+./validate_nibbleflow.py:20:def main() -> int:
+./validate_nibbleflow.py:54:if __name__ == "__main__":
+./holy_fitra_execution_plan.py:291:if __name__ == "__main__":
+./test_holy_fitra_execution_plan.py:87:if __name__ == "__main__":
+./holy_fitra_self_improve.py:231:def main() -> int:
+./holy_fitra_self_improve.py:278:if __name__ == "__main__":
+./holy_fitra_dynamic_prefill.py:244:if __name__ == "__main__":
+./test_holy_fitra_dynamic_prefill.py:82:if __name__ == "__main__":
+./benchmark_holy_fitra_dynamic_prefill.py:10:def main() -> int:
+./benchmark_holy_fitra_dynamic_prefill.py:32:if __name__ == "__main__":
+./holy_fitra_ragged_attention.py:143:if __name__ == "__main__":
+./validate_holy_fitra_ragged.py:49:def main() -> int:
+./validate_holy_fitra_ragged.py:63:if __name__ == "__main__":
+./test_holy_fitra_ragged.py:42:if __name__ == "__main__":
+=== GitHub auth ===
+[0;1;39mgithub.com[0m
+  [0;32m✓[0m Logged in to github.com account [0;1;39mniyasayem-glitch[0m (GH_TOKEN)
+  - Active account: [0;1;39mtrue[0m
+  - Git operations protocol: [0;1;39mhttps[0m
+  - Token: [0;1;39mghu_************************************[0m
+
+  [0;32m✓[0m Logged in to github.com account [0;1;39mniyasayem-glitch[0m (/home/ubuntu/.config/gh/hosts.yml)
+  - Active account: [0;1;39mfalse[0m
+  - Git operations protocol: [0;1;39mhttps[0m
+  - Token: [0;1;39mghu_************************************[0m
+=== connector snapshot ===
+Config loaded for non-project session.
+Config file: /home/ubuntu/.manus/config/config.json
+Baseline file: /home/ubuntu/.manus/config/baseline/config.json
+
+Search results for "github" in config.json:
+879:    {
+880:      "uid": "bbb0df76-66bd-4a24-ae4f-2aac4750d90b",
+881:      "name": "GitHub",
+882:      "brief": "Manage repositories, track code changes, and collaborate on team projects",
+883:      "enabled": true,
+884:      "tokenReplacementEnabled": true
+885:    }
+Next step: edit config.json and run `manus-config config save`
+=== toolchain ===
+/usr/bin/clang
+Ubuntu clang version 18.1.3 (1ubuntu1)
+/usr/bin/llvm-as
+/usr/bin/llc

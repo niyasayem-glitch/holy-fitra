@@ -1,0 +1,41 @@
+cmake_minimum_required(VERSION 3.22.1)
+project(holyfitra_benchmark LANGUAGES C CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
+add_library(holyfitra_benchmark SHARED
+    holy_fitra_ragged_kernel.c
+    holy_fitra_dispatch.cpp
+    holy_fitra_android_topology.cpp
+    holy_fitra_ragged_scheduler.cpp
+    holy_fitra_device_benchmark.cpp
+    holy_fitra_device_benchmark_jni.cpp
+)
+
+target_include_directories(holyfitra_benchmark PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+
+target_compile_options(holyfitra_benchmark PRIVATE
+    $<$<COMPILE_LANGUAGE:C>:-O3 -ffast-math -fno-math-errno>
+    $<$<COMPILE_LANGUAGE:CXX>:-O3 -fno-exceptions -fno-rtti>
+)
+
+target_compile_definitions(holyfitra_benchmark PRIVATE
+    HOLY_FITRA_ANDROID_BENCHMARK=1
+)
+
+find_library(log-lib log)
+find_library(android-lib android)
+target_link_libraries(holyfitra_benchmark
+    ${log-lib}
+    ${android-lib}
+    m
+)
+
+if(ANDROID_ABI STREQUAL "arm64-v8a")
+    target_compile_options(holyfitra_benchmark PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-march=armv8.2-a>
+        $<$<COMPILE_LANGUAGE:CXX>:-march=armv8.2-a>
+    )
+endif()

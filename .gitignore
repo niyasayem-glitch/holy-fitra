@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.o
+*.a
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Holy Fitra generated state
+.holyfitra/
+*.hfpkg.json
+*.plan.json
+*.ll
+*.bc
+*.out
+
+# Native and Android build output
+build/
+cmake-build-*/
+*-build/
+*.apk
+*.aab
+*.aar
+*.dex
+
+# Local binaries produced by repository smoke tests
+holy_fitra_*_test
+holy_fitra_*_san
+holy_fitra_*_benchmark
+holy_fitra_*_loop*
+holy_fitra_adaptive_chunk*
+holy_fitra_fused_benchmark
+holy_fitra_runtime_test
+holy_fitra_topology_test
+holy_fitra_dispatch_test
+holy_fitra_batch_test
+holy_fitra_device_benchmark_test
+
+# Local logs and benchmark captures
+*.log
+*_report.json
+publish_audit.txt
+full_python_regression.log
+gated_python_regression.log
+validate_*.log
+
+# Editors and OS
+.DS_Store
+.vscode/
+.idea/
