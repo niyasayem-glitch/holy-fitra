@@ -103,3 +103,14 @@ Persistent LLVM cache entries now carry schema and digest validation. Corrupt or
 ## Iteration 4 rejection
 
 Whole-program validation memoization was tested and rejected. Repeated equivalent two-function checks measured 0.006309 ms without the memo versus 0.007406 ms with it; 64-function checks measured 0.097688 ms versus 0.1033265 ms. The hash/equality overhead outweighed the saved validation work, so the compiler was restored to the last retained state and no iteration 4 source change was published.
+
+
+| Model Dev 1 | LoRA adapters over frozen dense bases, deterministic magnitude pruning, model manifests, adapter merge/export equivalence, and fail-closed resource budgets | x86-64 benchmark: initial MSE 0.1532496512 → final MSE 0.0827450603; 48 trainable versus 136 frozen-base parameters; 25% deterministic sparsity; merged maximum absolute error 0.0; 145 Python tests; 106 Termux host tests; ragged ASAN/UBSAN and sanitized NibbleFlow build passed; no physical Android measurements claimed | Pending |
+
+## Model-development milestone retained
+
+Holy Fitra now supports lightweight model specialization rather than inference alone. `LoRAAdapter` keeps the dense base frozen and learns a low-rank update through the existing dependency-free Tensor/Adam path. `magnitude_prune` provides deterministic binary masks and actual-sparsity reports. `ModelManifest` exposes parameter, byte, density, and adapter-footprint accounting, while `ResourceBudget` and `ResourceBudgetError` enforce hard deployment contracts. State round-trips are shape-checked and finite-value checked, and merged weights reproduce the adapter execution path exactly in the measured benchmark.
+
+The measured benchmark ran on the x86-64 sandbox and used a 16×8 base matrix, rank 2, 64 examples, and 180 Adam updates. It reduced MSE from 0.1532496512 to 0.0827450603, reported 48 trainable LoRA parameters versus 136 base parameters, and rejected a deliberately undersized trainable-parameter budget. The full applicable Python regression suite passed **145 tests with 0 failures**. The Termux-compatible host gate passed **106 tests**, including compiler/runtime workflows, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE checks, scheduler execution, and CLI workflows. Ragged scheduler ASAN/UBSAN execution passed, and the sanitized NibbleFlow shared library was produced successfully.
+
+The host is x86-64. AArch64 object emission and cross-compilation validate generated artifacts only; they are not evidence of physical Android execution, thermal behavior, battery use, latency, or throughput.
