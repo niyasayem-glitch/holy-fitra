@@ -23,3 +23,7 @@ The sandbox host is x86-64. AArch64 object emission and cross-compilation are va
 ## Loop policy
 
 Every candidate is evaluated against complete regression tests and applicable native gates. A candidate is retained only when it passes semantic and safety checks and does not introduce a measured regression. Quantization proof gates, evidence monotonicity, capability authorization, speculative-cache safety, and Android fallback contracts remain enforced.
+
+## Iteration 4 rejection
+
+Whole-program validation memoization was tested and rejected. Repeated equivalent two-function checks measured 0.006309 ms without the memo versus 0.007406 ms with it; 64-function checks measured 0.097688 ms versus 0.1033265 ms. The hash/equality overhead outweighed the saved validation work, so the compiler was restored to the last retained state and no iteration 4 source change was published.
