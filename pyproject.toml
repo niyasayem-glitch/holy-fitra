@@ -21,6 +21,8 @@ py-modules = [
   "holyfitra_contracts",
   "holyfitra_quant_utils",
   "holyfitra_data",
+  "holyfitra_qat",
+  "holyfitra_deploy",
   "holyfitra_telemetry",
   "hyperc_language_core",
   "hyperc_hyperir",

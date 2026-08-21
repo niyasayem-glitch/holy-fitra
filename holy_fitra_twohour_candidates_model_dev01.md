@@ -11,7 +11,7 @@ Holy Fitra can already train a NumPy MLP with Adam, replay, checkpoints, and eva
 | 3 | Structured sparsity masks | Reduces compute and model footprint | Medium | **Selected** |
 | 4 | Adapter merge/export path | Produces standalone compact models | Medium | **Selected** |
 | 5 | Deterministic model profiler | Makes tradeoffs measurable | Low | **Selected** |
-| 6 | Quantization-aware training fake quantization | Better int4/int8 accuracy | High | Defer |
+| 6 | Quantization-aware training with explicit fake-quantization quality gates | Better int4/int8 accuracy without silent degradation | High | **Selected and retained** |
 | 7 | Knowledge distillation trainer | Small student models | Medium/high | Defer |
 | 8 | Neural architecture search under budget | Automated compact design | High | Defer |
 | 9 | Low-rank optimizer state | Lower training memory | Medium | Defer |
@@ -19,7 +19,7 @@ Holy Fitra can already train a NumPy MLP with Adam, replay, checkpoints, and eva
 | 11 | Dataset streaming and deterministic batching | Larger training sets with reproducible training | Medium | **Selected and retained** |
 | 12 | Adapter composition/router | Multi-domain specialization | High | Defer |
 | 13 | Mixed-precision training scaler | Faster/cheaper training | High | Defer |
-| 14 | Native ONNX/TFLite exporter | Wider deployment | High/toolchain-dependent | Defer |
+| 14 | Deterministic Holy Fitra deployment exporter | Reproducible compact artifacts with verified round trips | Medium | **Selected and retained** |
 | 15 | Self-generating model compiler | Full AI synthesis loop | Very high | Defer |
 
 ## Selected foundation
@@ -54,7 +54,8 @@ The benchmark and native checks were performed on the x86-64 sandbox. AArch64 cr
 
 ## Dataset pipeline verification
 
-The next model-development sequence is now implemented in `holyfitra_data.py` and integrated into `holyfitra_learning.py`. `StreamingDataset` accepts repeatable factories or reusable iterables, validates fixed-shape finite float32 samples, performs deterministic hash-based train/validation assignment, and emits fixed-size `Batch` records. Shuffling uses a bounded buffer and a deterministic per-seed/per-epoch generator, so large or reopenable sources do not need to be materialized. `train_supervised_streaming` and `evaluate_streaming_mse` connect the stream to the existing Tensor/Adam and bounded replay path.
+The next model-development sequence is now implemented in `holyfitra_data.py` and integrated into `holyfitra_learning.py`.
+ `StreamingDataset` accepts repeatable factories or reusable iterables, validates fixed-shape finite float32 samples, performs deterministic hash-based train/validation assignment, and emits fixed-size `Batch` records. Shuffling uses a bounded buffer and a deterministic per-seed/per-epoch generator, so large or reopenable sources do not need to be materialized. `train_supervised_streaming` and `evaluate_streaming_mse` connect the stream to the existing Tensor/Adam and bounded replay path.
 
 The focused dataset suite passed 6 tests, the combined dataset/model-development/learning suite passed 15 tests, and the complete applicable Python regression suite passed **151 tests with 0 failures**. The Termux-compatible host gate passed **112 tests**, plus compiler/runtime workflows, NibbleFlow numerical validation, AArch64 object emission, ragged scalar/NEON/SVE checks, scheduler execution, and CLI project workflows. The module was added to `pyproject.toml`, and `test_holyfitra_data.py` is now part of `termux-build.sh --host-tests`.
 
@@ -63,3 +64,17 @@ The validation ran on the x86-64 sandbox. No physical Android device, thermal, b
 ## Dataset retention decision
 
 **Retain.** The pipeline is deterministic, bounded-memory for source traversal and shuffle buffering, fail-closed on malformed/non-finite samples, compatible with existing replay and checkpoint-aware training, and covered by full regression plus Termux-native gates.
+
+## Quantization-aware training and deployment verification
+
+The QAT milestone is implemented in `holyfitra_qat.py`. Symmetric int4 and int8 fake quantization supports scalar or per-axis scales, packed int4 storage, explicit MSE and maximum-error measurements, and a straight-through estimator for training. `QuantizationQualityGate` fails closed when either quality limit is exceeded. `QuantizationAwareMLP` applies fake-quantized weights, with optional fake-quantized activations, while retaining the existing Tensor/Adam parameter interface.
+
+`holyfitra_deploy.py` adds a versioned `HOLYFITRA` binary artifact. Export uses canonical JSON metadata, fixed array ordering, little-endian payloads, explicit quantization scales and quality contracts, atomic publication, and a SHA-256 artifact identity. The loader validates magic, version, model dimensions, array order, payload sizes, and quantization metadata before reconstructing a dependency-free deployment bundle.
+
+The focused QAT/deployment suite passed 5 tests, the full applicable Python regression suite passed **156 tests with 0 failures**, and the Termux-compatible host gate passed **117 tests**. Deterministic export produced byte-identical artifacts and equal digests; loaded predictions matched the QAT path within the tested tolerance; int4 quality-gate rejection and malformed-input protections passed. Existing NibbleFlow, AArch64 object emission, ragged scalar/NEON/SVE, scheduler, and CLI validations also passed.
+
+Validation was performed on the x86-64 sandbox. The native checks validate existing generated artifacts and host execution paths; no physical Android device latency, throughput, thermal, battery, or deployment claim is made.
+
+## QAT/deployment retention decision
+
+**Retain.** Quantization is explicit, measurable, and quality-gated rather than silently degrading model behavior. Export is deterministic and fail-closed on malformed artifacts, making the model ready for a later native Android loader without claiming that device integration has already been measured.

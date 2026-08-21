@@ -2,7 +2,7 @@
 
 ## Current retained state
 
-Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `5ec9bd4` on `master`, containing the deterministic streaming dataset milestone.
+Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](https://github.com/niyasayem-glitch/holy-fitra). The latest verified commit is `beb84d9` on `master`, containing the quality-gated QAT and deterministic deployment milestone.
 
 | Iteration | Retained change | Evidence | Commit |
 |---:|---|---|---|
@@ -26,6 +26,7 @@ Holy Fitra is published in the private repository [niyasayem-glitch/holy-fitra](
 | Verifier 1 | Deterministic pre-tool claim verifier with factual overlap, contradiction detection, confidence threshold, and audit gating | 141 tests; Termux/native/sanitizer gates; unsupported claim blocked; zero tool invocations; 0.046871 ms block benchmark | `9964e05` |
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic pruning, manifests, merge/export equivalence, and resource budgets | 145 tests; x86-64 benchmark MSE 0.1532496512 → 0.0827450603; 25% sparsity; merged error 0.0 | `5df1127` |
 | Dataset 1 | Repeatable streaming sources, deterministic hash splits, bounded-buffer epoch shuffling, fixed batches, streaming evaluation, and streaming training integration | 151 tests; 112 Termux host tests; malformed/non-finite samples rejected; deterministic epoch and split tests passed; no physical Android measurements claimed | `5ec9bd4` |
+| QAT/Export 1 | Quality-gated int4/int8 fake quantization with straight-through training, deterministic HOLYFITRA deployment artifacts, atomic export, SHA-256 identity, and round-trip loader validation | 156 tests; 117 Termux host tests; deterministic byte-identical export; QAT/deployment focused suite passed; no physical Android measurements claimed | `beb84d9` |
 
 ## Rejected work
 
@@ -33,7 +34,7 @@ A guarded thread-pool implementation of per-function validation was tested and r
 
 ## Validation boundary
 
-The current full applicable Python suite passes **151 tests with 0 failures**. The Termux-compatible host gate passes **112 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The dataset milestone adds deterministic stream, split, batch, malformed-input, and integrated streaming-training coverage.
+The current full applicable Python suite passes **156 tests with 0 failures**. The Termux-compatible host gate passes **117 tests**, compiler/runtime/dashboard tests, NibbleFlow numerical validation, AArch64 object emission, ragged attention scalar/NEON/SVE object checks, scheduler execution, CLI workflows, project initialization, and benchmark invocation. The current model-development stack now includes streaming training, quality-gated fake quantization, and deterministic deployment export coverage.
 
 The sandbox host is x86-64. AArch64 object emission and cross-compilation are validation evidence for generated artifacts only; no physical Android device execution, thermal measurement, Android latency measurement, or device throughput claim is made.
 
@@ -107,6 +108,16 @@ Whole-program validation memoization was tested and rejected. Repeated equivalen
 
 
 | Model Dev 1 | LoRA adapters over frozen dense bases, deterministic magnitude pruning, model manifests, adapter merge/export equivalence, and fail-closed resource budgets | x86-64 benchmark: initial MSE 0.1532496512 → final MSE 0.0827450603; 48 trainable versus 136 frozen-base parameters; 25% deterministic sparsity; merged maximum absolute error 0.0; 145 Python tests; 106 Termux host tests; ragged ASAN/UBSAN and sanitized NibbleFlow build passed; no physical Android measurements claimed | Pending |
+
+## QAT and deterministic deployment milestone retained
+
+Holy Fitra now has explicit quantization-aware training in `holyfitra_qat.py`. Symmetric int4 and int8 quantization supports scalar or per-axis scales, packed int4 payloads, finite-value validation, and measured MSE/maximum-error reports. The straight-through estimator quantizes forward values while passing gradients to the underlying trainable parameters. `QuantizationQualityGate` rejects candidates that exceed declared quality limits, and `QuantizationAwareMLP` preserves the existing optimizer/model interface.
+
+`holyfitra_deploy.py` adds a versioned `HOLYFITRA` binary artifact. It serializes canonical JSON metadata, fixed array ordering, little-endian arrays, explicit quantization scales and quality contracts, and caller metadata. Export is atomic and returns a SHA-256 digest. The loader validates magic, version, dimensions, canonical array order, byte lengths, and quantization metadata before reconstructing a dependency-free deployment bundle.
+
+The QAT/deployment focused suite passed **5 tests**, the complete applicable Python suite passed **156 tests with 0 failures**, and `termux-build.sh --host-tests` passed **117 tests**. Deterministic export generated byte-identical artifacts with equal digests, loaded predictions matched the QAT path in the tested case, and a deliberately impossible int4 quality contract failed closed.
+
+The validation host is x86-64. Existing AArch64 object emission, NibbleFlow, ragged attention, scheduler, and CLI gates passed; no physical Android device latency, throughput, thermal, battery, or deployment measurement is claimed.
 
 ## Dataset pipeline milestone retained
 
