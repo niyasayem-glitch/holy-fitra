@@ -124,6 +124,28 @@ holyfitra emit-llvm arithmetic.hf \
 
 A complete Android executable still requires the Android NDK/sysroot or the Android application’s CMake toolchain. Termux can compile the host-side native runtime and emit target IR, but Termux itself is not a replacement for the NDK when producing APK-linked native libraries.
 
+## Evolving native language features
+
+The native frontend now supports booleans, comparisons, logical operators, structured `if/else` blocks, path-sensitive return checking, compile-time constant folding, and explicit function effects.
+
+```holyfitra
+module safe_infer
+
+fn infer(score: i32) -> i32 effects [model, memory] {
+    if score >= 80 {
+        return 1
+    } else {
+        return 0
+    }
+}
+
+fn main() -> i32 {
+    return infer(90)
+}
+```
+
+Supported effect names are `io`, `network`, `tool`, `model`, `memory`, `thermal`, `random`, and `unsafe`. Unknown or duplicate effects are rejected. Effects are preserved in compiler diagnostics and LLVM metadata; later compiler phases will enforce effect capability propagation across call graphs.
+
 ## Tensor, capability, and HyperIR planning
 
 ```holyfitra

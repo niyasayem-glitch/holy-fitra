@@ -35,6 +35,71 @@ fn main() -> i32 {
         self.assertIn("define i32 @main()", llvm)
         self.assertIn("call i32 @add(i32 40, i32 2)", llvm)
 
+    def test_control_flow_if_else_compiles_and_runs(self):
+        source = (
+            'module control_test\n'
+            'fn choose(x: i32) -> i32 {\n'
+            '    if x >= 10 {\n'
+            '        return 1\n'
+            '    } else {\n'
+            '        return 2\n'
+            '    }\n'
+            '}\n'
+            'fn main() -> i32 {\n'
+            '    return choose(12)\n'
+            '}\n'
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / 'control_test.hf'
+            source_path.write_text(source, encoding='utf-8')
+            output = Path(temporary) / 'control_test'
+            from holyfitra_compiler import build
+            build(source_path, output)
+            run = subprocess.run([str(output)], timeout=5)
+            self.assertEqual(run.returncode, 1)
+
+    def test_bool_literal_and_comparison_typecheck(self):
+        source = (
+            'module bool_test\n'
+            'fn is_positive(x: i32) -> bool {\n'
+            '    if x > 0 {\n'
+            '        return true\n'
+            '    } else {\n'
+            '        return false\n'
+            '    }\n'
+            '}\n'
+            'fn main() -> i32 { return 0 }\n'
+        )
+        program = parse_native(source)
+        validate_native(program)
+        self.assertEqual(program.functions[0].return_type.name, 'bool')
+
+    def test_missing_else_path_is_rejected(self):
+        source = (
+            'module missing_else\n'
+            'fn maybe(x: i32) -> i32 {\n'
+            '    if x > 0 { return 1 }\n'
+            '}\n'
+        )
+        with self.assertRaises(HolyFitraError):
+            validate_native(parse_native(source))
+
+    def test_effect_annotations_are_typed_metadata(self):
+        source = (
+            'module effect_test\n'
+            'fn infer() -> i32 effects [model, memory] { return 7 }\n'
+            'fn main() -> i32 { return infer() }\n'
+        )
+        program = parse_native(source)
+        validate_native(program)
+        self.assertEqual(program.functions[0].effects, ('model', 'memory'))
+        self.assertIn('; effects: model, memory', emit_llvm(program))
+
+    def test_unknown_effect_is_rejected(self):
+        source = 'module effect_test\nfn main() -> i32 effects [telepathy] { return 0 }\n'
+        with self.assertRaises(HolyFitraError):
+            validate_native(parse_native(source))
+
     def test_type_error_is_rejected(self):
         source = "fn main() -> i32 { let x: i64 = 1 return x }"
         with self.assertRaises(HolyFitraError):

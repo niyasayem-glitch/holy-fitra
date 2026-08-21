@@ -51,7 +51,7 @@ class Type:
 
     @property
     def llvm(self) -> str:
-        mapping = {"i32": "i32", "i64": "i64"}
+        mapping = {"i32": "i32", "i64": "i64", "bool": "i1"}
         if self.name not in mapping:
             raise HolyFitraError(f"native LLVM backend does not yet support type {self.name}")
         return mapping[self.name]
@@ -60,6 +60,11 @@ class Type:
 @dataclass(frozen=True)
 class Expr:
     pass
+
+
+@dataclass(frozen=True)
+class BoolLiteral(Expr):
+    value: bool
 
 
 @dataclass(frozen=True)
@@ -99,7 +104,15 @@ class ReturnStmt:
     line: int
 
 
-Statement = LetStmt | ReturnStmt
+@dataclass(frozen=True)
+class IfStmt:
+    condition: Expr
+    then_body: tuple[Statement, ...]
+    else_body: tuple[Statement, ...]
+    line: int
+
+
+Statement = LetStmt | ReturnStmt | IfStmt
 
 
 @dataclass(frozen=True)
@@ -109,6 +122,7 @@ class Function:
     return_type: Type
     body: tuple[Statement, ...]
     line: int
+    effects: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -119,8 +133,8 @@ class Program:
 
 _TOKEN_RE = re.compile(
     r"(?P<ws>\s+)|(?P<comment>//[^\n]*|#[^\n]*)|(?P<float>\d+\.\d+)|(?P<int>\d+)|"
-    r"(?P<ident>[A-Za-z_][A-Za-z0-9_.]*)|(?P<arrow>->)|(?P<le><=)|(?P<op>[+\-*/=<>])|"
-    r"(?P<punct>[{}(),:;])|(?P<string>\"(?:\\.|[^\"\\])*\")"
+    r"(?P<ident>[A-Za-z_][A-Za-z0-9_.]*)|(?P<arrow>->)|(?P<cmp>==|!=|<=|>=|&&|\|\|)|(?P<op>[+\-*/=<>!])|"
+    r"(?P<punct>[{}(),:;\[\]])|(?P<string>\"(?:\\.|[^\"\\])*\")"
 )
 
 
@@ -136,7 +150,7 @@ def lex(source: str) -> tuple[Token, ...]:
         text = match.group(0)
         kind = match.lastgroup or ""
         if kind not in {"ws", "comment"}:
-            normalized = "ARROW" if kind == "arrow" else "LE" if kind == "le" else kind.upper()
+            normalized = "ARROW" if kind == "arrow" else "OP" if kind == "cmp" else kind.upper()
             tokens.append(Token(normalized, text, line, column))
         newlines = text.count("\n")
         if newlines:
@@ -210,7 +224,7 @@ class Parser:
                 self.advance()
 
     def _skip_to_statement_end(self) -> None:
-        while self.current.kind not in {"EOF", "PUNCT"} or self.current.text not in {";", "}"}:
+        while self.current.kind != "EOF" and not (self.current.kind == "PUNCT" and self.current.text in {";", "}"}):
             self.advance()
         self.accept("PUNCT", ";")
 
@@ -228,19 +242,40 @@ class Parser:
                 self.expect("PUNCT", ",")
         self.expect("ARROW")
         return_type = self.parse_type()
+        effects: list[str] = []
+        if self.accept("IDENT", "effects"):
+            self.expect("PUNCT", "[")
+            if not self.accept("PUNCT", "]"):
+                while True:
+                    effects.append(self.expect("IDENT").text)
+                    if self.accept("PUNCT", "]"):
+                        break
+                    self.expect("PUNCT", ",")
+        body = self.parse_block()
+        return Function(name_token.text, tuple(parameters), return_type, body, name_token.line, tuple(effects))
+
+    def parse_block(self) -> tuple[Statement, ...]:
         self.expect("PUNCT", "{")
         body: list[Statement] = []
         while not self.accept("PUNCT", "}"):
             if self.current.kind == "EOF":
-                raise HolyFitraError(f"unterminated function {name_token.text}")
+                raise HolyFitraError("unterminated block")
             body.append(self.parse_statement())
-        return Function(name_token.text, tuple(parameters), return_type, tuple(body), name_token.line)
+        return tuple(body)
 
     def parse_type(self) -> Type:
         token = self.expect("IDENT")
         return Type(token.text)
 
     def parse_statement(self) -> Statement:
+        if self.accept("IDENT", "if"):
+            line = self.tokens[self.index - 1].line
+            condition = self.parse_expression()
+            then_body = self.parse_block()
+            else_body: tuple[Statement, ...] = ()
+            if self.accept("IDENT", "else"):
+                else_body = self.parse_block()
+            return IfStmt(condition, then_body, else_body, line)
         if self.accept("IDENT", "let") or self.accept("IDENT", "var"):
             name = self.expect("IDENT")
             declared_type = None
@@ -265,8 +300,15 @@ class Parser:
         return self.parse_additive()
 
     def parse_additive(self) -> Expr:
-        expression = self.parse_multiplicative()
+        expression = self.parse_comparison()
         while self.current.kind == "OP" and self.current.text in {"+", "-"}:
+            operator = self.advance().text
+            expression = BinaryExpr(operator, expression, self.parse_comparison())
+        return expression
+
+    def parse_comparison(self) -> Expr:
+        expression = self.parse_multiplicative()
+        while self.current.kind == "OP" and self.current.text in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
             operator = self.advance().text
             expression = BinaryExpr(operator, expression, self.parse_multiplicative())
         return expression
@@ -279,6 +321,8 @@ class Parser:
         return expression
 
     def parse_primary(self) -> Expr:
+        if self.current.kind == "IDENT" and self.current.text in {"true", "false"}:
+            return BoolLiteral(self.advance().text == "true")
         if self.current.kind == "INT":
             return IntLiteral(int(self.advance().text))
         if self.current.kind == "IDENT":
@@ -315,6 +359,8 @@ def _function_map(program: Program) -> dict[str, Function]:
 
 
 def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[str, Function]) -> Type:
+    if isinstance(expr, BoolLiteral):
+        return Type("bool")
     if isinstance(expr, IntLiteral):
         return Type("i32")
     if isinstance(expr, NameExpr):
@@ -326,6 +372,14 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
         right = _infer_expression(expr.right, variables, functions)
         if left != right:
             raise HolyFitraError(f"operator {expr.operator} requires matching types, got {left.name} and {right.name}")
+        if expr.operator in {"&&", "||"}:
+            if left.name != "bool":
+                raise HolyFitraError(f"logical operator {expr.operator} requires bool operands")
+            return Type("bool")
+        if expr.operator in {"==", "!=", "<", "<=", ">", ">="}:
+            if left.name not in {"i32", "i64", "bool"}:
+                raise HolyFitraError(f"comparison does not support {left.name}")
+            return Type("bool")
         if left.name not in {"i32", "i64"}:
             raise HolyFitraError(f"native arithmetic currently supports i32 and i64, not {left.name}")
         return left
@@ -345,30 +399,50 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
 
 def validate_native(program: Program) -> None:
     functions = _function_map(program)
+    allowed_effects = {"io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"}
     for function in program.functions:
-        if function.return_type.name not in {"i32", "i64", "void"}:
+        unknown_effects = set(function.effects) - allowed_effects
+        if unknown_effects:
+            raise HolyFitraError(f"function {function.name} declares unknown effects: {', '.join(sorted(unknown_effects))}")
+        if len(set(function.effects)) != len(function.effects):
+            raise HolyFitraError(f"function {function.name} declares duplicate effects")
+        if function.return_type.name not in {"i32", "i64", "bool", "void"}:
             raise HolyFitraError(f"function {function.name} has unsupported return type {function.return_type.name}")
         variables = dict(function.parameters)
-        saw_return = False
-        for statement in function.body:
-            if isinstance(statement, LetStmt):
-                actual = _infer_expression(statement.value, variables, functions)
-                if statement.type is not None and actual != statement.type:
-                    raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
-                variables[statement.name] = statement.type or actual
-            else:
-                saw_return = True
-                if function.return_type.name == "void":
-                    if statement.value is not None:
-                        raise HolyFitraError(f"void function {function.name} cannot return a value")
-                else:
-                    if statement.value is None:
-                        raise HolyFitraError(f"function {function.name} must return {function.return_type.name}")
-                    actual = _infer_expression(statement.value, variables, functions)
-                    if actual != function.return_type:
-                        raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
-        if function.return_type.name != "void" and not saw_return:
-            raise HolyFitraError(f"function {function.name} does not return a value")
+
+        def validate_block(statements: tuple[Statement, ...], scope: dict[str, Type]) -> bool:
+            guaranteed_return = False
+            for statement in statements:
+                if isinstance(statement, LetStmt):
+                    actual = _infer_expression(statement.value, scope, functions)
+                    if statement.type is not None and actual != statement.type:
+                        raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
+                    scope[statement.name] = statement.type or actual
+                elif isinstance(statement, ReturnStmt):
+                    guaranteed_return = True
+                    if function.return_type.name == "void":
+                        if statement.value is not None:
+                            raise HolyFitraError(f"void function {function.name} cannot return a value")
+                    else:
+                        if statement.value is None:
+                            raise HolyFitraError(f"function {function.name} must return {function.return_type.name}")
+                        actual = _infer_expression(statement.value, scope, functions)
+                        if actual != function.return_type:
+                            raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
+                elif isinstance(statement, IfStmt):
+                    condition_type = _infer_expression(statement.condition, scope, functions)
+                    if condition_type.name != "bool":
+                        raise HolyFitraError("if condition must be bool")
+                    then_return = validate_block(statement.then_body, dict(scope))
+                    else_return = bool(statement.else_body) and validate_block(statement.else_body, dict(scope))
+                    guaranteed_return = then_return and else_return
+                if guaranteed_return:
+                    break
+            return guaranteed_return
+
+        guaranteed_return = validate_block(function.body, variables)
+        if function.return_type.name != "void" and not guaranteed_return:
+            raise HolyFitraError(f"function {function.name} does not return on every path")
 
 
 class LLVMEmitter:
@@ -376,12 +450,19 @@ class LLVMEmitter:
         self.program = program
         self.functions = _function_map(program)
         self.counter = 0
+        self.block_counter = 0
+        self.terminated = False
         self.variables: dict[str, str] = {}
         self.types: dict[str, Type] = {}
 
     def temp(self) -> str:
         value = f"%t{self.counter}"
         self.counter += 1
+        return value
+
+    def block(self, prefix: str) -> str:
+        value = f"{prefix}{self.block_counter}"
+        self.block_counter += 1
         return value
 
     def emit(self, target: str | None = None) -> str:
@@ -394,6 +475,8 @@ class LLVMEmitter:
         return "\n".join(lines).rstrip() + "\n"
 
     def emit_expr(self, expression: Expr) -> tuple[str, Type]:
+        if isinstance(expression, BoolLiteral):
+            return ("1" if expression.value else "0"), Type("bool")
         if isinstance(expression, IntLiteral):
             return str(expression.value), Type("i32")
         if isinstance(expression, NameExpr):
@@ -401,21 +484,36 @@ class LLVMEmitter:
                 raise HolyFitraError(f"unknown value {expression.name}")
             return self.variables[expression.name], self.types[expression.name]
         if isinstance(expression, BinaryExpr):
-            if isinstance(expression.left, IntLiteral) and isinstance(expression.right, IntLiteral):
+            if isinstance(expression.left, (IntLiteral, BoolLiteral)) and isinstance(expression.right, (IntLiteral, BoolLiteral)):
+                left_value = expression.left.value
+                right_value = expression.right.value
                 if expression.operator == "+":
-                    return str(expression.left.value + expression.right.value), Type("i32")
+                    return str(left_value + right_value), Type("i32")
                 if expression.operator == "-":
-                    return str(expression.left.value - expression.right.value), Type("i32")
+                    return str(left_value - right_value), Type("i32")
                 if expression.operator == "*":
-                    return str(expression.left.value * expression.right.value), Type("i32")
+                    return str(left_value * right_value), Type("i32")
                 if expression.operator == "/":
-                    if expression.right.value == 0:
+                    if right_value == 0:
                         raise HolyFitraError("division by zero in constant expression")
-                    return str(expression.left.value // expression.right.value), Type("i32")
+                    return str(left_value // right_value), Type("i32")
+                if expression.operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
+                    outcomes = {"==": left_value == right_value, "!=": left_value != right_value, "<": left_value < right_value, "<=": left_value <= right_value, ">": left_value > right_value, ">=": left_value >= right_value, "&&": bool(left_value and right_value), "||": bool(left_value or right_value)}
+                    return ("1" if outcomes[expression.operator] else "0"), Type("bool")
             left, type_ = self.emit_expr(expression.left)
             right, right_type = self.emit_expr(expression.right)
             if type_ != right_type:
                 raise HolyFitraError("binary operands have different types")
+            if expression.operator in {"&&", "||"}:
+                opcode = "and" if expression.operator == "&&" else "or"
+                result = self.temp()
+                self.current_lines.append(f"  {result} = {opcode} i1 {left}, {right}")
+                return result, Type("bool")
+            if expression.operator in {"==", "!=", "<", "<=", ">", ">="}:
+                predicates = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
+                result = self.temp()
+                self.current_lines.append(f"  {result} = icmp {predicates[expression.operator]} {type_.llvm} {left}, {right}")
+                return result, Type("bool")
             opcode = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv"}[expression.operator]
             result = self.temp()
             lines = getattr(self, "current_lines", None)
@@ -440,32 +538,76 @@ class LLVMEmitter:
             return result, result_type
         raise HolyFitraError("unsupported expression")
 
-    def emit_function(self, function: Function) -> list[str]:  # type: ignore[override]
+    def emit_function(self, function: Function) -> list[str]:
         validate_native(self.program)
         self.counter = 0
+        self.block_counter = 0
+        self.terminated = False
         self.variables = {name: f"%{name}" for name, _ in function.parameters}
         self.types = dict(function.parameters)
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
         return_type = "void" if function.return_type.name == "void" else function.return_type.llvm
-        lines = [f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
+        effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
+        lines = [effect_comment, f"define {return_type} @{function.name}({parameters}) {{", "entry:"]
         self.current_lines = lines
-        returned = False
-        for statement in function.body:
+        self.emit_block(function.body)
+        if not self.terminated and function.return_type.name == "void":
+            lines.append("  ret void")
+        elif not self.terminated:
+            raise HolyFitraError(f"function {function.name} has an unterminated return path")
+        lines.append("}")
+        return lines
+
+    def emit_block(self, statements: tuple[Statement, ...]) -> bool:
+        block_terminated = False
+        for statement in statements:
+            if self.terminated:
+                block_terminated = True
+                break
             if isinstance(statement, LetStmt):
                 value, value_type = self.emit_expr(statement.value)
                 self.variables[statement.name] = value
                 self.types[statement.name] = statement.type or value_type
-            else:
+            elif isinstance(statement, ReturnStmt):
                 if statement.value is None:
-                    lines.append("  ret void")
+                    self.current_lines.append("  ret void")
                 else:
                     value, value_type = self.emit_expr(statement.value)
-                    lines.append(f"  ret {value_type.llvm} {value}")
-                returned = True
-        if not returned and function.return_type.name == "void":
-            lines.append("  ret void")
-        lines.append("}")
-        return lines
+                    self.current_lines.append(f"  ret {value_type.llvm} {value}")
+                self.terminated = True
+                block_terminated = True
+            elif isinstance(statement, IfStmt):
+                condition, condition_type = self.emit_expr(statement.condition)
+                if condition_type.name != "bool":
+                    raise HolyFitraError("if condition must be bool")
+                then_label = self.block("if_then")
+                else_label = self.block("if_else")
+                merge_label = self.block("if_merge")
+                self.current_lines.append(f"  br i1 {condition}, label %{then_label}, label %{else_label}")
+                self.current_lines.append(f"{then_label}:")
+                saved_variables = self.variables
+                saved_types = self.types
+                self.variables = dict(saved_variables)
+                self.types = dict(saved_types)
+                self.terminated = False
+                then_terminated = self.emit_block(statement.then_body)
+                if not then_terminated:
+                    self.current_lines.append(f"  br label %{merge_label}")
+                self.current_lines.append(f"{else_label}:")
+                self.variables = dict(saved_variables)
+                self.types = dict(saved_types)
+                self.terminated = False
+                else_terminated = self.emit_block(statement.else_body) if statement.else_body else False
+                if not else_terminated:
+                    self.current_lines.append(f"  br label %{merge_label}")
+                self.current_lines.append(f"{merge_label}:")
+                self.variables = saved_variables
+                self.types = saved_types
+                self.terminated = then_terminated and else_terminated
+                if self.terminated:
+                    self.current_lines.append("  unreachable")
+                block_terminated = self.terminated
+        return block_terminated
 
 
 def emit_llvm(program: Program, target: str | None = None) -> str:
@@ -608,7 +750,7 @@ def check_file(source_path: Path) -> int:
             return 0 if result["valid"] else 1
         program = parse_native(source)
         validate_native(program)
-        print(json.dumps({"valid": True, "module": program.module, "functions": [function.name for function in program.functions]}, indent=2))
+        print(json.dumps({"valid": True, "module": program.module, "functions": [{"name": function.name, "effects": list(function.effects)} for function in program.functions]}, indent=2))
         return 0
     except (HolyFitraError, ValueError) as error:
         print(json.dumps({"valid": False, "error": str(error)}, indent=2))

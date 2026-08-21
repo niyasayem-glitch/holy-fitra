@@ -80,7 +80,7 @@ class Workspace:
             else:
                 program = parse_native(source)
                 validate_native(program)
-                self.last_result = {"valid": True, "mode": "native", "module": program.module, "functions": [fn.name for fn in program.functions]}
+                self.last_result = {"valid": True, "mode": "native", "module": program.module, "functions": [{"name": fn.name, "effects": list(fn.effects)} for fn in program.functions]}
         except (HolyFitraError, OSError, ValueError) as error:
             self.last_result = {"valid": False, "error": str(error), "file": self.relative(path)}
         self.status = "valid" if self.last_result.get("valid") else "error"

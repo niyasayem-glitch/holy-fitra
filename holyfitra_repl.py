@@ -113,7 +113,7 @@ class Repl:
                 try:
                     program = parse_native(source)
                     validate_native(program)
-                    self.write(json.dumps({"valid": True, "module": program.module, "functions": [fn.name for fn in program.functions]}, indent=2))
+                    self.write(json.dumps({"valid": True, "module": program.module, "functions": [{"name": fn.name, "effects": list(fn.effects)} for fn in program.functions]}, indent=2))
                 except HolyFitraError as error:
                     self.write(json.dumps({"valid": False, "error": str(error)}, indent=2))
             elif self.project_path:
