@@ -210,3 +210,20 @@ The runtime abort was traced to eager evaluation of the seed language's Boolean 
 The sandbox validation host is x86-64. AArch64 LLVM lowering and object emission validate generated artifacts only; no physical Android execution, thermal measurement, device latency, battery, or throughput claim is made. This milestone advances self-hosting but is not yet a fully self-compiled fixed-point compiler: the Holy Fitra type checker, LLVM emitter, and Stage-1 self-rebuild remain future work.
 
 The milestone is retained because the fix removes the observed runtime abort without weakening fail-closed runtime bounds, and every applicable regression and native gate passed.
+
+## Short-circuit control-flow milestone retained
+
+The Stage-0 LLVM emitter now lowers Boolean `&&` and `||` expressions with true short-circuit control flow instead of eager LLVM `and`/`or` instructions. The emitter creates explicit RHS, short-circuit, and merge blocks and materializes the result with a `phi i1`. This prevents unsafe, effectful, expensive, or unnecessary right-hand-side expressions from executing when the left-hand side already determines the result.
+
+This is a foundational correctness improvement for self-hosting and AI-native safety. The previous self-hosted frontend abort exposed the exact class of bug that eager evaluation permits: a bounds-sensitive string access was evaluated even when its guard was false. The new lowering makes source-level short-circuit semantics explicit in the generated CFG and prepares the language for capability-gated effects and lazy model/tool work.
+
+| Validation | Result |
+|---|---:|
+| Dedicated `short_circuit.hf` fixture | Passed; both skipped RHS branches avoid an intentionally invalid dynamic-array access |
+| Generated LLVM shape | Passed; explicit `phi i1` present |
+| Dedicated ASAN/UBSan execution | Passed |
+| Full Python regression suite | Passed; 168 tests, 0 failures |
+| Termux-compatible host gate | Passed; 129 tests |
+| No-Python bootstrap gate | Passed; includes native and AArch64 short-circuit fixtures |
+
+The validation host is x86-64. The AArch64 checks validate generated objects only; no physical Android execution, thermal, latency, battery, or throughput claim is made. The next highest-leverage path is a bounded byte-buffer/string-builder ABI, followed by a self-hosted symbol table, type checker, and canonical LLVM emitter.

@@ -393,7 +393,27 @@ private:
         if(e.kind==Expr::Kind::String){auto&s=static_cast<const StringExpr&>(e).value;auto id=strings_.at(s);auto r=tmp();o<<"  "<<r<<" = getelementptr inbounds ["<<s.size()+1<<" x i8], ptr @.str."<<id<<", i64 0, i64 0\n";return {r,Type::scalar(TypeKind::String)};}
         if(e.kind==Expr::Kind::Name){auto&n=static_cast<const NameExpr&>(e).name;auto&l=locals_.at(n);auto r=tmp();o<<"  "<<r<<" = load "<<l.type.llvm()<<", ptr "<<l.addr<<"\n";return {r,l.type};}
         if(e.kind==Expr::Kind::Unary){auto&x=static_cast<const UnaryExpr&>(e);auto a=expr(*x.operand,o);auto r=tmp();if(x.op=="-")o<<"  "<<r<<" = sub "<<a.second.llvm()<<" 0, "<<a.first<<"\n";else o<<"  "<<r<<" = xor i1 "<<a.first<<", 1\n";return {r,a.second};}
-        if(e.kind==Expr::Kind::Binary){auto&x=static_cast<const BinaryExpr&>(e);auto a=expr(*x.left,o),b=expr(*x.right,o,a.second);auto r=tmp();if(x.op=="&&"||x.op=="||")o<<"  "<<r<<" = "<<(x.op=="&&"?"and":"or")<<" i1 "<<a.first<<", "<<b.first<<"\n";else if(x.op=="+"||x.op=="-"||x.op=="*"||x.op=="/")o<<"  "<<r<<" = "<<(x.op=="+"?"add":x.op=="-"?"sub":x.op=="*"?"mul":"sdiv")<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";else{o<<"  "<<r<<" = icmp "<<std::map<std::string,std::string>{{"==","eq"},{"!=","ne"},{"<","slt"},{"<=","sle"},{">","sgt"},{">=","sge"}}.at(x.op)<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";return {r,Type::scalar(TypeKind::Bool)};}return {r,(x.op=="&&"||x.op=="||")?Type::scalar(TypeKind::Bool):a.second};}
+        if(e.kind==Expr::Kind::Binary){
+            auto&x=static_cast<const BinaryExpr&>(e);
+            if(x.op=="&&"||x.op=="||"){
+                auto a=expr(*x.left,o);
+                auto rhs=label("bool_rhs"),shortc=label("bool_short"),merge=label("bool_merge"),r=tmp();
+                if(x.op=="&&")o<<"  br i1 "<<a.first<<", label %"<<rhs<<", label %"<<shortc<<"\n";
+                else o<<"  br i1 "<<a.first<<", label %"<<shortc<<", label %"<<rhs<<"\n";
+                o<<rhs<<":\n";
+                auto b=expr(*x.right,o,Type::scalar(TypeKind::Bool));
+                o<<"  br label %"<<merge<<"\n";
+                o<<shortc<<":\n";
+                o<<"  br label %"<<merge<<"\n";
+                o<<merge<<":\n";
+                o<<"  "<<r<<" = phi i1 [ "<<b.first<<", %"<<rhs<<" ], [ "<<(x.op=="&&"?"0":"1")<<", %"<<shortc<<" ]\n";
+                return {r,Type::scalar(TypeKind::Bool)};
+            }
+            auto a=expr(*x.left,o),b=expr(*x.right,o,a.second);auto r=tmp();
+            if(x.op=="+"||x.op=="-"||x.op=="*"||x.op=="/")o<<"  "<<r<<" = "<<(x.op=="+"?"add":x.op=="-"?"sub":x.op=="*"?"mul":"sdiv")<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";
+            else{o<<"  "<<r<<" = icmp "<<std::map<std::string,std::string>{{"==","eq"},{"!=","ne"},{"<","slt"},{"<=","sle"},{">","sgt"},{">=","sge"}}.at(x.op)<<" "<<a.second.llvm()<<" "<<a.first<<", "<<b.first<<"\n";return {r,Type::scalar(TypeKind::Bool)};}
+            return {r,a.second};
+        }
         if(e.kind==Expr::Kind::Call){auto&x=static_cast<const CallExpr&>(e);const auto&f=function(x.name);std::vector<std::pair<std::string,Type>>a;for(std::size_t i=0;i<x.arguments.size();++i)a.push_back(expr(*x.arguments[i],o,f.parameters[i].type));std::ostringstream args;for(std::size_t i=0;i<a.size();++i){if(i)args<<", ";args<<f.parameters[i].type.llvm()<<" "<<a[i].first;}if(f.return_type.kind==TypeKind::Void){o<<"  call void @"<<f.name<<"("<<args.str()<<")\n";return {"",f.return_type};}auto r=tmp();o<<"  "<<r<<" = call "<<f.return_type.llvm()<<" @"<<f.name<<"("<<args.str()<<")\n";return {r,f.return_type};}
         if(e.kind==Expr::Kind::Array||e.kind==Expr::Kind::Struct){return {aggregate(e,expected.value_or(localType(e)),o),expected.value_or(localType(e))};}
         if(e.kind==Expr::Kind::Index){auto&x=static_cast<const IndexExpr&>(e);Type base=localType(*x.base);if(base.kind==TypeKind::DynamicArray&&base.element->kind==TypeKind::I32){auto a=expr(*x.base,o);auto i=expr(*x.index,o,Type::scalar(TypeKind::I64));auto r=tmp();o<<"  "<<r<<" = call i32 @hf_dyn_i32_get(ptr "<<a.first<<", i64 "<<i.first<<")\n";return {r,Type::scalar(TypeKind::I32)};}}

@@ -1,0 +1,16 @@
+module short_circuit
+
+fn trap() -> bool {
+    let invalid: dyn<i32> = hf_dyn_i32_new(0)
+    return hf_dyn_i32_get32(invalid, 0) == 1
+}
+
+fn main() -> i32 {
+    if false && trap() {
+        return 1
+    }
+    if true || trap() {
+        return 0
+    }
+    return 2
+}

@@ -4,7 +4,7 @@
 
 ## Supported subset
 
-The seed supports modules, functions, `i32`, `i64`, `bool`, `void`, `string`, `file`, and typed opaque dynamic-array handles such as `dyn<i32>`. It also supports fixed arrays such as `[32]i32`, named structs, typed parameters, local `let`/`var` bindings, arithmetic, comparisons, logical operators, unary operators, calls, `if`/`else`, `while`, expression statements, returns, array indexing, and struct field access. The current aggregate constructors use forms such as `[1, 2, 3]` and `Pair { first: 1, second: 2 }`.
+The seed supports modules, functions, `i32`, `i64`, `bool`, `void`, `string`, `file`, and typed opaque dynamic-array handles such as `dyn<i32>`. It also supports fixed arrays such as `[32]i32`, named structs, typed parameters, local `let`/`var` bindings, arithmetic, comparisons, true short-circuit logical operators, unary operators, calls, `if`/`else`, `while`, expression statements, returns, array indexing, and struct field access. The current aggregate constructors use forms such as `[1, 2, 3]` and `Pair { first: 1, second: 2 }`.
 
 Dynamic i32 arrays and read-only source files are exposed through the dependency-free runtime in `holyfitra_runtime.c`. The bounded APIs are `hf_dyn_i32_new`, `hf_dyn_i32_push`, `hf_dyn_i32_len`, `hf_dyn_i32_get`, `hf_dyn_i32_free`, `hf_file_open`, `hf_file_read_all`, `hf_file_close`, and `hf_read_text`. Dynamic capacity is bounded to one million i32 elements and file reads to 64 MiB; invalid dynamic handles and indices fail closed rather than invoking undefined memory access.
 
@@ -40,7 +40,7 @@ Run the no-Python gate:
 bootstrap/test_bootstrap.sh
 ```
 
-The gate checks native host execution, invalid diagnostics, AArch64 object generation, strict warnings, and operation with Python removed from the environment and `PATH`.
+The gate checks native host execution, short-circuit RHS non-evaluation, invalid diagnostics, AArch64 object generation, strict warnings, and operation with Python removed from the environment and `PATH`.
 
 ## Self-hosting boundary
 

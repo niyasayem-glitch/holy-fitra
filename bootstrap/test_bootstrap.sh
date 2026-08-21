@@ -24,6 +24,14 @@ control_status=$?
 set -e
 test "$control_status" -eq 1
 
+"$BUILD" "$ROOT/bootstrap/short_circuit.hf" -o "$WORK/short_circuit.ll"
+grep -F 'phi i1' "$WORK/short_circuit.ll" >/dev/null
+clang -O2 "$WORK/short_circuit.ll" "$ROOT/bootstrap/holyfitra_runtime.c" -o "$WORK/short_circuit"
+(cd "$ROOT" && "$WORK/short_circuit")
+"$BUILD" --target=aarch64-linux-android21 "$ROOT/bootstrap/short_circuit.hf" -o "$WORK/short_circuit.aarch64.ll"
+clang --target=aarch64-linux-android21 -c "$WORK/short_circuit.aarch64.ll" -o "$WORK/short_circuit.aarch64.o"
+test -s "$WORK/short_circuit.aarch64.o"
+
 "$BUILD" "$ROOT/bootstrap/aggregates.hf" -o "$WORK/aggregates.ll"
 clang -O2 "$WORK/aggregates.ll" -o "$WORK/aggregates"
 set +e
@@ -93,4 +101,4 @@ grep -F "unknown value" "$WORK/invalid_name.err" >/dev/null
 # Verify the seed command itself works without Python in PATH or environment.
 env -i PATH="$(dirname "$(command -v clang)"):$(dirname "$(command -v clang++)"):/usr/bin:/bin" HOME="$WORK/home" "$BUILD" --help >/dev/null
 
-printf 'bootstrap_host=passed\\nbootstrap_aggregate=passed\\nbootstrap_selfhost_frontend=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_diagnostics=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\\nbootstrap_selfhost_aarch64_object_bytes=%s\\nbootstrap_python_free_help=passed\\n' "$(stat -c%s "$WORK/hello.aarch64.o")" "$(stat -c%s "$WORK/selfhost_frontend.aarch64.o")"
+printf 'bootstrap_host=passed\\nbootstrap_short_circuit=passed\\nbootstrap_aggregate=passed\\nbootstrap_selfhost_frontend=passed\\nbootstrap_io=passed\\nbootstrap_runtime_sanitizer=passed\\nbootstrap_diagnostics=passed\\nbootstrap_invalid=passed\\nbootstrap_aarch64_object_bytes=%s\\nbootstrap_selfhost_aarch64_object_bytes=%s\\nbootstrap_python_free_help=passed\\n' "$(stat -c%s "$WORK/hello.aarch64.o")" "$(stat -c%s "$WORK/selfhost_frontend.aarch64.o")"
