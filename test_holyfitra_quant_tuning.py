@@ -134,6 +134,21 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             matrix.demote_reconstruction_cache()
 
+    def test_large_batch_promotion_bonus_beats_small_batch(self):
+        small = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="adaptive_hybrid", max_reconstruction_error=0.01, promote_after=4, adaptive_hysteresis=2, adaptive_large_batch_rows=512, adaptive_large_batch_bonus=3)
+        with patch("hyperc_quantized_transformer.time.perf_counter_ns", side_effect=[0, 1_000_000, 2_000_000]):
+            small.matmat(self.calibration, access_timestamp_ns=0)
+            small.matmat(self.calibration, access_timestamp_ns=1_000_000)
+            small.matmat(self.calibration, access_timestamp_ns=2_000_000)
+        self.assertEqual(small.reconstruction_cache_mode, "adaptive_cold")
+        large = QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="adaptive_hybrid", max_reconstruction_error=0.01, promote_after=4, adaptive_hysteresis=2, adaptive_large_batch_rows=512, adaptive_large_batch_bonus=3)
+        large_batch = np.ones((512, self.calibration.shape[1]), dtype=np.float32)
+        with patch("hyperc_quantized_transformer.time.perf_counter_ns", side_effect=[0, 1_000_000, 2_000_000]):
+            large.matmat(large_batch, access_timestamp_ns=0)
+            large.matmat(large_batch, access_timestamp_ns=1_000_000)
+            large.matmat(large_batch, access_timestamp_ns=2_000_000)
+        self.assertEqual(large.reconstruction_cache_mode, "f32")
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
