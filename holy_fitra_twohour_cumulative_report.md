@@ -269,3 +269,22 @@ A repository-wide self-healing audit found no active syntax, shell, or regressio
 | Python compileall and shell syntax | Passed |
 
 No physical Android execution was performed. AArch64 results are cross-compilation artifact validation only. The next deferred candidates remain the module import graph, structured native diagnostic protocol, LLVM verifier integration, and self-hosted symbol/type arena snapshots; these are intentionally separate semantic-core milestones rather than hidden in this repair wave.
+
+## Proof-carrying AI lifecycle expansion retained
+
+Holy Fitra now has a cross-lifecycle AI integration layer in `holyfitra_ai_pipeline.py`. `DatasetFingerprint` binds dataset identity to name, shapes, seed, cardinality, and content digest. `EvaluationReport` computes finite MSE, MAE, and maximum absolute error with explicit thresholds. `ModelLineage` binds source-model identity, dataset digest, evaluation digest, deployment artifact digest, training configuration, and optional parent lineage. `VerifiedAIPipeline` composes these records with the existing quality-gated quantized exporter and `PlanCompiler`, then verifies deployment prediction round-trip, execution-plan identity, proof metadata, ABI, quality, memory, energy, thermal, and core constraints.
+
+The pipeline refuses empty or non-finite validation data, non-finite model state, failed evaluation thresholds, missing proof hashes, invalid deployment round trips, inconsistent lineage digests, and execution-plan gate failures. It does not fabricate latency or energy measurements; kernel candidates must provide their own measured or explicitly proven metadata.
+
+| Validation | Result |
+|---|---:|
+| New AI pipeline tests | Passed; 4 tests |
+| Complete Python regression suite | Passed; 179 tests, 0 failures |
+| Termux-compatible host gate | Passed; 136 tests |
+| No-Python bootstrap gate | Passed |
+| Bootstrap runtime sanitizer | Passed |
+| Self-hosted frontend gate | Passed |
+| AArch64 artifact generation | Passed; cross-compilation only |
+| Python compileall and shell syntax | Passed |
+
+This is a host-validated integration. No physical Android device execution was performed. The next high-impact AI candidates are deterministic distillation with teacher/student quality gates, provenance-aware retrieval evaluation, and a typed agent plan graph. Compiler-native AI syntax remains gated on the self-hosted HIR/type system.
