@@ -14,6 +14,7 @@ cd "$ROOT"
 
 python3 -m unittest -q \
   test_holyfitra_compiler.py \
+  test_holyfitra_ui.py \
   test_language_core.py \
   test_hyperir.py \
   test_package.py \
@@ -38,4 +39,10 @@ if (( HOST_TESTS )); then
 fi
 
 ./holyfitra --help >/dev/null
+./holyfitra doctor >/dev/null
+./holyfitra tui . --snapshot >/dev/null
+TERMUX_BENCH_ROOT="$(mktemp -d)"
+trap 'rm -rf "$TERMUX_BENCH_ROOT"' EXIT
+./holyfitra init "$TERMUX_BENCH_ROOT/project" --name termux_validation >/dev/null
+./holyfitra bench "$TERMUX_BENCH_ROOT/project" --repeats 1 >/dev/null
 printf '%s\n' 'Holy Fitra Termux-compatible validation passed.'

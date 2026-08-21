@@ -15,6 +15,9 @@ holyfitra = "holyfitra_compiler:main"
 [tool.setuptools]
 py-modules = [
   "holyfitra_compiler",
+  "holyfitra_repl",
+  "holyfitra_tui",
+  "holyfitra_benchmark",
   "hyperc_language_core",
   "hyperc_hyperir",
   "hyperc_nn",

@@ -29,6 +29,46 @@ source "$HOME/.local/bin/holyfitra-env" 2>/dev/null || true
 
 The setup script uses Termux `pkg` packages rather than `sudo`, installs Python/Clang/LLVM/CMake tooling, and prefers the Termux NumPy package when available.
 
+## Terminal development environment
+
+Holy Fitra now includes a dependency-free terminal UI and REPL designed for Termux as well as Linux terminals. The TUI uses Python's standard `curses` module, so it does not require Textual or Rich.
+
+Open the interactive workspace:
+
+```bash
+holyfitra tui .
+```
+
+The TUI supports file navigation with `j`/`k` or arrow keys, `c` to inspect the selected source, `p` to refresh its HyperIR/native plan summary, `r` to refresh the workspace, and `q` or Escape to exit. For scripts, CI, SSH sessions, and terminals without a real TTY, use the deterministic snapshot mode:
+
+```bash
+holyfitra tui . --snapshot
+```
+
+Start the interactive REPL:
+
+```bash
+holyfitra repl
+```
+
+Inside the REPL, `/help`, `/project PATH`, `/source`, `/check`, `/plan`, `/llvm OUTPUT`, `/build OUTPUT`, `/show`, `/clear`, and `/quit` are available. Source is never sent to a shell; it is buffered and passed through the compiler or HyperIR planner.
+
+Inspect the current environment:
+
+```bash
+holyfitra doctor
+```
+
+Run the development benchmark dashboard:
+
+```bash
+holyfitra bench . --repeats 5 -o holyfitra-benchmark.json
+```
+
+The dashboard reports cold/warm frontend timing, HyperIR operation counts or native digests, proof-carrying precision selection, and ragged-attention reference error. These are local development diagnostics, not physical-device performance claims.
+
+The doctor reports Python, Termux detection, Clang, LLVM, CMake, NumPy, curses, Android NDK, and backend readiness without claiming that a physical Android device is present.
+
 ## Create and build a project
 
 ```bash

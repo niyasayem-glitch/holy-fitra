@@ -12,6 +12,8 @@ venv/
 
 # Holy Fitra generated state
 .holyfitra/
+.holyfitra-repl-source.hf
+.holyfitra-repl-plan.json
 *.hfpkg.json
 *.plan.json
 *.ll
@@ -44,6 +46,7 @@ holy_fitra_device_benchmark_test
 *.log
 *_report.json
 publish_audit.txt
+tui_audit.txt
 full_python_regression.log
 gated_python_regression.log
 validate_*.log

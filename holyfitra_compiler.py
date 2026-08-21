@@ -615,12 +615,46 @@ def check_file(source_path: Path) -> int:
         return 1
 
 
+def doctor_report() -> dict[str, object]:
+    import importlib.util
+    checks: dict[str, object] = {
+        "python": sys.version.split()[0],
+        "platform": sys.platform,
+        "termux": bool(os.environ.get("PREFIX", "").endswith("com.termux/files/usr")),
+        "clang": shutil.which("clang") or False,
+        "llvm_as": shutil.which("llvm-as") or False,
+        "llc": shutil.which("llc") or False,
+        "cmake": shutil.which("cmake") or False,
+        "numpy": bool(importlib.util.find_spec("numpy")),
+        "android_ndk": bool(os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")),
+        "curses": bool(importlib.util.find_spec("curses")),
+    }
+    checks["native_backend_ready"] = bool(checks["clang"] and checks["python"])
+    checks["hyperir_backend_ready"] = bool(checks["numpy"])
+    checks["android_build_ready"] = bool(checks["android_ndk"] and checks["cmake"])
+    return checks
+
+
+def doctor() -> int:
+    print(json.dumps(doctor_report(), indent=2, sort_keys=True, default=str))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holyfitra", description="Holy Fitra compiler and runtime driver")
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="create a new Holy Fitra project")
     init_parser.add_argument("directory", type=Path)
     init_parser.add_argument("--name")
+    doctor_parser = subparsers.add_parser("doctor", help="inspect compiler, Termux, LLVM, NumPy, and Android readiness")
+    tui_parser = subparsers.add_parser("tui", help="open the Holy Fitra terminal workspace UI")
+    tui_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
+    tui_parser.add_argument("--snapshot", action="store_true")
+    repl_parser = subparsers.add_parser("repl", help="start the interactive Holy Fitra REPL")
+    bench_parser = subparsers.add_parser("bench", help="run compiler and AI runtime benchmark diagnostics")
+    bench_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
+    bench_parser.add_argument("--repeats", type=int, default=5)
+    bench_parser.add_argument("-o", "--output", type=Path)
     check_parser = subparsers.add_parser("check", help="parse and validate a Holy Fitra source file or project directory")
     check_parser.add_argument("source", type=Path)
     plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
@@ -648,6 +682,23 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if args.command == "init":
             return init_project(args.directory, args.name)
+        if args.command == "doctor":
+            return doctor()
+        if args.command == "tui":
+            from holyfitra_tui import run_tui
+            return run_tui(args.path, args.snapshot)
+        if args.command == "repl":
+            from holyfitra_repl import Repl
+            return Repl().run()
+        if args.command == "bench":
+            from holyfitra_benchmark import benchmark_project
+            result = benchmark_project(args.path, args.repeats)
+            rendered = json.dumps(result, indent=2, sort_keys=True, default=str)
+            if args.output:
+                args.output.parent.mkdir(parents=True, exist_ok=True)
+                args.output.write_text(rendered + "\n", encoding="utf-8")
+            print(rendered)
+            return 0
         if args.command == "check":
             return check_file(args.source)
         if args.command == "plan":
