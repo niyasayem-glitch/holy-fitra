@@ -60,6 +60,17 @@ jobs:
           bash termux-build.sh test --native-tests
           bash make-holyfitra-v1-release.sh /tmp/holyfitra-high-risk-release.tar.gz
 
+      - name: Run 300-iteration high-risk campaign
+        run: |
+          python holy_fitra_self_improve.py --iterations 300 --output /tmp/holyfitra-high-risk-300.json
+          grep -q '"iterations": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"requested_iterations": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_correctness": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_safety": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_determinism": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"retained_count": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"rejected_count": 0' /tmp/holyfitra-high-risk-300.json
+
       - name: Record promotion evidence
         run: |
           {
