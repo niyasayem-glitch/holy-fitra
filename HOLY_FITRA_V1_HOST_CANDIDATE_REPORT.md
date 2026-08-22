@@ -18,9 +18,9 @@ The candidate does not claim a complete fixed-point compiler, general Stage-10 C
 |---|---|
 | Native seed | `holyfitra_bootstrap.cpp` builds with strict C++17 warnings, exposes `--version`, bounds source bytes to 8 MiB, limits tokens and parser nesting, and emits LLVM text. |
 | v1 driver | `holyfitra-v1.sh` provides `doctor`, `version`, `build-seed`, `check`, `emit`, `build`, `run`, `test`, and `package`. LLVM is compiled through Clang before linking or acceptance. |
-| Installation | `install-holyfitra-v1.sh` installs into a user-selected prefix without `sudo` and uses an absolute launcher to avoid symlink-root errors. |
+| Installation | `termux-build.sh install-v1` installs into a user-selected prefix without `sudo` and uses an absolute launcher to avoid symlink-root errors. |
 | Release packaging | `make-holyfitra-v1-release.sh` runs the v1 regression, bundles the native release sources and fixtures, and creates a deterministic gzip archive with explicit host/device metadata. |
-| Termux | `termux-setup.sh` installs the user-local toolchain without `sudo`, `termux-build.sh` enables native tests on Termux, and the CLI selects `aarch64-linux-android` on ARM64 devices. |
+| Termux | `termux-build.sh setup` installs the user-local toolchain without `sudo`, `termux-build.sh test` enables native tests on Termux, and the CLI selects `aarch64-linux-android` on ARM64 devices. |
 | Documentation | `HOLY_FITRA_V1_RELEASE_SPEC.md` defines supported commands, safety invariants, acceptance gates, and evidence boundaries. |
 
 ## Validation evidence
@@ -32,8 +32,8 @@ python3 -m unittest -q                 passed
 python3 -m compileall -q .             passed
 bash -n all changed shell scripts     passed
 bash bootstrap/test_bootstrap.sh      passed
-bash termux-build.sh --host-tests     passed
-./test_holyfitra_v1.sh                 passed
+bash termux-build.sh test --native-tests passed
+v1 gate included in unified test command     passed
 isolated no-Python v1 path             passed
 user-prefix installer test             passed
 two archive byte comparison            passed
@@ -66,8 +66,8 @@ From a clean checkout with Clang available:
 
 ```bash
 ./holyfitra-v1.sh doctor
-./test_holyfitra_v1.sh
+bash termux-build.sh test --native-tests
 ./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz
 ```
 
-For Termux, run `bash termux-setup.sh`, source `$HOME/.local/bin/holyfitra-env`, then run `bash termux-build.sh --native-tests`. No `sudo` command is part of the native v1 path. Use `HOLYFITRA_PREFIX` for an alternate v1 install prefix because Termux reserves `$PREFIX` for its package environment.
+For Termux, run `bash termux-build.sh setup`, source `$HOME/.local/bin/holyfitra-env`, then run `bash termux-build.sh test --native-tests`. No `sudo` command is part of the native v1 path. Use `HOLYFITRA_PREFIX` for an alternate v1 install prefix because Termux reserves `$PREFIX` for its package environment.

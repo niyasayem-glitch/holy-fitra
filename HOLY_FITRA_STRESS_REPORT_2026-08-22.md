@@ -51,8 +51,8 @@ The native-only bootstrap path proves the checked-in State-1–9 fixture chain a
 python3 -m unittest -q
 python3 stress_holyfitra_compiler.py
 bash bootstrap/test_bootstrap.sh
-bash termux-build.sh --host-tests
-./test_holyfitra_v1.sh
+bash termux-build.sh test --native-tests
+# The v1 gate is included in the unified test command.
 ```
 
 The stress harnesses are intentionally bounded and deterministic. They should be treated as regression tools, not as a claim of exhaustive proof against all possible inputs.

@@ -11,14 +11,13 @@ command -v tar >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: tar is requ
 command -v gzip >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: gzip is required' >&2; exit 127; }
 command -v sha256sum >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: sha256sum is required' >&2; exit 127; }
 
-bash -n "$ROOT/holyfitra" "$ROOT/holyfitra-v1.sh" "$ROOT/install-holyfitra-v1.sh" "$ROOT/termux-setup.sh" "$ROOT/termux-build.sh" "$ROOT/test_holyfitra_v1.sh"
-HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/test_holyfitra_v1.sh" >/dev/null 2>&1
+bash -n "$ROOT/holyfitra" "$ROOT/holyfitra-v1.sh" "$ROOT/termux-build.sh"
+HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/termux-build.sh" test --native-tests >/dev/null 2>&1
 
 STAGE="$WORK/holyfitra-v1"
 mkdir -p "$STAGE/bootstrap" "$STAGE/docs" "$STAGE/tools"
 cp "$ROOT/holyfitra-v1.sh" "$STAGE/holyfitra-v1.sh"
-cp "$ROOT/install-holyfitra-v1.sh" "$STAGE/install-holyfitra-v1.sh"
-cp "$ROOT/test_holyfitra_v1.sh" "$STAGE/test_holyfitra_v1.sh"
+cp "$ROOT/termux-build.sh" "$STAGE/termux-build.sh"
 cp "$ROOT/holyfitra_bootstrap.cpp" "$STAGE/holyfitra_bootstrap.cpp"
 cp "$ROOT/bootstrap/holyfitra_runtime.c" "$STAGE/bootstrap/holyfitra_runtime.c"
 cp "$ROOT/bootstrap/hello.hf" "$STAGE/bootstrap/hello.hf"
@@ -30,7 +29,7 @@ cp "$ROOT/HOLY_FITRA_MILLION_LINE_PERFORMANCE_REPORT_2026-08-22.md" "$STAGE/docs
 cp "$ROOT/stress_million_line.py" "$STAGE/tools/stress_million_line.py"
 cp "$ROOT/measure_million_line.py" "$STAGE/tools/measure_million_line.py"
 cp "$ROOT/README.md" "$STAGE/docs/README.md"
-chmod 755 "$STAGE/holyfitra-v1.sh" "$STAGE/install-holyfitra-v1.sh" "$STAGE/test_holyfitra_v1.sh"
+chmod 755 "$STAGE/holyfitra-v1.sh" "$STAGE/termux-build.sh"
 printf 'Holy Fitra v1\nversion=%s\npython_required=false\nandroid_execution=false\nplatform=host-or-Termux-native-cli\ntermux_native_target=aarch64-linux-android\nfixed_point_self_hosting=false\naarch64_status=artifact-only\n' "$VERSION" >"$STAGE/RELEASE_METADATA.txt"
 
 mkdir -p "$(dirname -- "$OUTPUT")"

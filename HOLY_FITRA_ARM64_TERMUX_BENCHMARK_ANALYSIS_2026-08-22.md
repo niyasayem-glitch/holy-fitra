@@ -14,7 +14,7 @@ The v1 release should therefore be described as **ARM64-targeted and Termux-comp
 
 | Evidence source | What it proves | What it does not prove |
 |---|---|---|
-| `bash termux-build.sh --host-tests` | The CLI, Python development suite, numerical validators, bootstrap path, native ragged host test, v1 driver, and project workflow pass on the current host. | It does not run inside Termux on a phone and does not measure Android CPU performance. |
+| `bash termux-build.sh test --native-tests` | The CLI, Python development suite, numerical validators, bootstrap path, native ragged host test, v1 driver, and project workflow pass on the current host. | It does not run inside Termux on a phone and does not measure Android CPU performance. |
 | `bootstrap/test_bootstrap.sh` AArch64 outputs | The seed fixtures and State-1–9 sources cross-compile into non-empty `aarch64-linux-android21` object files. | It does not execute those objects, load an APK, or exercise an ARM core. |
 | Checked-in AArch64 objects | `file`/ELF headers identify relocatable AArch64 objects for ragged NEON/SVE and NibbleFlow. | Object type and size are not runtime speed, correctness on a specific ARM implementation, or proof that the selected path executes. |
 | Host JNI syntax and CMake graph | JNI-facing C++ is syntactically compatible with the isolated header stub and the native graph produces host shared libraries. | It does not validate the real JNI ABI, ART global-reference behavior, Android linker, Gradle/AAR packaging, or device execution. |
@@ -23,7 +23,7 @@ The v1 release should therefore be described as **ARM64-targeted and Termux-comp
 
 ## Termux result analysis
 
-The latest rerun of `bash termux-build.sh --host-tests` passed. The gate exercised the Python development suite, NibbleFlow and ragged numerical validators, optional native ragged scheduler compilation/execution, the general CLI, doctor/contracts/TUI snapshot, project initialization and benchmark commands, the State-1–9 bootstrap, and the native v1 regression. It ended with `Holy Fitra Termux-compatible validation passed.`
+The latest rerun of `bash termux-build.sh test --native-tests` passed. The gate exercised the Python development suite, NibbleFlow and ragged numerical validators, optional native ragged scheduler compilation/execution, the general CLI, doctor/contracts/TUI snapshot, project initialization and benchmark commands, the State-1–9 bootstrap, and the native v1 regression. It ended with `Holy Fitra Termux-compatible validation passed.`
 
 This is a **workflow-compatibility result**. The script is run from the x86-64 sandbox and invokes host `python3`, Clang, and the repository’s shell entry points. It does not test Android’s Bionic libc, Termux’s actual package repository, phone filesystem permissions, ARM CPU frequency behavior, or Android process scheduling. Therefore the accurate interpretation is: “the Termux-oriented, no-sudo command path is host-validated,” not “the program has measured Termux phone performance.”[^termux]
 

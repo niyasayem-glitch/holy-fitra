@@ -11,10 +11,10 @@ git clone https://github.com/niyasayem-glitch/holy-fitra.git
 cd holy-fitra
 
 # Inspect the no-sudo Termux package plan first.
-bash termux-setup.sh --dry-run
+bash termux-build.sh setup --dry-run
 
 # Install the Termux toolchain and the user-local CLI.
-bash termux-setup.sh
+bash termux-build.sh setup
 source "$HOME/.local/bin/holyfitra-env"
 holyfitra doctor
 ```
@@ -38,11 +38,11 @@ The repository also includes a bounded native-first v1 driver. It builds the che
 ./holyfitra-v1.sh check bootstrap/hello.hf
 ./holyfitra-v1.sh build bootstrap/hello.hf -o build/hello
 ./holyfitra-v1.sh run bootstrap/hello.hf
-./test_holyfitra_v1.sh
+bash termux-build.sh test --native-tests
 ./holyfitra-v1.sh package bootstrap/hello.hf -o build/hello.json --version 1.0.0
 ```
 
-The v1 driver is intentionally scoped to the verified scalar compiler subset and uses the locally installed `clang` toolchain. On an ARM64 Termux device it automatically selects `aarch64-linux-android` and lets the Termux clang driver use its native Bionic environment; on x86-64 Linux it retains the x86-64 host target. Set `HOLYFITRA_TARGET` to request an explicit target, and set `HOLYFITRA_CC`/`HOLYFITRA_CXX` to select compilers. A foreign `--target` produces an artifact only and does not prove execution on that platform. Run `./test_holyfitra_v1.sh` to exercise deterministic emission, malformed-source rejection, executable status handling, project tests, and package metadata. Install it without `sudo` with `HOLYFITRA_PREFIX="$HOME/.local" ./install-holyfitra-v1.sh`; the installer places an executable launcher under `$HOME/.local/bin` and keeps the seed compiler under the user prefix. To create a deterministic host-candidate archive, run `./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz`; the archive records `python_required=false`, `android_execution=false`, and `aarch64_status=artifact-only`.
+The v1 driver is intentionally scoped to the verified scalar compiler subset and uses the locally installed `clang` toolchain. On an ARM64 Termux device it automatically selects `aarch64-linux-android` and lets the Termux clang driver use its native Bionic environment; on x86-64 Linux it retains the x86-64 host target. Set `HOLYFITRA_TARGET` to request an explicit target, and set `HOLYFITRA_CC`/`HOLYFITRA_CXX` to select compilers. A foreign `--target` produces an artifact only and does not prove execution on that platform. Run `bash termux-build.sh test --native-tests` to exercise deterministic emission, malformed-source rejection, executable status handling, project tests, and package metadata. Install it without `sudo` with `bash termux-build.sh install-v1`; the installer places an executable launcher under `$HOME/.local/bin` and keeps the seed compiler under the user prefix. To create a deterministic host-candidate archive, run `./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz`; the archive records `python_required=false`, `android_execution=false`, and `aarch64_status=artifact-only`.
 
 ## Terminal development environment
 
@@ -263,7 +263,7 @@ The AI stack includes dense layers and autodiff, transformer attention and KV ca
 ```bash
 python3 validate_nibbleflow.py
 python3 validate_holy_fitra_ragged.py
-bash termux-build.sh --host-tests
+bash termux-build.sh test --native-tests
 ```
 
 The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. Build it with `./gradlew :android-lib:assembleRelease` when an Android SDK/NDK and Gradle wrapper are available. This is separate from the native Termux CLI path. Physical ARM64 Android validation is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
@@ -295,7 +295,7 @@ python3 -m unittest -v \
   test_smooth_runtime.py
 ```
 
-Native scheduler tests require Clang and the ragged kernel object. `termux-build.sh --host-tests` performs this build on Termux or Linux.
+Native scheduler tests require Clang and the ragged kernel object. `bash termux-build.sh test --native-tests` performs this build on Termux or Linux.
 
 ## Obsidian second brain
 Holy Fitra includes an optional privacy-preserving adapter for the open-format workflow documented by [`kepano/obsidian-skills`](https://github.com/kepano/obsidian-skills). It indexes a local Markdown vault deterministically, resolves Wikilinks and backlinks, exposes provenance-bearing claim context to capability-gated agents, and exports compatible `.canvas` and `.base` artifacts.
