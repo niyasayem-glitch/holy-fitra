@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +22,15 @@ class PackageFile:
     size: int
     kind: str
 
+    def __post_init__(self) -> None:
+        path = Path(self.path)
+        if not self.path or path.is_absolute() or "\x00" in self.path or any(part in {"", ".", ".."} for part in path.parts):
+            raise PackageError("package file path must be a normalized relative path")
+        if not isinstance(self.sha256, str) or re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+            raise PackageError("package file hash must be lowercase SHA-256")
+        if not isinstance(self.size, int) or isinstance(self.size, bool) or self.size < 0 or not self.kind:
+            raise PackageError("package file size or kind is invalid")
+
 
 @dataclass
 class HyperPackage:
@@ -32,6 +42,10 @@ class HyperPackage:
     metadata: dict[str, Any] = field(default_factory=dict)
     signature: str | None = None
 
+    def __post_init__(self) -> None:
+        if not self.name or not self.version or not self.target or not isinstance(self.metadata, dict):
+            raise PackageError("package identity or metadata is invalid")
+
     def canonical_payload(self) -> bytes:
         payload = {
             "name": self.name,
@@ -41,7 +55,10 @@ class HyperPackage:
             "files": [file.__dict__ for file in sorted(self.files, key=lambda item: item.path)],
             "metadata": self.metadata,
         }
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode()
+        try:
+            return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError) as error:
+            raise PackageError("package metadata is not canonical JSON") from error
 
     def digest(self) -> str:
         return hashlib.sha256(self.canonical_payload()).hexdigest()
@@ -72,7 +89,10 @@ class HyperPackage:
         }
 
     def write_manifest(self, path: Path) -> None:
-        path.write_text(json.dumps(self.to_jsonable(), indent=2, sort_keys=True))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(json.dumps(self.to_jsonable(), indent=2, sort_keys=True, allow_nan=False) + "\n")
+        temporary.replace(path)
 
     def verify_files(self, root: Path) -> list[str]:
         errors: list[str] = []
@@ -100,7 +120,10 @@ class HyperPackageBuilder:
         self.package = HyperPackage(name, version, target, predecessor)
 
     def add_file(self, root: Path, relative_path: str, kind: str) -> None:
-        candidate = (root / relative_path).resolve()
+        raw_path = Path(relative_path)
+        if not relative_path or raw_path.is_absolute() or "\x00" in relative_path or any(part in {"", ".", ".."} for part in raw_path.parts):
+            raise PackageError(f"file path is not normalized and relative: {relative_path}")
+        candidate = (root / raw_path).resolve()
         try:
             candidate.relative_to(root.resolve())
         except ValueError as exc:
@@ -108,12 +131,17 @@ class HyperPackageBuilder:
         if not candidate.is_file():
             raise PackageError(f"file does not exist: {relative_path}")
         content = candidate.read_bytes()
-        self.package.files.append(PackageFile(relative_path, hashlib.sha256(content).hexdigest(), len(content), kind))
+        normalized = candidate.relative_to(root.resolve()).as_posix()
+        self.package.files.append(PackageFile(normalized, hashlib.sha256(content).hexdigest(), len(content), kind))
 
     def set_metadata(self, **metadata: Any) -> None:
         self.package.metadata.update(metadata)
 
     def build(self) -> HyperPackage:
+        try:
+            self.package.canonical_payload()
+        except PackageError:
+            raise
         paths = [file.path for file in self.package.files]
         if len(paths) != len(set(paths)):
             raise PackageError("duplicate package file")
