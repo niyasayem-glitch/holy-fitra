@@ -31,7 +31,8 @@ gh workflow run promote-high-risk.yml \
   -f reason='Explain the expected benefit and the risk reviewed.'
 ```
 
-The promotion workflow checks out the high-risk branch, runs syntax checks, the full Python suite, the native Termux gate, and deterministic release packaging. Only if those checks pass does it create or reuse a pull request and squash-merge the branch into `master`. If the branch name or confirmation is invalid, the workflow fails without touching `master`.
+The promotion workflow checks out the high-risk branch, runs syntax checks, the full Python suite, the native Termux gate, deterministic release packaging, and the bounded 300-iteration high-risk plan-engine campaign. The campaign must report 300 iterations with 300 correctness, safety, determinism, and retained results. Only if all checks pass does it create or reuse a pull request and squash-merge the branch into `master`.
+ If the branch name or confirmation is invalid, the workflow fails without touching `master`.
 
 ## Promotion rules
 
