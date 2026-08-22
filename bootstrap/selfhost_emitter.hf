@@ -1,0 +1,28 @@
+module selfhost_emitter
+
+fn build_ir() -> string {
+  let buffer: buf = hf_buf_new(256);
+  hf_buf_append_str(buffer, "; Holy Fitra self-hosted emitter v1\n");
+  hf_buf_append_str(buffer, "target triple = \"x86_64-pc-linux-gnu\"\n\n");
+  hf_buf_append_str(buffer, "define i32 @main() {\n");
+  hf_buf_append_str(buffer, "entry:\n");
+  hf_buf_append_str(buffer, "  ret i32 ");
+  hf_buf_append_i32(buffer, 42);
+  hf_buf_append_str(buffer, "\n}\n");
+  let result: string = hf_buf_finish(buffer);
+  hf_buf_free(buffer);
+  return result;
+}
+
+fn main() -> i32 {
+  let ir: string = build_ir();
+  let path: string = "/tmp/holyfitra_selfhost_emitted.ll";
+  let written: bool = hf_write_text(path, ir);
+  let round_trip: string = hf_read_text(path);
+  let same_length: bool = hf_string_len32(ir) == hf_string_len32(round_trip);
+  if written && same_length {
+    return 0;
+  } else {
+    return 1;
+  }
+}

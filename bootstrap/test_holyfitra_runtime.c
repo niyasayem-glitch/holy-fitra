@@ -18,6 +18,7 @@ _Bool hf_buf_append_str(void *, const char *);
 _Bool hf_buf_append_i32(void *, int32_t);
 char *hf_buf_finish(void *);
 void hf_buf_free(void *);
+_Bool hf_write_text(const char *, const char *);
 
 int main(void) {
     assert(hf_dyn_i32_new(0) == NULL);
@@ -55,6 +56,15 @@ int main(void) {
     assert(strcmp(finished, "-2147483648") == 0);
     free(finished);
     hf_buf_free(number);
+
+    assert(!hf_write_text(NULL, "bad"));
+    assert(!hf_write_text("/tmp/holyfitra_runtime_atomic.txt", NULL));
+    assert(hf_write_text("/tmp/holyfitra_runtime_atomic.txt", "atomic-ok"));
+    char *round_trip = (char *)hf_read_text("/tmp/holyfitra_runtime_atomic.txt");
+    assert(round_trip != NULL);
+    assert(strcmp(round_trip, "atomic-ok") == 0);
+    free(round_trip);
+    assert(remove("/tmp/holyfitra_runtime_atomic.txt") == 0);
 
     puts("holyfitra_runtime_checks=passed");
     return 0;

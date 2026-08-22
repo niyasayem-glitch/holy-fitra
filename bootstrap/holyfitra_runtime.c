@@ -11,6 +11,7 @@
 #define HF_MAX_DYNAMIC_I32_CAPACITY ((uint64_t)1u << 20)
 #define HF_MAX_FILE_BYTES ((uint64_t)64u << 20)
 #define HF_MAX_BUFFER_BYTES ((uint64_t)64u << 20)
+#define HF_MAX_PATH_BYTES ((uint64_t)4096u)
 
 typedef struct {
     uint64_t size;
@@ -130,6 +131,30 @@ void *hf_read_text(const char *path) {
     void *text = hf_file_read_all(file);
     hf_file_close(file);
     return text;
+}
+
+_Bool hf_write_text(const char *path, const char *text) {
+    if (!path || !text) return 0;
+    size_t path_length = strlen(path);
+    size_t text_length = strlen(text);
+    if (path_length == 0 || path_length + 5 > HF_MAX_PATH_BYTES || text_length > HF_MAX_BUFFER_BYTES) return 0;
+    char temporary[HF_MAX_PATH_BYTES];
+    memcpy(temporary, path, path_length);
+    memcpy(temporary + path_length, ".tmp", 5);
+    FILE *file = fopen(temporary, "wb");
+    if (!file) return 0;
+    size_t written = fwrite(text, 1, text_length, file);
+    int flush_status = fflush(file);
+    int close_status = fclose(file);
+    if (written != text_length || flush_status != 0 || close_status != 0) {
+        remove(temporary);
+        return 0;
+    }
+    if (rename(temporary, path) != 0) {
+        remove(temporary);
+        return 0;
+    }
+    return 1;
 }
 
 void *hf_buf_new(uint64_t capacity) {

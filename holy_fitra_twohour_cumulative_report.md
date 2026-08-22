@@ -364,3 +364,11 @@ The fixture includes valid and invalid call counts, integer widening, exact comp
 | Python compileall and shell syntax | Passed |
 
 This remains a type-checker foundation rather than a fixed-point compiler claim. AST annotation storage, full struct/function signature resolution, diagnostics emission, Holy Fitra LLVM text emission, and Stage-1 self-rebuild remain the next milestones.
+
+## Self-hosted LLVM emitter foundation retained — 2026-08-22
+
+The Stage-0 runtime now includes a bounded atomic `hf_write_text` primitive. It rejects null inputs, caps output and temporary-path sizes, writes to a deterministic temporary path, flushes and closes before rename, and removes the temporary artifact on failure. `bootstrap/selfhost_emitter.hf` uses the buffer ABI to assemble canonical LLVM text, writes it without Python, reads it back, and produces a valid `main` module whose assembled executable returns 42.
+
+This is intentionally a seed-supported emitter fixture rather than a claim that the entire compiler is already self-hosted. It proves the end-to-end contract needed by the eventual emitter: bounded text construction, deterministic output, atomic publication, LLVM assembly, native execution, and AArch64 artifact lowering. The complete Python suite remained at 153 tests with 0 failures; bootstrap, ASAN/UBSan runtime, AArch64 object, compile, shell, and Termux gates passed.
+
+The remaining fixed-point work is explicit: connect lexer/parser AST records to the semantic type arena, lower general supported functions and control flow from Holy Fitra data structures into LLVM text, add canonical diagnostics output, and then perform Stage-1 self-rebuild comparisons.
