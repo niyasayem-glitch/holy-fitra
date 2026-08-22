@@ -344,3 +344,23 @@ The no-Python Stage-0 path now includes a bounded byte-buffer/string-builder ABI
 | Python compileall and shell syntax | Passed |
 
 No physical Android execution is claimed. The next self-hosting milestone is the Holy Fitra type-checker core, followed by a self-hosted LLVM emitter and Stage-1 fixed-point rebuild.
+
+## Self-hosted type-checker foundation retained — 2026-08-22
+
+`bootstrap/selfhost_typechecker.hf` now contains the first executable semantic-checking core written in Holy Fitra. It uses canonical primitive type IDs (`TYPE_ERROR=0`, `i32=1`, `i64=2`, `bool=3`, `void=4`, `string=5`, `file=6`, `dyn<i32>=7`), permits only explicit identity or i32-to-i64 widening at assignment/call boundaries, rejects invalid arithmetic and logical operands, checks void/non-void returns, and validates call arity and argument compatibility against bounded dynamic-array signatures. The implementation never executes calls while checking; it operates only on integer type metadata.
+
+The fixture includes valid and invalid call counts, integer widening, exact comparison/logical rules, invalid logical typing, return-value presence, and void-return rules. It compiles without Python under the Stage-0 seed, executes successfully on the x86-64 host, and produces a non-empty AArch64 object.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| Complete no-Python bootstrap gate | Passed |
+| Self-hosted buffer fixture | Passed |
+| Self-hosted symbol-table fixture | Passed; collision and duplicate rejection |
+| Self-hosted type-checker fixture | Passed; host exit 0 |
+| Runtime ASAN/UBSan checks | Passed |
+| AArch64 artifact checks | Passed; cross-compilation only |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+This remains a type-checker foundation rather than a fixed-point compiler claim. AST annotation storage, full struct/function signature resolution, diagnostics emission, Holy Fitra LLVM text emission, and Stage-1 self-rebuild remain the next milestones.

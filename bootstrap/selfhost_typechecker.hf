@@ -1,0 +1,111 @@
+module selfhost_typechecker
+
+// Canonical type IDs: error=0, i32=1, i64=2, bool=3, void=4, string=5, file=6, dyn<i32>=7.
+fn can_assign(expected: i32, actual: i32) -> bool {
+  if expected == actual {
+    return true;
+  } else {
+    if expected == 2 && actual == 1 {
+      return true;
+    } else {
+      return false;
+    }
+  }
+}
+
+fn binary_type(operator: i32, left: i32, right: i32) -> i32 {
+  // 0=arithmetic, 1=comparison, 2=logical.
+  if operator == 0 {
+    if left == right {
+      if left == 1 || left == 2 {
+        return left;
+      } else {
+        return 0;
+      }
+    } else {
+      return 0;
+    }
+  } else {
+    if operator == 1 {
+      if left == right {
+        if left == 1 || left == 2 || left == 3 {
+          return 3;
+        } else {
+          return 0;
+        }
+      } else {
+        return 0;
+      }
+    } else {
+      if operator == 2 && left == 3 && right == 3 {
+        return 3;
+      } else {
+        return 0;
+      }
+    }
+  }
+}
+
+fn check_return(expected: i32, actual: i32, has_value: bool) -> bool {
+  if expected == 4 {
+    return !has_value;
+  } else {
+    if has_value {
+      return can_assign(expected, actual);
+    } else {
+      return false;
+    }
+  }
+}
+
+fn check_call(parameters: dyn<i32>, arguments: dyn<i32>, count: i32) -> bool {
+  if count < 0 {
+    return false;
+  } else {
+    if hf_dyn_i32_len32(parameters) != count || hf_dyn_i32_len32(arguments) != count {
+      return false;
+    } else {
+      var index: i32 = 0;
+      while index < count {
+        let expected: i32 = hf_dyn_i32_get32(parameters, index);
+        let actual: i32 = hf_dyn_i32_get32(arguments, index);
+        if !can_assign(expected, actual) {
+          return false;
+        } else {
+          index = index + 1;
+        }
+      }
+      return true;
+    }
+  }
+}
+
+fn main() -> i32 {
+  let params: dyn<i32> = hf_dyn_i32_new(3);
+  let args: dyn<i32> = hf_dyn_i32_new(3);
+  hf_dyn_i32_push(params, 2);
+  hf_dyn_i32_push(params, 3);
+  hf_dyn_i32_push(params, 5);
+  hf_dyn_i32_push(args, 1);
+  hf_dyn_i32_push(args, 3);
+  hf_dyn_i32_push(args, 5);
+
+  let valid_call: bool = check_call(params, args, 3);
+  let invalid_call: bool = check_call(params, args, 2);
+  let arithmetic: i32 = binary_type(0, 1, 1);
+  let comparison: i32 = binary_type(1, 2, 2);
+  let logical: i32 = binary_type(2, 3, 3);
+  let bad_logical: i32 = binary_type(2, 1, 3);
+  let return_ok: bool = check_return(2, 1, true);
+  let return_bad: bool = check_return(3, 1, true);
+  let void_ok: bool = check_return(4, 0, false);
+  let void_bad: bool = check_return(4, 0, true);
+
+  hf_dyn_i32_free(params);
+  hf_dyn_i32_free(args);
+  if valid_call && !invalid_call && arithmetic == 1 && comparison == 3 && logical == 3 && bad_logical == 0 && return_ok && !return_bad && void_ok && !void_bad {
+    return 0;
+  } else {
+    return 9;
+  }
+}
