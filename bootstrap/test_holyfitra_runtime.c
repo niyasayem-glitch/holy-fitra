@@ -21,6 +21,7 @@ char *hf_buf_finish(void *);
 void hf_buf_free(void *);
 void hf_string_free(void *);
 char *hf_path_canonicalize(const char *);
+char *hf_string_slice32(const char *, int32_t, int32_t);
 _Bool hf_write_text(const char *, const char *);
 
 int main(void) {
@@ -51,6 +52,12 @@ int main(void) {
     memset(too_long_path, 'x', sizeof(too_long_path) - 1);
     too_long_path[sizeof(too_long_path) - 1] = '\0';
     assert(hf_path_canonicalize(too_long_path) == NULL);
+    char *slice = hf_string_slice32("abcdef", 2, 3);
+    assert(slice != NULL);
+    assert(strcmp(slice, "cde") == 0);
+    hf_string_free(slice);
+    assert(hf_string_slice32("abcdef", -1, 2) == NULL);
+    assert(hf_string_slice32("abcdef", 4, 3) == NULL);
 
     assert(hf_buf_new(0) == NULL);
     assert(hf_buf_new(((uint64_t)64u << 20) + 1) == NULL);

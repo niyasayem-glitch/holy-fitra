@@ -535,3 +535,30 @@ The HIR snapshot records stable node ID, HIR kind, owning module ID, imported sy
 | Python compileall and shell syntax | Passed |
 
 State 7 is a typed-HIR foundation rather than general lowering. The next boundary is to retain the complete parser AST per loaded module, replace the bounded declaration scanner with parser-produced declarations, add function signatures and imported call expressions, and lower HIR into explicit CFG-based MIR.
+
+## State 8 — parser-driven per-module AST retention and function signatures retained — 2026-08-22
+
+State 8 connects filesystem loading to the real State-2 recursive-descent parser. Each loaded module’s source is sliced through a bounded owned-string ABI, lexed and parsed without Python, and every parser-produced AST node is copied into the global per-module arena with source-offset rebasing. The retained metadata includes parser node count, root node ID, source digest, source byte count, node kind, module ID, source span, symbol metadata, and canonical type ID.
+
+Function declarations are scanned for typed signatures and connected to the export tables. Each signature records owning module, stable name hash, name length, visibility, canonical return type ID, and parameter count. The positive module fixtures expose seven signatures, all with canonical `i32` return type ID 1 and zero parameters. AST, signature, and HIR snapshots are written atomically and compare byte-for-byte across repeated runs.
+
+A State-8 sanitizer failure found four leaked per-module metadata arrays; all are now explicitly released. The runtime gained `hf_string_slice32`, with direct valid-slice, negative-bound, and overrun tests.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| Parser-driven module loading | Passed; six filesystem fixtures |
+| Per-module AST retention | Passed; 47 canonical arena records |
+| Parser metadata retention | Passed; six module counts, roots, source digests, and byte sizes |
+| Function signature extraction | Passed; seven typed signatures |
+| Canonical type IDs | Passed; `i32` return type ID 1 |
+| Parameter counts | Passed; zero-parameter fixtures |
+| AST/signature/HIR snapshot determinism | Passed; byte-identical repeated runs |
+| String-slice runtime tests | Passed under ASAN/UBSan |
+| State-8 ASAN/UBSan with leak detection | Passed |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-8 object | Passed; 62,304 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 8 is still not a full body-level multi-module compiler: the parser bridge currently retains the real AST arena per module, while export signature extraction remains limited to the supported fixture declaration form. The next boundary is to retain child arenas and source ownership per module, derive signatures directly from parsed function nodes, type-check imported call expressions, and lower complete function bodies into CFG-based MIR.

@@ -97,6 +97,17 @@ int32_t hf_string_byte32(const char *text, int32_t index) {
     return (unsigned char)text[index];
 }
 
+char *hf_string_slice32(const char *text, int32_t start, int32_t length) {
+    if (!text || start < 0 || length < 0) return NULL;
+    size_t text_length = strlen(text);
+    if ((size_t)start > text_length || (size_t)length > text_length - (size_t)start) return NULL;
+    char *result = (char *)malloc((size_t)length + 1);
+    if (!result) return NULL;
+    memcpy(result, text + start, (size_t)length);
+    result[length] = '\0';
+    return result;
+}
+
 void *hf_file_open(const char *path) {
     if (!path || path[0] == '\0') return NULL;
     return (void *)fopen(path, "rb");
