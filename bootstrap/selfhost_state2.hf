@@ -57,6 +57,7 @@ fn keyword_kind(source: string, start: i32, length: i32) -> i32 {
   if keyword(source, start, length, "bool", 23) { return 23 }
   if keyword(source, start, length, "void", 24) { return 24 }
   if keyword(source, start, length, "string", 25) { return 25 }
+  if keyword(source, start, length, "pub", 27) { return 27 }
   if keyword(source, start, length, "dyn", 26) { return 26 }
   return 100
 }
@@ -70,6 +71,7 @@ fn keyword_length(kind: i32) -> i32 {
   if kind == 18 { return 5 }
   if kind == 19 || kind == 20 || kind == 21 || kind == 22 || kind == 26 { return 3 }
   if kind == 23 || kind == 24 { return 4 }
+  if kind == 27 { return 3 }
   return 0
 }
 
@@ -227,9 +229,42 @@ fn parse_primary(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: d
     if !advance(kinds, cursor) { return -1 }
     return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, primary_token), 0, 1)
   }
+  if primary_kind == 17 {
+    if !advance(kinds, cursor) { return -1 }
+    return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, primary_token), 0, 3)
+  }
+  if primary_kind == 18 {
+    if !advance(kinds, cursor) { return -1 }
+    return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, primary_token), 0, 3)
+  }
   if primary_kind == 100 {
     if !advance(kinds, cursor) { return -1 }
-    return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 7, 0, 0, hf_dyn_i32_get32(starts, primary_token), hf_dyn_i32_get32(lengths, primary_token), hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, primary_token), 0, 0)
+    let name_node: i32 = node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 7, 0, 0, hf_dyn_i32_get32(starts, primary_token), hf_dyn_i32_get32(lengths, primary_token), hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, primary_token), 0, 0)
+    if accept(kinds, cursor, 42) {
+      let call_first: i32 = hf_dyn_i32_len32(children)
+      if !hf_dyn_i32_push(children, name_node) { return -1 }
+      var argument_count: i32 = 0
+      var call_ok: bool = true
+      while call_ok && current(kinds, cursor) != 43 && current(kinds, cursor) != 0 {
+        let argument_node: i32 = parse_expression(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+        if argument_node < 0 {
+          call_ok = false
+        } else {
+          if !hf_dyn_i32_push(children, argument_node) { call_ok = false }
+        }
+        if call_ok {
+          argument_count = argument_count + 1
+          if current(kinds, cursor) == 48 {
+            advance(kinds, cursor)
+          } else {
+            if current(kinds, cursor) != 43 { call_ok = false }
+          }
+        }
+      }
+      if !call_ok || !expect(kinds, cursor, 43) { return -1 }
+      return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 11, call_first, argument_count + 1, hf_dyn_i32_get32(starts, primary_token), hf_dyn_i32_get32(lengths, primary_token), hf_dyn_i32_get32(starts, primary_token), token_end(starts, lengths, cursor_index(cursor) - 1), 0, 0)
+    }
+    return name_node
   }
   if accept(kinds, cursor, 42) {
     let nested_node: i32 = parse_primary(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
@@ -318,21 +353,45 @@ fn parse_function(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: 
   let function_start_token: i32 = cursor_index(cursor)
   if !expect(kinds, cursor, 12) { return -1 }
   let function_name_token: i32 = cursor_index(cursor)
-  if !expect(kinds, cursor, 100) || !expect(kinds, cursor, 42) || !expect(kinds, cursor, 43) || !expect(kinds, cursor, 8) { return -1 }
-  let function_type: i32 = parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids)
-  if function_type < 0 { return -1 }
+  if !expect(kinds, cursor, 100) || !expect(kinds, cursor, 42) { return -1 }
+  let parameter_nodes: dyn<i32> = hf_dyn_i32_new(32)
+  var parameter_count: i32 = 0
+  var parameter_ok: bool = true
+  while parameter_ok && current(kinds, cursor) != 43 && current(kinds, cursor) != 0 {
+    let parameter_name_token: i32 = cursor_index(cursor)
+    if !expect(kinds, cursor, 100) || !expect(kinds, cursor, 40) { parameter_ok = false }
+    let parameter_type: i32 = parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids)
+    if parameter_type < 0 { parameter_ok = false }
+    if parameter_ok {
+      let parameter_node: i32 = node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 10, 0, 0, hf_dyn_i32_get32(starts, parameter_name_token), hf_dyn_i32_get32(lengths, parameter_name_token), hf_dyn_i32_get32(starts, parameter_name_token), token_end(starts, lengths, cursor_index(cursor) - 1), 0, hf_dyn_i32_get32(type_ids, parameter_type))
+      parameter_ok = hf_dyn_i32_push(parameter_nodes, parameter_node)
+      parameter_count = parameter_count + 1
+      if current(kinds, cursor) == 48 { advance(kinds, cursor) }
+    }
+  }
+  let parameters_closed: bool = parameter_ok && expect(kinds, cursor, 43) && expect(kinds, cursor, 8)
+  var function_type: i32 = -1
+  if parameters_closed { function_type = parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids) }
+  if !parameters_closed || function_type < 0 { hf_dyn_i32_free(parameter_nodes); return -1 }
   let function_block: i32 = parse_block(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
-  if function_block < 0 { return -1 }
+  if function_block < 0 { hf_dyn_i32_free(parameter_nodes); return -1 }
   let function_first: i32 = hf_dyn_i32_len32(children)
-  hf_dyn_i32_push(children, function_type)
-  hf_dyn_i32_push(children, function_block)
-  return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 2, function_first, 2, hf_dyn_i32_get32(starts, function_name_token), hf_dyn_i32_get32(lengths, function_name_token), hf_dyn_i32_get32(starts, function_start_token), hf_dyn_i32_get32(span_ends, function_block), 0, 0)
+  if !hf_dyn_i32_push(children, function_type) { hf_dyn_i32_free(parameter_nodes); return -1 }
+  var parameter_index: i32 = 0
+  while parameter_index < parameter_count {
+    if !hf_dyn_i32_push(children, hf_dyn_i32_get32(parameter_nodes, parameter_index)) { hf_dyn_i32_free(parameter_nodes); return -1 }
+    parameter_index = parameter_index + 1
+  }
+  if !hf_dyn_i32_push(children, function_block) { hf_dyn_i32_free(parameter_nodes); return -1 }
+  hf_dyn_i32_free(parameter_nodes)
+  return node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 2, function_first, parameter_count + 2, hf_dyn_i32_get32(starts, function_name_token), hf_dyn_i32_get32(lengths, function_name_token), hf_dyn_i32_get32(starts, function_start_token), hf_dyn_i32_get32(span_ends, function_block), 0, 0)
 }
 
 fn parse_program(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
   let program_members: dyn<i32> = hf_dyn_i32_new(128)
   var program_count: i32 = 0
   while current(kinds, cursor) != 0 {
+    if current(kinds, cursor) == 27 { advance(kinds, cursor) }
     let function_node: i32 = parse_function(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
     if function_node < 0 {
       hf_dyn_i32_free(program_members)

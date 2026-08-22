@@ -1,0 +1,3 @@
+module cycle_a
+import cycle_b.b
+pub fn a() -> i32 { return 1; }

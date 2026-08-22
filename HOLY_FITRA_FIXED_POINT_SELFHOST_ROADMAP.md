@@ -380,3 +380,8 @@ Holy Fitra may claim **fully fixed-point self-hosting** only when all of the fol
 9. The regression suite includes positive, negative, boundary, deterministic, sanitizer, and differential tests.
 
 Until these conditions are met, the accurate description is **Stage-0 bootstrap with self-hosted frontend, semantic-core, and emitter foundations**, not a fully self-hosted compiler.
+
+## State 9 implementation record — 2026-08-22
+State 9 now preserves parser-produced child edges in bounded global arenas with per-module base/count metadata, derives export signatures directly from function-node children, and validates imported call expressions before HIR lowering. The bounded parser supports typed parameters, public function markers, integer and boolean arguments, and comma-separated argument lists. The focused graph accepts `core.inc(41)`, rejects `inc()` with HF5001, and rejects `inc(true)` with HF5002. The current call environment intentionally supports one import per module and fails closed when that assumption is violated.
+
+State 10 should begin only after the State-9 artifacts remain stable: the next high-leverage slice is CFG/MIR construction from typed AST/HIR, with explicit verification of call edges, control-flow termination, and source spans. State 9 does not claim full fixed-point self-hosting, general LLVM lowering, or physical Android execution.

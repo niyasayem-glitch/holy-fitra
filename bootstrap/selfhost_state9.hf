@@ -1,0 +1,1488 @@
+module selfhost_state9
+
+// State-6 filesystem-backed module loader.
+// Diagnostic codes: HF4001 missing module, HF4002 import cycle,
+// HF4003 missing export, HF4004 private export, HF4005 signature error.
+
+fn is_space(ch: i32) -> bool {
+  return ch == 32 || ch == 9 || ch == 10 || ch == 13
+}
+
+fn is_ident_start(ch: i32) -> bool {
+  return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95
+}
+
+fn is_ident_continue(ch: i32) -> bool {
+  return is_ident_start(ch) || (ch >= 48 && ch <= 57)
+}
+
+fn text_at(source: string, start: i32, needle: string) -> bool {
+  let source_length: i32 = hf_string_len32(source)
+  let needle_length: i32 = hf_string_len32(needle)
+  if start < 0 || start + needle_length > source_length { return false }
+  var index: i32 = 0
+  var equal: bool = true
+  while index < needle_length {
+    if hf_string_byte32(source, start + index) != hf_string_byte32(needle, index) { equal = false }
+    index = index + 1
+  }
+  return equal
+}
+
+fn same_text(left: string, right: string) -> bool {
+  let left_length: i32 = hf_string_len32(left)
+  if left_length != hf_string_len32(right) { return false }
+  var index: i32 = 0
+  var equal: bool = true
+  while index < left_length {
+    if hf_string_byte32(left, index) != hf_string_byte32(right, index) { equal = false }
+    index = index + 1
+  }
+  return equal
+}
+
+fn find_text(source: string, needle: string, after: i32) -> i32 {
+  let source_length: i32 = hf_string_len32(source)
+  let needle_length: i32 = hf_string_len32(needle)
+  var candidate: i32 = after
+  while candidate + needle_length <= source_length {
+    if text_at(source, candidate, needle) { return candidate }
+    candidate = candidate + 1
+  }
+  return -1
+}
+
+fn span_hash(source: string, start: i32, length: i32) -> i32 {
+  var hash_value: i32 = 216613626
+  var index: i32 = 0
+  while index < length {
+    hash_value = hash_value * 16777619 + hf_string_byte32(source, start + index)
+    index = index + 1
+  }
+  if hash_value == 0 { return 1 }
+  return hash_value
+}
+
+fn parse_return_type(source: string, function_start: i32) -> i32 {
+  let arrow: i32 = find_text(source, "->", function_start)
+  if arrow < 0 { return -1 }
+  var type_start: i32 = arrow + 2
+  let source_length: i32 = hf_string_len32(source)
+  while type_start < source_length && is_space(hf_string_byte32(source, type_start)) { type_start = type_start + 1 }
+  if text_at(source, type_start, "i32") { return 1 }
+  if text_at(source, type_start, "i64") { return 2 }
+  if text_at(source, type_start, "bool") { return 3 }
+  if text_at(source, type_start, "void") { return 4 }
+  return -1
+}
+
+fn parse_parameter_count(source: string, function_start: i32) -> i32 {
+  let open: i32 = find_text(source, "(", function_start)
+  if open < 0 { return -1 }
+  let close: i32 = find_text(source, ")", open + 1)
+  if close < 0 { return -1 }
+  var parameter_index: i32 = open + 1
+  var parameter_count: i32 = 0
+  var has_parameter: bool = false
+  while parameter_index < close {
+    let parameter_character: i32 = hf_string_byte32(source, parameter_index)
+    if parameter_character == 44 {
+      if !has_parameter { return -1 }
+      parameter_count = parameter_count + 1
+      has_parameter = false
+    } else {
+      if !is_space(parameter_character) { has_parameter = true }
+    }
+    parameter_index = parameter_index + 1
+  }
+  if has_parameter { parameter_count = parameter_count + 1 }
+  return parameter_count
+}
+
+fn ast_add(ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>, kind: i32, module_id: i32, start: i32, end: i32, symbol_hash: i32, type_id: i32) -> bool {
+  if kind < 1 || kind > 12 || module_id < 0 || start < 0 || end < start || type_id < 0 { return false }
+  if hf_dyn_i32_len32(ast_kinds) >= 256 { return false }
+  return hf_dyn_i32_push(ast_kinds, kind) && hf_dyn_i32_push(ast_modules, module_id) && hf_dyn_i32_push(ast_starts, start) && hf_dyn_i32_push(ast_ends, end) && hf_dyn_i32_push(ast_symbols, symbol_hash) && hf_dyn_i32_push(ast_types, type_id)
+}
+
+fn add_module_from_source(source: string, source_id: i32, module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>, ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>) -> i32 {
+  let marker: i32 = find_text(source, "module ", 0)
+  if marker < 0 { return -1 }
+  let name_start: i32 = marker + 7
+  var name_end: i32 = name_start
+  let source_length: i32 = hf_string_len32(source)
+  while name_end < source_length && is_ident_continue(hf_string_byte32(source, name_end)) { name_end = name_end + 1 }
+  let name_length: i32 = name_end - name_start
+  if name_length <= 0 { return -1 }
+  let module_id: i32 = hf_dyn_i32_len32(module_hashes)
+  if !hf_dyn_i32_push(module_hashes, span_hash(source, name_start, name_length)) { return -1 }
+  if !hf_dyn_i32_push(module_lengths, name_length) { return -1 }
+  if !hf_dyn_i32_push(module_sources, source_id) { return -1 }
+  if !hf_dyn_i32_push(states, 0) { return -1 }
+  if !ast_add(ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, 1, module_id, marker, source_length, span_hash(source, name_start, name_length), 0) { return -1 }
+  return module_id
+}
+
+fn parse_import(source: string, module_id: i32, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>) -> bool {
+  let marker: i32 = find_text(source, "import ", 0)
+  if marker < 0 { return true }
+  let target_start: i32 = marker + 7
+  var dot: i32 = target_start
+  let source_length: i32 = hf_string_len32(source)
+  while dot < source_length && hf_string_byte32(source, dot) != 46 { dot = dot + 1 }
+  if dot >= source_length { return false }
+  let target_length: i32 = dot - target_start
+  let symbol_start: i32 = dot + 1
+  var symbol_end: i32 = symbol_start
+  while symbol_end < source_length && is_ident_continue(hf_string_byte32(source, symbol_end)) { symbol_end = symbol_end + 1 }
+  let symbol_length: i32 = symbol_end - symbol_start
+  if target_length <= 0 || symbol_length <= 0 { return false }
+  return hf_dyn_i32_push(import_from, module_id) && hf_dyn_i32_push(import_target_hashes, span_hash(source, target_start, target_length)) && hf_dyn_i32_push(import_target_lengths, target_length) && hf_dyn_i32_push(import_symbol_hashes, span_hash(source, symbol_start, symbol_length)) && hf_dyn_i32_push(import_symbol_lengths, symbol_length)
+}
+
+fn parse_exports(source: string, module_id: i32, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>, export_param_bases: dyn<i32>, export_param_types: dyn<i32>, ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>) -> bool {
+  let public_marker: i32 = find_text(source, "pub fn ", 0)
+  if public_marker >= 0 {
+    let name_start: i32 = public_marker + 7
+    var name_end: i32 = name_start
+    let source_length: i32 = hf_string_len32(source)
+    while name_end < source_length && is_ident_continue(hf_string_byte32(source, name_end)) { name_end = name_end + 1 }
+    let name_length: i32 = name_end - name_start
+    let public_return_type: i32 = parse_return_type(source, public_marker)
+    let public_parameter_count: i32 = parse_parameter_count(source, public_marker)
+    if name_length <= 0 || public_return_type < 0 || public_parameter_count < 0 { return false }
+    if !hf_dyn_i32_push(export_modules, module_id) { return false }
+    if !hf_dyn_i32_push(export_hashes, span_hash(source, name_start, name_length)) { return false }
+    if !hf_dyn_i32_push(export_lengths, name_length) { return false }
+    if !hf_dyn_i32_push(export_public, 1) { return false }
+    if !hf_dyn_i32_push(export_type_ids, public_return_type) { return false }
+    if !hf_dyn_i32_push(export_param_counts, public_parameter_count) { return false }
+  }
+  let private_marker: i32 = find_text(source, "\nfn ", 0)
+  if private_marker >= 0 {
+    let private_name_start: i32 = private_marker + 4
+    var private_name_end: i32 = private_name_start
+    let private_source_length: i32 = hf_string_len32(source)
+    while private_name_end < private_source_length && is_ident_continue(hf_string_byte32(source, private_name_end)) { private_name_end = private_name_end + 1 }
+    let private_name_length: i32 = private_name_end - private_name_start
+    let private_return_type: i32 = parse_return_type(source, private_marker)
+    let private_parameter_count: i32 = parse_parameter_count(source, private_marker)
+    if private_name_length <= 0 || private_return_type < 0 || private_parameter_count < 0 { return false }
+    if !hf_dyn_i32_push(export_modules, module_id) { return false }
+    if !hf_dyn_i32_push(export_hashes, span_hash(source, private_name_start, private_name_length)) { return false }
+    if !hf_dyn_i32_push(export_lengths, private_name_length) { return false }
+    if !hf_dyn_i32_push(export_public, 0) { return false }
+    if !hf_dyn_i32_push(export_type_ids, private_return_type) { return false }
+    if !hf_dyn_i32_push(export_param_counts, private_parameter_count) { return false }
+  }
+  return true
+}
+
+fn export_add(export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>, export_param_bases: dyn<i32>, module_id: i32, name_hash: i32, name_length: i32, is_public: i32, return_type: i32, parameter_base: i32, parameter_count: i32) -> bool {
+  if module_id < 0 || name_length <= 0 || (is_public != 0 && is_public != 1) || return_type <= 0 || parameter_base < 0 || parameter_count < 0 { return false }
+  if hf_dyn_i32_len32(export_modules) >= 128 { return false }
+  return hf_dyn_i32_push(export_modules, module_id) && hf_dyn_i32_push(export_hashes, name_hash) && hf_dyn_i32_push(export_lengths, name_length) && hf_dyn_i32_push(export_public, is_public) && hf_dyn_i32_push(export_type_ids, return_type) && hf_dyn_i32_push(export_param_counts, parameter_count) && hf_dyn_i32_push(export_param_bases, parameter_base)
+}
+
+fn parse_module_ast(source: string, module_id: i32, ast_counts: dyn<i32>, ast_roots: dyn<i32>, ast_source_hashes: dyn<i32>, ast_source_bytes: dyn<i32>, ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>, child_modules: dyn<i32>, child_parents: dyn<i32>, child_nodes: dyn<i32>, child_bases: dyn<i32>, child_counts: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>, export_param_bases: dyn<i32>, export_param_types: dyn<i32>) -> bool {
+  let function_start: i32 = find_text(source, "fn ", 0)
+  let source_length: i32 = hf_string_len32(source)
+  if function_start < 0 || source_length <= function_start { return false }
+  let function_source: string = hf_string_slice32(source, function_start, source_length - function_start)
+  let token_kinds: dyn<i32> = hf_dyn_i32_new(512)
+  let token_starts: dyn<i32> = hf_dyn_i32_new(512)
+  let token_lengths: dyn<i32> = hf_dyn_i32_new(512)
+  let cursor: dyn<i32> = hf_dyn_i32_new(1)
+  let node_kinds: dyn<i32> = hf_dyn_i32_new(512)
+  let first_children: dyn<i32> = hf_dyn_i32_new(512)
+  let parser_child_counts: dyn<i32> = hf_dyn_i32_new(512)
+  let name_starts: dyn<i32> = hf_dyn_i32_new(512)
+  let name_lengths: dyn<i32> = hf_dyn_i32_new(512)
+  let span_starts: dyn<i32> = hf_dyn_i32_new(512)
+  let span_ends: dyn<i32> = hf_dyn_i32_new(512)
+  let symbol_ids: dyn<i32> = hf_dyn_i32_new(512)
+  let type_ids: dyn<i32> = hf_dyn_i32_new(512)
+  let children: dyn<i32> = hf_dyn_i32_new(1024)
+  let cursor_ready: bool = hf_dyn_i32_push(cursor, 0)
+  let lex_ok: bool = cursor_ready && p9_lex(function_source, token_kinds, token_starts, token_lengths)
+  var root: i32 = -1
+  var parse_ok: bool = false
+  if lex_ok {
+    root = p9_parse_program(token_kinds, token_starts, token_lengths, cursor, node_kinds, first_children, parser_child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    parse_ok = root >= 0 && p9_current(token_kinds, cursor) == 0 && hf_dyn_i32_len32(node_kinds) > 0
+  }
+  let module_ast_base: i32 = hf_dyn_i32_len32(ast_kinds)
+  var copied_ok: bool = parse_ok
+  var copy_index: i32 = 0
+  while copied_ok && copy_index < hf_dyn_i32_len32(node_kinds) {
+    let copied_kind: i32 = hf_dyn_i32_get32(node_kinds, copy_index)
+    let copied_start: i32 = hf_dyn_i32_get32(span_starts, copy_index) + function_start
+    let copied_end: i32 = hf_dyn_i32_get32(span_ends, copy_index) + function_start
+    let copied_symbol: i32 = hf_dyn_i32_get32(symbol_ids, copy_index)
+    let copied_type: i32 = hf_dyn_i32_get32(type_ids, copy_index)
+    copied_ok = ast_add(ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, copied_kind, module_id, copied_start, copied_end, copied_symbol, copied_type)
+    if copied_ok && copied_kind == 2 {
+      let function_first_child: i32 = hf_dyn_i32_get32(first_children, copy_index)
+      let function_child_count: i32 = hf_dyn_i32_get32(parser_child_counts, copy_index)
+      let parsed_parameter_count: i32 = function_child_count - 2
+      if function_child_count < 2 { copied_ok = false }
+      if copied_ok {
+        let return_type_node: i32 = hf_dyn_i32_get32(children, function_first_child)
+        let parsed_return_type: i32 = hf_dyn_i32_get32(type_ids, return_type_node)
+        let parsed_parameter_base: i32 = hf_dyn_i32_len32(export_param_types)
+        var parameter_index: i32 = 0
+        while copied_ok && parameter_index < parsed_parameter_count {
+          let parameter_node: i32 = hf_dyn_i32_get32(children, function_first_child + 1 + parameter_index)
+          let parameter_kind: i32 = hf_dyn_i32_get32(node_kinds, parameter_node)
+          let parameter_type: i32 = hf_dyn_i32_get32(type_ids, parameter_node)
+          copied_ok = parameter_kind == 10 && parameter_type > 0 && hf_dyn_i32_push(export_param_types, parameter_type)
+          parameter_index = parameter_index + 1
+        }
+        let local_name_start: i32 = hf_dyn_i32_get32(name_starts, copy_index)
+        let local_name_length: i32 = hf_dyn_i32_get32(name_lengths, copy_index)
+        let global_function_start: i32 = copied_start
+        let is_public_function: bool = global_function_start >= 4 && text_at(source, global_function_start - 4, "pub ")
+        var public_flag: i32 = 0
+        if is_public_function { public_flag = 1 }
+        copied_ok = copied_ok && export_add(export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, module_id, span_hash(function_source, local_name_start, local_name_length), local_name_length, public_flag, parsed_return_type, parsed_parameter_base, parsed_parameter_count)
+      }
+    }
+    copy_index = copy_index + 1
+  }
+  let module_child_base: i32 = hf_dyn_i32_len32(child_nodes)
+  var parent_index: i32 = 0
+  while copied_ok && parent_index < hf_dyn_i32_len32(node_kinds) {
+    let local_first_child: i32 = hf_dyn_i32_get32(first_children, parent_index)
+    let local_child_count: i32 = hf_dyn_i32_get32(parser_child_counts, parent_index)
+    var local_child_index: i32 = 0
+    while copied_ok && local_child_index < local_child_count {
+      let local_child: i32 = hf_dyn_i32_get32(children, local_first_child + local_child_index)
+      copied_ok = hf_dyn_i32_push(child_modules, module_id) && hf_dyn_i32_push(child_parents, module_ast_base + parent_index) && hf_dyn_i32_push(child_nodes, module_ast_base + local_child)
+      local_child_index = local_child_index + 1
+    }
+    parent_index = parent_index + 1
+  }
+  let module_child_count: i32 = hf_dyn_i32_len32(child_nodes) - module_child_base
+  let child_metadata_ok: bool = copied_ok && hf_dyn_i32_push(child_bases, module_child_base) && hf_dyn_i32_push(child_counts, module_child_count)
+  let metadata_ok: bool = child_metadata_ok && hf_dyn_i32_push(ast_counts, hf_dyn_i32_len32(node_kinds)) && hf_dyn_i32_push(ast_roots, root) && hf_dyn_i32_push(ast_source_hashes, span_hash(source, 0, source_length)) && hf_dyn_i32_push(ast_source_bytes, source_length)
+  hf_dyn_i32_free(token_kinds)
+  hf_dyn_i32_free(token_starts)
+  hf_dyn_i32_free(token_lengths)
+  hf_dyn_i32_free(cursor)
+  hf_dyn_i32_free(node_kinds)
+  hf_dyn_i32_free(first_children)
+  hf_dyn_i32_free(parser_child_counts)
+  hf_dyn_i32_free(name_starts)
+  hf_dyn_i32_free(name_lengths)
+  hf_dyn_i32_free(span_starts)
+  hf_dyn_i32_free(span_ends)
+  hf_dyn_i32_free(symbol_ids)
+  hf_dyn_i32_free(type_ids)
+  hf_dyn_i32_free(children)
+  hf_string_free(function_source)
+  return metadata_ok
+}
+
+fn load_module(path: string, source_id: i32, module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>, export_param_bases: dyn<i32>, export_param_types: dyn<i32>, ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>, ast_counts: dyn<i32>, ast_roots: dyn<i32>, ast_source_hashes: dyn<i32>, ast_source_bytes: dyn<i32>, child_modules: dyn<i32>, child_parents: dyn<i32>, child_nodes: dyn<i32>, child_bases: dyn<i32>, child_counts: dyn<i32>) -> i32 {
+  let canonical_path: string = hf_path_canonicalize(path)
+  if hf_string_len32(canonical_path) == 0 { return -1 }
+  let source: string = hf_read_text(canonical_path)
+  if hf_string_len32(source) == 0 { hf_string_free(canonical_path); return -1 }
+  let module_id: i32 = add_module_from_source(source, source_id, module_hashes, module_lengths, module_sources, states, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types)
+  let parser_ok: bool = module_id >= 0 && parse_module_ast(source, module_id, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, child_modules, child_parents, child_nodes, child_bases, child_counts, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types)
+  let import_ok: bool = module_id >= 0 && parse_import(source, module_id, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths)
+  let export_ok: bool = import_ok && parser_ok
+  hf_string_free(source)
+  hf_string_free(canonical_path)
+  if !export_ok { return -1 }
+  return module_id
+}
+
+fn find_module(module_hashes: dyn<i32>, module_lengths: dyn<i32>, query_hash: i32, query_length: i32) -> i32 {
+  var module_index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  while module_index < module_count {
+    if hf_dyn_i32_get32(module_hashes, module_index) == query_hash && hf_dyn_i32_get32(module_lengths, module_index) == query_length { return module_index }
+    module_index = module_index + 1
+  }
+  return -1
+}
+
+fn find_export(export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, module_id: i32, query_hash: i32, query_length: i32) -> i32 {
+  var export_index: i32 = 0
+  let export_count: i32 = hf_dyn_i32_len32(export_modules)
+  while export_index < export_count {
+    if hf_dyn_i32_get32(export_modules, export_index) == module_id && hf_dyn_i32_get32(export_hashes, export_index) == query_hash && hf_dyn_i32_get32(export_lengths, export_index) == query_length {
+      if hf_dyn_i32_get32(export_public, export_index) == 1 { return export_index }
+      return -2
+    }
+    export_index = export_index + 1
+  }
+  return -1
+}
+
+fn add_diagnostic(code: i32, module_id: i32, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> bool {
+  return hf_dyn_i32_push(diagnostic_codes, code) && hf_dyn_i32_push(diagnostic_modules, module_id)
+}
+
+fn resolve_module(module_id: i32, states: dyn<i32>, module_hashes: dyn<i32>, module_lengths: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> bool {
+  if module_id < 0 || module_id >= hf_dyn_i32_len32(states) { return false }
+  let state: i32 = hf_dyn_i32_get32(states, module_id)
+  if state == 1 {
+    add_diagnostic(4002, module_id, diagnostic_codes, diagnostic_modules)
+    hf_dyn_i32_set32(states, module_id, 3)
+    return false
+  }
+  if state == 2 { return true }
+  if state == 3 { return false }
+  hf_dyn_i32_set32(states, module_id, 1)
+  var import_index: i32 = 0
+  var resolved: bool = true
+  let import_count: i32 = hf_dyn_i32_len32(import_from)
+  while import_index < import_count {
+    if hf_dyn_i32_get32(import_from, import_index) == module_id {
+      let target_module: i32 = find_module(module_hashes, module_lengths, hf_dyn_i32_get32(import_target_hashes, import_index), hf_dyn_i32_get32(import_target_lengths, import_index))
+      if target_module < 0 {
+        add_diagnostic(4001, module_id, diagnostic_codes, diagnostic_modules)
+        resolved = false
+      } else {
+        if !resolve_module(target_module, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules) { resolved = false }
+        let export_result: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, target_module, hf_dyn_i32_get32(import_symbol_hashes, import_index), hf_dyn_i32_get32(import_symbol_lengths, import_index))
+        if export_result == -2 {
+          add_diagnostic(4004, module_id, diagnostic_codes, diagnostic_modules)
+          resolved = false
+        } else {
+          if export_result < 0 {
+            add_diagnostic(4003, module_id, diagnostic_codes, diagnostic_modules)
+            resolved = false
+          }
+        }
+      }
+    }
+    import_index = import_index + 1
+  }
+  if resolved {
+    hf_dyn_i32_set32(states, module_id, 2)
+  } else {
+    hf_dyn_i32_set32(states, module_id, 3)
+  }
+  return resolved
+}
+
+fn graph_snapshot(module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(8192)
+  var index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  while index < module_count {
+    hf_buf_append_i32(buffer, index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_hashes, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_lengths, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_sources, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(states, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  let import_count: i32 = hf_dyn_i32_len32(import_from)
+  while index < import_count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_from, index))
+    hf_buf_append_str(buffer, "->")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_target_hashes, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_target_lengths, index))
+    hf_buf_append_str(buffer, ".")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_symbol_hashes, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  let diagnostic_count: i32 = hf_dyn_i32_len32(diagnostic_codes)
+  while index < diagnostic_count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(diagnostic_codes, index))
+    hf_buf_append_str(buffer, "@")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(diagnostic_modules, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn legacy_state6_main() -> i32 {
+  let root: string = "/tmp/holyfitra_state9_modules"
+  let core_path: string = "/tmp/holyfitra_state9_modules/./core.hf"
+  let app_path: string = "/tmp/holyfitra_state9_modules/../holyfitra_state9_modules/app.hf"
+  let user_path: string = "/tmp/holyfitra_state9_modules/user.hf"
+  let missing_path: string = "/tmp/holyfitra_state9_modules/missing.hf"
+  let cycle_a_path: string = "/tmp/holyfitra_state9_modules/cycle_a.hf"
+  let cycle_b_path: string = "/tmp/holyfitra_state9_modules/cycle_b.hf"
+  let bad_arity_path: string = "/tmp/holyfitra_state9_modules/bad_arity.hf"
+  let bad_type_path: string = "/tmp/holyfitra_state9_modules/bad_type.hf"
+  let unsafe_path: string = "/../../holyfitra_escape.hf"
+  let module_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let module_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let module_sources: dyn<i32> = hf_dyn_i32_new(16)
+  let states: dyn<i32> = hf_dyn_i32_new(16)
+  let import_from: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let export_modules: dyn<i32> = hf_dyn_i32_new(32)
+  let export_hashes: dyn<i32> = hf_dyn_i32_new(32)
+  let export_lengths: dyn<i32> = hf_dyn_i32_new(32)
+  let export_public: dyn<i32> = hf_dyn_i32_new(32)
+  let export_type_ids: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_counts: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_bases: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_types: dyn<i32> = hf_dyn_i32_new(128)
+  let ast_kinds: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_modules: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_starts: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_ends: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_symbols: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_types: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_counts: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_roots: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_source_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_source_bytes: dyn<i32> = hf_dyn_i32_new(16)
+  let child_modules: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_parents: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_nodes: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_bases: dyn<i32> = hf_dyn_i32_new(16)
+  let child_counts: dyn<i32> = hf_dyn_i32_new(16)
+  let core_id: i32 = load_module(core_path, 0, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let app_id: i32 = load_module(app_path, 1, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let user_id: i32 = load_module(user_path, 2, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let missing_id: i32 = load_module(missing_path, 3, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let cycle_a_id: i32 = load_module(cycle_a_path, 4, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let cycle_b_id: i32 = load_module(cycle_b_path, 5, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let bad_arity_id: i32 = load_module(bad_arity_path, 6, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let bad_type_id: i32 = load_module(bad_type_path, 7, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let diagnostic_codes: dyn<i32> = hf_dyn_i32_new(16)
+  let diagnostic_modules: dyn<i32> = hf_dyn_i32_new(16)
+  var module_index: i32 = 0
+  var app_ok: bool = false
+  while module_index < hf_dyn_i32_len32(module_hashes) {
+    let module_ok: bool = resolve_module(module_index, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules)
+    if module_index == app_id { app_ok = module_ok }
+    module_index = module_index + 1
+  }
+  let core_name_hash: i32 = span_hash("core", 0, 4)
+  let answer_hash: i32 = span_hash("answer", 0, 6)
+  let secret_hash: i32 = span_hash("secret", 0, 6)
+  let answer_export: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, core_id, answer_hash, 6)
+  let secret_export: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, core_id, secret_hash, 6)
+  let canonical: string = hf_path_canonicalize("/tmp/holyfitra_state9_modules/../holyfitra_state9_modules/core.hf")
+  let canonical_ok: bool = same_text(canonical, "/tmp/holyfitra_state9_modules/core.hf")
+  let unsafe: string = hf_path_canonicalize(unsafe_path)
+  let graph: string = graph_snapshot(module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, diagnostic_codes, diagnostic_modules)
+  let graph_written: bool = hf_write_text("/tmp/holyfitra_state9_graph.snapshot", graph)
+  let graph_read: string = hf_read_text("/tmp/holyfitra_state9_graph.snapshot")
+  let graph_stable: bool = same_text(graph, graph_read)
+  let graph_nonempty: bool = hf_string_len32(graph_read) > 0
+  let graph_shape: bool = core_id == 0 && app_id == 1 && user_id == 2 && missing_id == 3 && cycle_a_id == 4 && cycle_b_id == 5 && hf_dyn_i32_len32(module_hashes) == 6 && app_ok && hf_dyn_i32_get32(states, core_id) == 2 && hf_dyn_i32_get32(states, app_id) == 2
+  let diagnostics_shape: bool = hf_dyn_i32_len32(diagnostic_codes) == 3 && hf_dyn_i32_get32(diagnostic_codes, 0) == 4004 && hf_dyn_i32_get32(diagnostic_codes, 1) == 4001 && hf_dyn_i32_get32(diagnostic_codes, 2) == 4002
+  let export_shape: bool = answer_export >= 0 && secret_export == -2 && core_name_hash == span_hash("core", 0, 4)
+  let path_shape: bool = canonical_ok && hf_string_len32(unsafe) == 0
+  hf_string_free(canonical)
+  hf_string_free(unsafe)
+  hf_string_free(graph_read)
+  hf_string_free(graph)
+  hf_dyn_i32_free(module_hashes)
+  hf_dyn_i32_free(module_lengths)
+  hf_dyn_i32_free(module_sources)
+  hf_dyn_i32_free(states)
+  hf_dyn_i32_free(import_from)
+  hf_dyn_i32_free(import_target_hashes)
+  hf_dyn_i32_free(import_target_lengths)
+  hf_dyn_i32_free(import_symbol_hashes)
+  hf_dyn_i32_free(import_symbol_lengths)
+  hf_dyn_i32_free(export_modules)
+  hf_dyn_i32_free(export_hashes)
+  hf_dyn_i32_free(export_lengths)
+  hf_dyn_i32_free(export_public)
+  hf_dyn_i32_free(diagnostic_codes)
+  hf_dyn_i32_free(diagnostic_modules)
+  if graph_written && graph_nonempty && graph_stable && graph_shape && diagnostics_shape && export_shape && path_shape && hf_string_len32(root) > 0 { return 0 }
+  return 1
+}
+
+
+// State-7 typed HIR records: kind 1=resolved module, kind 2=resolved imported symbol.
+fn hir_add(hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>, kind: i32, module_id: i32, symbol_id: i32, type_id: i32) -> bool {
+  if kind < 1 || kind > 2 || module_id < 0 || type_id < 0 { return false }
+  if hf_dyn_i32_len32(hir_kinds) >= 128 { return false }
+  let kind_ok: bool = hf_dyn_i32_push(hir_kinds, kind)
+  let module_ok: bool = hf_dyn_i32_push(hir_modules, module_id)
+  let symbol_ok: bool = hf_dyn_i32_push(hir_symbols, symbol_id)
+  let type_ok: bool = hf_dyn_i32_push(hir_types, type_id)
+  return kind_ok && module_ok && symbol_ok && type_ok
+}
+
+fn lower_hir(module_hashes: dyn<i32>, module_lengths: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>) -> bool {
+  var module_index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  var lowering_ok: bool = true
+  while module_index < module_count {
+    if hf_dyn_i32_get32(states, module_index) == 2 {
+      lowering_ok = lowering_ok && hir_add(hir_kinds, hir_modules, hir_symbols, hir_types, 1, module_index, -1, 0)
+      var import_index: i32 = 0
+      let import_count: i32 = hf_dyn_i32_len32(import_from)
+      while import_index < import_count {
+        if hf_dyn_i32_get32(import_from, import_index) == module_index {
+          let target_module: i32 = find_module(module_hashes, module_lengths, hf_dyn_i32_get32(import_target_hashes, import_index), hf_dyn_i32_get32(import_target_lengths, import_index))
+          if target_module >= 0 && target_module < module_count && hf_dyn_i32_get32(states, target_module) == 2 {
+            let imported_symbol: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, target_module, hf_dyn_i32_get32(import_symbol_hashes, import_index), hf_dyn_i32_get32(import_symbol_lengths, import_index))
+            if imported_symbol >= 0 {
+              lowering_ok = lowering_ok && hir_add(hir_kinds, hir_modules, hir_symbols, hir_types, 2, module_index, imported_symbol, hf_dyn_i32_get32(export_type_ids, imported_symbol))
+            } else {
+              lowering_ok = false
+            }
+          } else {
+            lowering_ok = false
+          }
+        }
+        import_index = import_index + 1
+      }
+    }
+    module_index = module_index + 1
+  }
+  return lowering_ok
+}
+
+fn hir_snapshot(hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var snapshot_index: i32 = 0
+  let snapshot_count: i32 = hf_dyn_i32_len32(hir_kinds)
+  while snapshot_index < snapshot_count {
+    hf_buf_append_i32(buffer, snapshot_index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_kinds, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_modules, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_symbols, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_types, snapshot_index))
+    hf_buf_append_str(buffer, ";")
+    snapshot_index = snapshot_index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn child_snapshot(child_modules: dyn<i32>, child_parents: dyn<i32>, child_nodes: dyn<i32>, child_bases: dyn<i32>, child_counts: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var index: i32 = 0
+  while index < hf_dyn_i32_len32(child_modules) {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_modules, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_parents, index))
+    hf_buf_append_str(buffer, ">")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_nodes, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  while index < hf_dyn_i32_len32(child_bases) {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_bases, index))
+    hf_buf_append_str(buffer, "/")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_counts, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn bool_value(value: bool) -> i32 {
+  if value { return 1 }
+  return 0
+}
+
+fn ast_snapshot(ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(8192)
+  var ast_index: i32 = 0
+  let ast_count: i32 = hf_dyn_i32_len32(ast_kinds)
+  while ast_index < ast_count {
+    hf_buf_append_i32(buffer, ast_index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_kinds, ast_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_modules, ast_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_starts, ast_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_ends, ast_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_symbols, ast_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(ast_types, ast_index))
+    hf_buf_append_str(buffer, ";")
+    ast_index = ast_index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn signature_snapshot(export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var signature_index: i32 = 0
+  let signature_count: i32 = hf_dyn_i32_len32(export_modules)
+  while signature_index < signature_count {
+    hf_buf_append_i32(buffer, signature_index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_modules, signature_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_hashes, signature_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_lengths, signature_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_public, signature_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_type_ids, signature_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(export_param_counts, signature_index))
+    hf_buf_append_str(buffer, ";")
+    signature_index = signature_index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn ast_child_count(node_id: i32, child_parents: dyn<i32>) -> i32 {
+  var edge_index: i32 = 0
+  var result: i32 = 0
+  while edge_index < hf_dyn_i32_len32(child_parents) {
+    if hf_dyn_i32_get32(child_parents, edge_index) == node_id { result = result + 1 }
+    edge_index = edge_index + 1
+  }
+  return result
+}
+
+fn ast_child_at(node_id: i32, ordinal: i32, child_parents: dyn<i32>, child_nodes: dyn<i32>) -> i32 {
+  var edge_index: i32 = 0
+  var seen: i32 = 0
+  while edge_index < hf_dyn_i32_len32(child_parents) {
+    if hf_dyn_i32_get32(child_parents, edge_index) == node_id {
+      if seen == ordinal { return hf_dyn_i32_get32(child_nodes, edge_index) }
+      seen = seen + 1
+    }
+    edge_index = edge_index + 1
+  }
+  return -1
+}
+
+fn find_single_import(module_id: i32, import_from: dyn<i32>) -> i32 {
+  var import_index: i32 = 0
+  var result: i32 = -1
+  while import_index < hf_dyn_i32_len32(import_from) {
+    if hf_dyn_i32_get32(import_from, import_index) == module_id {
+      if result >= 0 { return -2 }
+      result = import_index
+    }
+    import_index = import_index + 1
+  }
+  return result
+}
+
+fn validate_imported_calls(module_filter: i32, module_hashes: dyn<i32>, module_lengths: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, export_param_counts: dyn<i32>, export_param_bases: dyn<i32>, export_param_types: dyn<i32>, ast_kinds: dyn<i32>, ast_modules: dyn<i32>, ast_starts: dyn<i32>, ast_ends: dyn<i32>, ast_symbols: dyn<i32>, ast_types: dyn<i32>, child_parents: dyn<i32>, child_nodes: dyn<i32>, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> bool {
+  var node_index: i32 = 0
+  var valid: bool = true
+  while node_index < hf_dyn_i32_len32(ast_kinds) {
+    if hf_dyn_i32_get32(ast_kinds, node_index) == 11 {
+      let module_id: i32 = hf_dyn_i32_get32(ast_modules, node_index)
+      var module_selected: bool = true
+      if module_filter >= 0 {
+        if hf_dyn_i32_get32(ast_modules, node_index) != module_filter { module_selected = false }
+      }
+      if module_selected {
+      let callee_node: i32 = ast_child_at(node_index, 0, child_parents, child_nodes)
+      var import_index: i32 = -1
+      if callee_node >= 0 {
+        if hf_dyn_i32_get32(ast_kinds, callee_node) == 7 { import_index = find_single_import(module_id, import_from) }
+      }
+      if import_index < 0 {
+        add_diagnostic(5003, module_id, diagnostic_codes, diagnostic_modules)
+        valid = false
+      } else {
+        let target_module: i32 = find_module(module_hashes, module_lengths, hf_dyn_i32_get32(import_target_hashes, import_index), hf_dyn_i32_get32(import_target_lengths, import_index))
+        var export_index: i32 = -1
+        if target_module >= 0 {
+          export_index = find_export(export_modules, export_hashes, export_lengths, export_public, target_module, hf_dyn_i32_get32(import_symbol_hashes, import_index), hf_dyn_i32_get32(import_symbol_lengths, import_index))
+        }
+        if target_module < 0 {
+          add_diagnostic(5003, module_id, diagnostic_codes, diagnostic_modules)
+          valid = false
+        } else {
+          if export_index < 0 {
+            add_diagnostic(5003, module_id, diagnostic_codes, diagnostic_modules)
+            valid = false
+          } else {
+          let actual_count: i32 = ast_child_count(node_index, child_parents) - 1
+          let expected_count: i32 = hf_dyn_i32_get32(export_param_counts, export_index)
+          var call_valid: bool = actual_count == expected_count
+          var argument_index: i32 = 0
+          var compare_count: i32 = actual_count
+          if expected_count < compare_count { compare_count = expected_count }
+          while argument_index < compare_count {
+            let argument_node: i32 = ast_child_at(node_index, argument_index + 1, child_parents, child_nodes)
+            var actual_type: i32 = -1
+            if argument_node >= 0 { actual_type = hf_dyn_i32_get32(ast_types, argument_node) }
+            let expected_type: i32 = hf_dyn_i32_get32(export_param_types, hf_dyn_i32_get32(export_param_bases, export_index) + argument_index)
+            if actual_type != expected_type { call_valid = false }
+            argument_index = argument_index + 1
+          }
+          if actual_count != expected_count {
+            add_diagnostic(5001, module_id, diagnostic_codes, diagnostic_modules)
+            valid = false
+          } else {
+            if !call_valid {
+              add_diagnostic(5002, module_id, diagnostic_codes, diagnostic_modules)
+              valid = false
+            } else {
+              hf_dyn_i32_set32(ast_types, node_index, hf_dyn_i32_get32(export_type_ids, export_index))
+            }
+          }
+          }
+        }
+      }
+      }
+    }
+    node_index = node_index + 1
+  }
+  return valid
+}
+
+fn main() -> i32 {
+  let core_path: string = "/tmp/holyfitra_state9_modules/./core.hf"
+  let app_path: string = "/tmp/holyfitra_state9_modules/../holyfitra_state9_modules/app.hf"
+  let user_path: string = "/tmp/holyfitra_state9_modules/user.hf"
+  let missing_path: string = "/tmp/holyfitra_state9_modules/missing.hf"
+  let cycle_a_path: string = "/tmp/holyfitra_state9_modules/cycle_a.hf"
+  let cycle_b_path: string = "/tmp/holyfitra_state9_modules/cycle_b.hf"
+  let bad_arity_path: string = "/tmp/holyfitra_state9_modules/bad_arity.hf"
+  let bad_type_path: string = "/tmp/holyfitra_state9_modules/bad_type.hf"
+  let module_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let module_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let module_sources: dyn<i32> = hf_dyn_i32_new(16)
+  let states: dyn<i32> = hf_dyn_i32_new(16)
+  let import_from: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let export_modules: dyn<i32> = hf_dyn_i32_new(32)
+  let export_hashes: dyn<i32> = hf_dyn_i32_new(32)
+  let export_lengths: dyn<i32> = hf_dyn_i32_new(32)
+  let export_public: dyn<i32> = hf_dyn_i32_new(32)
+  let export_type_ids: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_counts: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_bases: dyn<i32> = hf_dyn_i32_new(32)
+  let export_param_types: dyn<i32> = hf_dyn_i32_new(128)
+  let ast_kinds: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_modules: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_starts: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_ends: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_symbols: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_types: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_counts: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_roots: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_source_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let ast_source_bytes: dyn<i32> = hf_dyn_i32_new(16)
+  let child_modules: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_parents: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_nodes: dyn<i32> = hf_dyn_i32_new(1024)
+  let child_bases: dyn<i32> = hf_dyn_i32_new(16)
+  let child_counts: dyn<i32> = hf_dyn_i32_new(16)
+  let core_id: i32 = load_module(core_path, 0, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let app_id: i32 = load_module(app_path, 1, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let user_id: i32 = load_module(user_path, 2, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let missing_id: i32 = load_module(missing_path, 3, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let cycle_a_id: i32 = load_module(cycle_a_path, 4, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let cycle_b_id: i32 = load_module(cycle_b_path, 5, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let bad_arity_id: i32 = load_module(bad_arity_path, 6, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let bad_type_id: i32 = load_module(bad_type_path, 7, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, ast_counts, ast_roots, ast_source_hashes, ast_source_bytes, child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let diagnostic_codes: dyn<i32> = hf_dyn_i32_new(16)
+  let diagnostic_modules: dyn<i32> = hf_dyn_i32_new(16)
+  var resolve_index: i32 = 0
+  var app_resolved: bool = false
+  while resolve_index < hf_dyn_i32_len32(module_hashes) {
+    let resolved_now: bool = resolve_module(resolve_index, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules)
+    if resolve_index == app_id { app_resolved = resolved_now }
+    resolve_index = resolve_index + 1
+  }
+  let calls_valid: bool = validate_imported_calls(app_id, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, child_parents, child_nodes, diagnostic_codes, diagnostic_modules)
+  let bad_arity_rejected: bool = !validate_imported_calls(bad_arity_id, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, child_parents, child_nodes, diagnostic_codes, diagnostic_modules)
+  let bad_type_rejected: bool = !validate_imported_calls(bad_type_id, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts, export_param_bases, export_param_types, ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types, child_parents, child_nodes, diagnostic_codes, diagnostic_modules)
+  let child_text: string = child_snapshot(child_modules, child_parents, child_nodes, child_bases, child_counts)
+  let child_written: bool = hf_write_text("/tmp/holyfitra_state9_children.snapshot", child_text)
+  let child_read: string = hf_read_text("/tmp/holyfitra_state9_children.snapshot")
+  let child_stable: bool = same_text(child_text, child_read)
+  let child_nonempty: bool = hf_string_len32(child_read) > 0
+  let child_shape: bool = hf_dyn_i32_len32(child_modules) == 58 && hf_dyn_i32_len32(child_parents) == 58 && hf_dyn_i32_len32(child_nodes) == 58 && hf_dyn_i32_len32(child_bases) == 8 && hf_dyn_i32_len32(child_counts) == 8 && hf_dyn_i32_get32(child_bases, 0) == 0 && hf_dyn_i32_get32(child_counts, 0) == 18 && hf_dyn_i32_get32(child_bases, 1) == 18 && hf_dyn_i32_get32(child_counts, 1) == 7 && hf_dyn_i32_get32(child_bases, 6) == 45 && hf_dyn_i32_get32(child_counts, 6) == 6 && hf_dyn_i32_get32(child_bases, 7) == 51 && hf_dyn_i32_get32(child_counts, 7) == 7
+  let ast: string = ast_snapshot(ast_kinds, ast_modules, ast_starts, ast_ends, ast_symbols, ast_types)
+  let ast_written: bool = hf_write_text("/tmp/holyfitra_state9_ast.snapshot", ast)
+  let ast_read: string = hf_read_text("/tmp/holyfitra_state9_ast.snapshot")
+  let ast_stable: bool = same_text(ast, ast_read)
+  let ast_nonempty: bool = hf_string_len32(ast_read) > 0
+  let signatures: string = signature_snapshot(export_modules, export_hashes, export_lengths, export_public, export_type_ids, export_param_counts)
+  let signatures_written: bool = hf_write_text("/tmp/holyfitra_state9_signatures.snapshot", signatures)
+  let signatures_read: string = hf_read_text("/tmp/holyfitra_state9_signatures.snapshot")
+  let signatures_stable: bool = same_text(signatures, signatures_read)
+  let signatures_nonempty: bool = hf_string_len32(signatures_read) > 0
+  let hir_kinds: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_modules: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_symbols: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_types: dyn<i32> = hf_dyn_i32_new(64)
+  let lowered: bool = lower_hir(module_hashes, module_lengths, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, hir_kinds, hir_modules, hir_symbols, hir_types)
+  let hir: string = hir_snapshot(hir_kinds, hir_modules, hir_symbols, hir_types)
+  let hir_written: bool = hf_write_text("/tmp/holyfitra_state9_hir.snapshot", hir)
+  let hir_read: string = hf_read_text("/tmp/holyfitra_state9_hir.snapshot")
+  let hir_stable: bool = same_text(hir, hir_read)
+  let hir_nonempty: bool = hf_string_len32(hir_read) > 0
+  let hir_shape: bool = hf_dyn_i32_len32(hir_kinds) == 7 && hf_dyn_i32_get32(hir_kinds, 0) == 1 && hf_dyn_i32_get32(hir_modules, 0) == core_id && hf_dyn_i32_get32(hir_kinds, 1) == 1 && hf_dyn_i32_get32(hir_modules, 1) == app_id && hf_dyn_i32_get32(hir_kinds, 2) == 2 && hf_dyn_i32_get32(hir_modules, 2) == app_id && hf_dyn_i32_get32(hir_types, 2) == 1 && hf_dyn_i32_get32(hir_kinds, 3) == 1 && hf_dyn_i32_get32(hir_modules, 3) == bad_arity_id && hf_dyn_i32_get32(hir_kinds, 4) == 2 && hf_dyn_i32_get32(hir_modules, 4) == bad_arity_id && hf_dyn_i32_get32(hir_kinds, 5) == 1 && hf_dyn_i32_get32(hir_modules, 5) == bad_type_id && hf_dyn_i32_get32(hir_kinds, 6) == 2 && hf_dyn_i32_get32(hir_modules, 6) == bad_type_id
+  let ast_shape: bool = hf_dyn_i32_len32(ast_kinds) == 75 && hf_dyn_i32_get32(ast_kinds, 0) == 1 && hf_dyn_i32_get32(ast_modules, 0) == core_id && hf_dyn_i32_get32(ast_kinds, 1) == 9 && hf_dyn_i32_get32(ast_modules, 1) == core_id && hf_dyn_i32_get32(ast_types, 1) == 1 && hf_dyn_i32_get32(ast_kinds, 21) == 1 && hf_dyn_i32_get32(ast_modules, 21) == app_id && hf_dyn_i32_get32(ast_kinds, 22) == 9 && hf_dyn_i32_get32(ast_modules, 22) == app_id && hf_dyn_i32_get32(ast_types, 22) == 1 && hf_dyn_i32_get32(ast_kinds, 25) == 11 && hf_dyn_i32_get32(ast_types, 25) == 1 && hf_dyn_i32_get32(ast_kinds, 61) == 11 && hf_dyn_i32_get32(ast_kinds, 70) == 11
+  let ast_metadata_shape: bool = hf_dyn_i32_len32(ast_counts) == 8 && hf_dyn_i32_get32(ast_counts, 0) == 20 && hf_dyn_i32_get32(ast_counts, 1) == 8 && hf_dyn_i32_get32(ast_counts, 2) == 6 && hf_dyn_i32_get32(ast_counts, 3) == 6 && hf_dyn_i32_get32(ast_counts, 4) == 6 && hf_dyn_i32_get32(ast_counts, 5) == 6 && hf_dyn_i32_get32(ast_counts, 6) == 7 && hf_dyn_i32_get32(ast_counts, 7) == 8 && hf_dyn_i32_get32(ast_roots, 0) == 19 && hf_dyn_i32_get32(ast_roots, 1) == 7 && hf_dyn_i32_get32(ast_source_bytes, 0) > 0 && hf_dyn_i32_get32(ast_source_bytes, 7) > 0
+  let signature_shape: bool = hf_dyn_i32_len32(export_modules) == 10 && hf_dyn_i32_len32(export_type_ids) == 10 && hf_dyn_i32_len32(export_param_counts) == 10 && hf_dyn_i32_len32(export_param_bases) == 10 && hf_dyn_i32_len32(export_param_types) == 1 && hf_dyn_i32_get32(export_type_ids, 1) == 1 && hf_dyn_i32_get32(export_param_counts, 1) == 1 && hf_dyn_i32_get32(export_param_bases, 1) == 0 && hf_dyn_i32_get32(export_param_types, 0) == 1
+  let diagnostics_shape: bool = hf_dyn_i32_len32(diagnostic_codes) == 5 && hf_dyn_i32_get32(diagnostic_codes, 0) == 4004 && hf_dyn_i32_get32(diagnostic_codes, 1) == 4001 && hf_dyn_i32_get32(diagnostic_codes, 2) == 4002 && hf_dyn_i32_get32(diagnostic_codes, 3) == 5001 && hf_dyn_i32_get32(diagnostic_codes, 4) == 5002
+  let loading_shape: bool = core_id == 0 && app_id == 1 && user_id == 2 && missing_id == 3 && cycle_a_id == 4 && cycle_b_id == 5 && bad_arity_id == 6 && bad_type_id == 7 && hf_dyn_i32_len32(module_hashes) == 8 && hf_dyn_i32_len32(export_type_ids) == 10
+  let path_shape: bool = hf_string_len32(hir_read) > 0
+  let debug_buffer: buf = hf_buf_new(512)
+  hf_buf_append_i32(debug_buffer, core_id)
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, app_id)
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bad_arity_id)
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bad_type_id)
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(states, 0))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(states, 1))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_len32(ast_kinds))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_len32(ast_counts))
+  hf_buf_append_str(debug_buffer, ":")
+  var debug_index: i32 = 0
+  while debug_index < hf_dyn_i32_len32(ast_counts) {
+    hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(ast_counts, debug_index))
+    hf_buf_append_str(debug_buffer, ",")
+    debug_index = debug_index + 1
+  }
+  hf_buf_append_str(debug_buffer, ":")
+  debug_index = 0
+  while debug_index < hf_dyn_i32_len32(ast_roots) {
+    hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(ast_roots, debug_index))
+    hf_buf_append_str(debug_buffer, ",")
+    debug_index = debug_index + 1
+  }
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_len32(child_nodes))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, hf_dyn_i32_len32(export_modules))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(ast_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(ast_metadata_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(signature_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(lowered))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(app_resolved))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(calls_valid))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(bad_arity_rejected))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(bad_type_rejected))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(ast_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(ast_metadata_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(signature_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(diagnostics_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  hf_buf_append_i32(debug_buffer, bool_value(loading_shape))
+  hf_buf_append_str(debug_buffer, ":")
+  debug_index = 0
+  while debug_index < hf_dyn_i32_len32(child_bases) {
+    hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(child_bases, debug_index))
+    hf_buf_append_str(debug_buffer, "/")
+    hf_buf_append_i32(debug_buffer, hf_dyn_i32_get32(child_counts, debug_index))
+    hf_buf_append_str(debug_buffer, ",")
+    debug_index = debug_index + 1
+  }
+  let debug_text: string = hf_buf_finish(debug_buffer)
+  hf_buf_free(debug_buffer)
+  hf_write_text("/tmp/holyfitra_state9_debug.snapshot", debug_text)
+  hf_string_free(debug_text)
+  hf_string_free(ast_read)
+  hf_string_free(ast)
+  hf_string_free(signatures_read)
+  hf_string_free(signatures)
+  hf_string_free(hir_read)
+  hf_string_free(hir)
+  hf_string_free(child_read)
+  hf_string_free(child_text)
+  hf_dyn_i32_free(module_hashes)
+  hf_dyn_i32_free(module_lengths)
+  hf_dyn_i32_free(module_sources)
+  hf_dyn_i32_free(states)
+  hf_dyn_i32_free(import_from)
+  hf_dyn_i32_free(import_target_hashes)
+  hf_dyn_i32_free(import_target_lengths)
+  hf_dyn_i32_free(import_symbol_hashes)
+  hf_dyn_i32_free(import_symbol_lengths)
+  hf_dyn_i32_free(export_modules)
+  hf_dyn_i32_free(export_hashes)
+  hf_dyn_i32_free(export_lengths)
+  hf_dyn_i32_free(export_public)
+  hf_dyn_i32_free(export_type_ids)
+  hf_dyn_i32_free(export_param_counts)
+  hf_dyn_i32_free(export_param_bases)
+  hf_dyn_i32_free(export_param_types)
+  hf_dyn_i32_free(ast_kinds)
+  hf_dyn_i32_free(ast_modules)
+  hf_dyn_i32_free(ast_starts)
+  hf_dyn_i32_free(ast_ends)
+  hf_dyn_i32_free(ast_symbols)
+  hf_dyn_i32_free(ast_types)
+  hf_dyn_i32_free(ast_counts)
+  hf_dyn_i32_free(ast_roots)
+  hf_dyn_i32_free(ast_source_hashes)
+  hf_dyn_i32_free(ast_source_bytes)
+  hf_dyn_i32_free(child_modules)
+  hf_dyn_i32_free(child_parents)
+  hf_dyn_i32_free(child_nodes)
+  hf_dyn_i32_free(child_bases)
+  hf_dyn_i32_free(child_counts)
+  hf_dyn_i32_free(diagnostic_codes)
+  hf_dyn_i32_free(diagnostic_modules)
+  hf_dyn_i32_free(hir_kinds)
+  hf_dyn_i32_free(hir_modules)
+  hf_dyn_i32_free(hir_symbols)
+  hf_dyn_i32_free(hir_types)
+  if calls_valid && bad_arity_rejected && bad_type_rejected && child_written && child_nonempty && child_stable && child_shape && lowered && app_resolved && hir_written && hir_nonempty && hir_stable && hir_shape && ast_written && ast_nonempty && ast_stable && ast_shape && ast_metadata_shape && signatures_written && signatures_nonempty && signatures_stable && signature_shape && diagnostics_shape && loading_shape && path_shape { return 0 }
+  return 1
+}
+
+
+
+
+
+// Imported State-2 parser core, namespaced for State-9 call retention.
+fn p9_is_space(ch: i32) -> bool {
+  return ch == 32 || ch == 9 || ch == 10 || ch == 13
+}
+
+fn p9_is_digit(ch: i32) -> bool {
+  return ch >= 48 && ch <= 57
+}
+
+fn p9_is_ident_start(ch: i32) -> bool {
+  return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95
+}
+
+fn p9_is_ident_continue(ch: i32) -> bool {
+  return p9_is_ident_start(ch) || p9_is_digit(ch)
+}
+
+fn p9_keyword(source: string, start: i32, length: i32, word: string, kind: i32) -> bool {
+  let word_size: i32 = hf_string_len32(word)
+  if start + word_size > length {
+    return false
+  } else {
+    if start + word_size < length && p9_is_ident_continue(hf_string_byte32(source, start + word_size)) {
+      return false
+    } else {
+      var word_index: i32 = 0
+      var equal: bool = true
+      while word_index < word_size {
+        if hf_string_byte32(source, start + word_index) != hf_string_byte32(word, word_index) {
+          equal = false
+        }
+        word_index = word_index + 1
+      }
+      return equal
+    }
+  }
+}
+
+fn p9_keyword_kind(source: string, start: i32, length: i32) -> i32 {
+  if p9_keyword(source, start, length, "module", 10) { return 10 }
+  if p9_keyword(source, start, length, "struct", 11) { return 11 }
+  if p9_keyword(source, start, length, "fn", 12) { return 12 }
+  if p9_keyword(source, start, length, "return", 13) { return 13 }
+  if p9_keyword(source, start, length, "if", 14) { return 14 }
+  if p9_keyword(source, start, length, "else", 15) { return 15 }
+  if p9_keyword(source, start, length, "while", 16) { return 16 }
+  if p9_keyword(source, start, length, "true", 17) { return 17 }
+  if p9_keyword(source, start, length, "false", 18) { return 18 }
+  if p9_keyword(source, start, length, "let", 19) { return 19 }
+  if p9_keyword(source, start, length, "var", 20) { return 20 }
+  if p9_keyword(source, start, length, "i32", 21) { return 21 }
+  if p9_keyword(source, start, length, "i64", 22) { return 22 }
+  if p9_keyword(source, start, length, "bool", 23) { return 23 }
+  if p9_keyword(source, start, length, "void", 24) { return 24 }
+  if p9_keyword(source, start, length, "string", 25) { return 25 }
+  if p9_keyword(source, start, length, "pub", 27) { return 27 }
+  if p9_keyword(source, start, length, "dyn", 26) { return 26 }
+  return 100
+}
+
+fn p9_keyword_length(kind: i32) -> i32 {
+  if kind == 10 || kind == 11 || kind == 13 || kind == 25 { return 6 }
+  if kind == 12 || kind == 14 { return 2 }
+  if kind == 15 { return 4 }
+  if kind == 16 { return 5 }
+  if kind == 17 { return 4 }
+  if kind == 18 { return 5 }
+  if kind == 19 || kind == 20 || kind == 21 || kind == 22 || kind == 26 { return 3 }
+  if kind == 23 || kind == 24 { return 4 }
+  if kind == 27 { return 3 }
+  return 0
+}
+
+fn p9_single_kind(ch: i32) -> i32 {
+  if ch == 58 { return 40 }
+  if ch == 59 { return 41 }
+  if ch == 40 { return 42 }
+  if ch == 41 { return 43 }
+  if ch == 123 { return 44 }
+  if ch == 125 { return 45 }
+  if ch == 44 { return 48 }
+  if ch == 61 { return 60 }
+  if ch == 43 { return 61 }
+  if ch == 45 { return 62 }
+  if ch == 42 { return 63 }
+  if ch == 47 { return 64 }
+  if ch == 60 { return 50 }
+  if ch == 62 { return 51 }
+  return -1
+}
+
+fn p9_push_token(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, kind: i32, start: i32, length: i32) -> bool {
+  let pushed_kind: bool = hf_dyn_i32_push(kinds, kind)
+  let pushed_start: bool = hf_dyn_i32_push(starts, start)
+  let pushed_length: bool = hf_dyn_i32_push(lengths, length)
+  return pushed_kind && pushed_start && pushed_length
+}
+
+fn p9_lex(source: string, kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>) -> bool {
+  let source_length: i32 = hf_string_len32(source)
+  var position: i32 = 0
+  var success: bool = true
+  while position < source_length {
+    let character: i32 = hf_string_byte32(source, position)
+    if p9_is_space(character) {
+      position = position + 1
+    } else {
+      if character == 35 {
+        while position < source_length && hf_string_byte32(source, position) != 10 {
+          position = position + 1
+        }
+      } else {
+        let token_start: i32 = position
+        let kind: i32 = p9_keyword_kind(source, position, source_length)
+        if kind != 100 {
+          let token_size: i32 = p9_keyword_length(kind)
+          success = success && p9_push_token(kinds, starts, lengths, kind, token_start, token_size)
+          position = position + token_size
+        } else {
+          if p9_is_digit(character) {
+            while position < source_length && p9_is_digit(hf_string_byte32(source, position)) {
+              position = position + 1
+            }
+            success = success && p9_push_token(kinds, starts, lengths, 101, token_start, position - token_start)
+          } else {
+            if p9_is_ident_start(character) {
+              while position < source_length && p9_is_ident_continue(hf_string_byte32(source, position)) {
+                position = position + 1
+              }
+              success = success && p9_push_token(kinds, starts, lengths, 100, token_start, position - token_start)
+            } else {
+              if character == 34 {
+                position = position + 1
+                while position < source_length && hf_string_byte32(source, position) != 34 {
+                  position = position + 1
+                }
+                if position < source_length { position = position + 1 }
+                success = success && p9_push_token(kinds, starts, lengths, 102, token_start, position - token_start)
+              } else {
+                if character == 45 && position + 1 < source_length && hf_string_byte32(source, position + 1) == 62 {
+                  success = success && p9_push_token(kinds, starts, lengths, 8, token_start, 2)
+                  position = position + 2
+                } else {
+                  if character == 61 && position + 1 < source_length && hf_string_byte32(source, position + 1) == 61 {
+                    success = success && p9_push_token(kinds, starts, lengths, 66, token_start, 2)
+                    position = position + 2
+                  } else {
+                    let single: i32 = p9_single_kind(character)
+                    if single < 0 {
+                      success = false
+                    } else {
+                      success = success && p9_push_token(kinds, starts, lengths, single, token_start, 1)
+                    }
+                    position = position + 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  success = success && p9_push_token(kinds, starts, lengths, 0, source_length, 0)
+  return success
+}
+
+fn p9_current(kinds: dyn<i32>, cursor: dyn<i32>) -> i32 {
+  return hf_dyn_i32_get32(kinds, hf_dyn_i32_get32(cursor, 0))
+}
+
+fn p9_cursor_index(cursor: dyn<i32>) -> i32 {
+  return hf_dyn_i32_get32(cursor, 0)
+}
+
+fn p9_advance(kinds: dyn<i32>, cursor: dyn<i32>) -> bool {
+  if p9_current(kinds, cursor) == 0 { return false }
+  hf_dyn_i32_set32(cursor, 0, p9_cursor_index(cursor) + 1)
+  return true
+}
+
+fn p9_accept(kinds: dyn<i32>, cursor: dyn<i32>, kind: i32) -> bool {
+  if p9_current(kinds, cursor) == kind {
+    return p9_advance(kinds, cursor)
+  }
+  return false
+}
+
+fn p9_expect(kinds: dyn<i32>, cursor: dyn<i32>, kind: i32) -> bool {
+  return p9_accept(kinds, cursor, kind)
+}
+
+fn p9_token_end(starts: dyn<i32>, lengths: dyn<i32>, token_index: i32) -> i32 {
+  return hf_dyn_i32_get32(starts, token_index) + hf_dyn_i32_get32(lengths, token_index)
+}
+
+fn p9_node_add(node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, kind: i32, first_child: i32, child_count: i32, name_start: i32, name_length: i32, span_start: i32, span_end: i32, symbol_id: i32, type_id: i32) -> i32 {
+  let node_id: i32 = hf_dyn_i32_len32(node_kinds)
+  hf_dyn_i32_push(node_kinds, kind)
+  hf_dyn_i32_push(first_children, first_child)
+  hf_dyn_i32_push(child_counts, child_count)
+  hf_dyn_i32_push(name_starts, name_start)
+  hf_dyn_i32_push(name_lengths, name_length)
+  hf_dyn_i32_push(span_starts, span_start)
+  hf_dyn_i32_push(span_ends, span_end)
+  hf_dyn_i32_push(symbol_ids, symbol_id)
+  hf_dyn_i32_push(type_ids, type_id)
+  return node_id
+}
+
+fn p9_parse_type(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>) -> i32 {
+  let type_token: i32 = p9_cursor_index(cursor)
+  let type_kind: i32 = p9_current(kinds, cursor)
+  if type_kind == 21 || type_kind == 22 || type_kind == 23 || type_kind == 24 || type_kind == 25 || type_kind == 100 {
+    if !p9_advance(kinds, cursor) { return -1 }
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 9, 0, 0, hf_dyn_i32_get32(starts, type_token), hf_dyn_i32_get32(lengths, type_token), hf_dyn_i32_get32(starts, type_token), p9_token_end(starts, lengths, type_token), 0, type_kind - 20)
+  }
+  return -1
+}
+
+fn p9_parse_primary(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let primary_token: i32 = p9_cursor_index(cursor)
+  let primary_kind: i32 = p9_current(kinds, cursor)
+  if primary_kind == 101 {
+    if !p9_advance(kinds, cursor) { return -1 }
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), p9_token_end(starts, lengths, primary_token), 0, 1)
+  }
+  if primary_kind == 17 {
+    if !p9_advance(kinds, cursor) { return -1 }
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), p9_token_end(starts, lengths, primary_token), 0, 3)
+  }
+  if primary_kind == 18 {
+    if !p9_advance(kinds, cursor) { return -1 }
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 6, 0, 0, 0, 0, hf_dyn_i32_get32(starts, primary_token), p9_token_end(starts, lengths, primary_token), 0, 3)
+  }
+  if primary_kind == 100 {
+    if !p9_advance(kinds, cursor) { return -1 }
+    let name_node: i32 = p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 7, 0, 0, hf_dyn_i32_get32(starts, primary_token), hf_dyn_i32_get32(lengths, primary_token), hf_dyn_i32_get32(starts, primary_token), p9_token_end(starts, lengths, primary_token), 0, 0)
+    if p9_accept(kinds, cursor, 42) {
+      let call_first: i32 = hf_dyn_i32_len32(children)
+      if !hf_dyn_i32_push(children, name_node) { return -1 }
+      var argument_count: i32 = 0
+      var call_ok: bool = true
+      while call_ok && p9_current(kinds, cursor) != 43 && p9_current(kinds, cursor) != 0 {
+        let argument_node: i32 = p9_parse_expression(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+        if argument_node < 0 {
+          call_ok = false
+        } else {
+          if !hf_dyn_i32_push(children, argument_node) { call_ok = false }
+        }
+        if call_ok {
+          argument_count = argument_count + 1
+          if p9_current(kinds, cursor) == 48 {
+            p9_advance(kinds, cursor)
+          } else {
+            if p9_current(kinds, cursor) != 43 { call_ok = false }
+          }
+        }
+      }
+      if !call_ok || !p9_expect(kinds, cursor, 43) { return -1 }
+      return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 11, call_first, argument_count + 1, hf_dyn_i32_get32(starts, primary_token), hf_dyn_i32_get32(lengths, primary_token), hf_dyn_i32_get32(starts, primary_token), p9_token_end(starts, lengths, p9_cursor_index(cursor) - 1), 0, 0)
+    }
+    return name_node
+  }
+  if p9_accept(kinds, cursor, 42) {
+    let nested_node: i32 = p9_parse_primary(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if nested_node < 0 || !p9_expect(kinds, cursor, 43) { return -1 }
+    return nested_node
+  }
+  return -1
+}
+
+fn p9_parse_expression(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let left_node: i32 = p9_parse_primary(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+  if left_node < 0 { return -1 }
+  let expression_kind: i32 = p9_current(kinds, cursor)
+  if expression_kind == 61 || expression_kind == 62 || expression_kind == 63 || expression_kind == 64 || expression_kind == 66 || expression_kind == 50 || expression_kind == 51 {
+    let operator_token: i32 = p9_cursor_index(cursor)
+    p9_advance(kinds, cursor)
+    let right_node: i32 = p9_parse_primary(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if right_node < 0 { return -1 }
+    let expression_first: i32 = hf_dyn_i32_len32(children)
+    hf_dyn_i32_push(children, left_node)
+    hf_dyn_i32_push(children, right_node)
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 8, expression_first, 2, 0, 0, hf_dyn_i32_get32(span_starts, left_node), hf_dyn_i32_get32(span_ends, right_node), 0, expression_kind)
+  }
+  return left_node
+}
+
+fn p9_parse_statement(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let statement_token: i32 = p9_cursor_index(cursor)
+  let statement_kind: i32 = p9_current(kinds, cursor)
+  if statement_kind == 19 || statement_kind == 20 {
+    p9_advance(kinds, cursor)
+    let declaration_name_token: i32 = p9_cursor_index(cursor)
+    if !p9_expect(kinds, cursor, 100) || !p9_expect(kinds, cursor, 40) { return -1 }
+    let declaration_type: i32 = p9_parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids)
+    if declaration_type < 0 || !p9_expect(kinds, cursor, 60) { return -1 }
+    let declaration_value: i32 = p9_parse_expression(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if declaration_value < 0 || !p9_expect(kinds, cursor, 41) { return -1 }
+    let declaration_first: i32 = hf_dyn_i32_len32(children)
+    hf_dyn_i32_push(children, declaration_type)
+    hf_dyn_i32_push(children, declaration_value)
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 4, declaration_first, 2, hf_dyn_i32_get32(starts, declaration_name_token), hf_dyn_i32_get32(lengths, declaration_name_token), hf_dyn_i32_get32(starts, statement_token), p9_token_end(starts, lengths, p9_cursor_index(cursor) - 1), 0, statement_kind - 18)
+  }
+  if statement_kind == 13 {
+    p9_advance(kinds, cursor)
+    let return_value: i32 = p9_parse_expression(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if return_value < 0 || !p9_expect(kinds, cursor, 41) { return -1 }
+    let return_first: i32 = hf_dyn_i32_len32(children)
+    hf_dyn_i32_push(children, return_value)
+    return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 5, return_first, 1, 0, 0, hf_dyn_i32_get32(starts, statement_token), p9_token_end(starts, lengths, p9_cursor_index(cursor) - 1), 0, 0)
+  }
+  return -1
+}
+
+fn p9_parse_block(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let block_start_token: i32 = p9_cursor_index(cursor)
+  if !p9_expect(kinds, cursor, 44) { return -1 }
+  let block_members: dyn<i32> = hf_dyn_i32_new(128)
+  var block_count: i32 = 0
+  while p9_current(kinds, cursor) != 45 && p9_current(kinds, cursor) != 0 {
+    let statement_node: i32 = p9_parse_statement(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if statement_node < 0 {
+      hf_dyn_i32_free(block_members)
+      return -1
+    }
+    if !hf_dyn_i32_push(block_members, statement_node) {
+      hf_dyn_i32_free(block_members)
+      return -1
+    }
+    block_count = block_count + 1
+  }
+  if !p9_expect(kinds, cursor, 45) {
+    hf_dyn_i32_free(block_members)
+    return -1
+  }
+  let block_first: i32 = hf_dyn_i32_len32(children)
+  var member_index: i32 = 0
+  while member_index < block_count {
+    hf_dyn_i32_push(children, hf_dyn_i32_get32(block_members, member_index))
+    member_index = member_index + 1
+  }
+  hf_dyn_i32_free(block_members)
+  return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 3, block_first, block_count, 0, 0, hf_dyn_i32_get32(starts, block_start_token), p9_token_end(starts, lengths, p9_cursor_index(cursor) - 1), 0, 0)
+}
+
+fn p9_parse_function(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let function_start_token: i32 = p9_cursor_index(cursor)
+  if !p9_expect(kinds, cursor, 12) { return -1 }
+  let function_name_token: i32 = p9_cursor_index(cursor)
+  if !p9_expect(kinds, cursor, 100) || !p9_expect(kinds, cursor, 42) { return -1 }
+  let parameter_nodes: dyn<i32> = hf_dyn_i32_new(32)
+  var parameter_count: i32 = 0
+  var parameter_ok: bool = true
+  while parameter_ok && p9_current(kinds, cursor) != 43 && p9_current(kinds, cursor) != 0 {
+    let parameter_name_token: i32 = p9_cursor_index(cursor)
+    if !p9_expect(kinds, cursor, 100) || !p9_expect(kinds, cursor, 40) { parameter_ok = false }
+    let parameter_type: i32 = p9_parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids)
+    if parameter_type < 0 { parameter_ok = false }
+    if parameter_ok {
+      let parameter_node: i32 = p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 10, 0, 0, hf_dyn_i32_get32(starts, parameter_name_token), hf_dyn_i32_get32(lengths, parameter_name_token), hf_dyn_i32_get32(starts, parameter_name_token), p9_token_end(starts, lengths, p9_cursor_index(cursor) - 1), 0, hf_dyn_i32_get32(type_ids, parameter_type))
+      parameter_ok = hf_dyn_i32_push(parameter_nodes, parameter_node)
+      parameter_count = parameter_count + 1
+      if p9_current(kinds, cursor) == 48 { p9_advance(kinds, cursor) }
+    }
+  }
+  let parameters_closed: bool = parameter_ok && p9_expect(kinds, cursor, 43) && p9_expect(kinds, cursor, 8)
+  var function_type: i32 = -1
+  if parameters_closed { function_type = p9_parse_type(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids) }
+  if !parameters_closed || function_type < 0 { hf_dyn_i32_free(parameter_nodes); return -1 }
+  let function_block: i32 = p9_parse_block(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+  if function_block < 0 { hf_dyn_i32_free(parameter_nodes); return -1 }
+  let function_first: i32 = hf_dyn_i32_len32(children)
+  if !hf_dyn_i32_push(children, function_type) { hf_dyn_i32_free(parameter_nodes); return -1 }
+  var parameter_index: i32 = 0
+  while parameter_index < parameter_count {
+    if !hf_dyn_i32_push(children, hf_dyn_i32_get32(parameter_nodes, parameter_index)) { hf_dyn_i32_free(parameter_nodes); return -1 }
+    parameter_index = parameter_index + 1
+  }
+  if !hf_dyn_i32_push(children, function_block) { hf_dyn_i32_free(parameter_nodes); return -1 }
+  hf_dyn_i32_free(parameter_nodes)
+  return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 2, function_first, parameter_count + 2, hf_dyn_i32_get32(starts, function_name_token), hf_dyn_i32_get32(lengths, function_name_token), hf_dyn_i32_get32(starts, function_start_token), hf_dyn_i32_get32(span_ends, function_block), 0, 0)
+}
+
+fn p9_parse_program(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, cursor: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> i32 {
+  let program_members: dyn<i32> = hf_dyn_i32_new(128)
+  var program_count: i32 = 0
+  while p9_current(kinds, cursor) != 0 {
+    if p9_current(kinds, cursor) == 27 { p9_advance(kinds, cursor) }
+    let function_node: i32 = p9_parse_function(kinds, starts, lengths, cursor, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+    if function_node < 0 {
+      hf_dyn_i32_free(program_members)
+      return -1
+    }
+    if !hf_dyn_i32_push(program_members, function_node) {
+      hf_dyn_i32_free(program_members)
+      return -1
+    }
+    program_count = program_count + 1
+  }
+  let program_first: i32 = hf_dyn_i32_len32(children)
+  var function_index: i32 = 0
+  while function_index < program_count {
+    hf_dyn_i32_push(children, hf_dyn_i32_get32(program_members, function_index))
+    function_index = function_index + 1
+  }
+  hf_dyn_i32_free(program_members)
+  return p9_node_add(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 1, program_first, program_count, 0, 0, 0, hf_dyn_i32_len32(starts), 0, 0)
+}
+
+fn p9_string_equal(left: string, right: string) -> bool {
+  let left_length: i32 = hf_string_len32(left)
+  if left_length != hf_string_len32(right) { return false }
+  var equal: bool = true
+  var equal_index: i32 = 0
+  while equal_index < left_length {
+    if hf_string_byte32(left, equal_index) != hf_string_byte32(right, equal_index) { equal = false }
+    equal_index = equal_index + 1
+  }
+  return equal
+}
+
+fn p9_snapshot(nodes: dyn<i32>, firsts: dyn<i32>, counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, spans_start: dyn<i32>, spans_end: dyn<i32>, symbols: dyn<i32>, types: dyn<i32>, children: dyn<i32>) -> string {
+  let snapshot_buffer: buf = hf_buf_new(8192)
+  var snapshot_index: i32 = 0
+  let snapshot_count: i32 = hf_dyn_i32_len32(nodes)
+  while snapshot_index < snapshot_count {
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(nodes, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(firsts, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(counts, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(name_starts, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(name_lengths, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(spans_start, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(spans_end, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(symbols, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(types, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ";")
+    snapshot_index = snapshot_index + 1
+  }
+  hf_buf_append_str(snapshot_buffer, "|")
+  snapshot_index = 0
+  let snapshot_child_count: i32 = hf_dyn_i32_len32(children)
+  while snapshot_index < snapshot_child_count {
+    hf_buf_append_i32(snapshot_buffer, hf_dyn_i32_get32(children, snapshot_index))
+    hf_buf_append_str(snapshot_buffer, ",")
+    snapshot_index = snapshot_index + 1
+  }
+  let snapshot_result: string = hf_buf_finish(snapshot_buffer)
+  hf_buf_free(snapshot_buffer)
+  return snapshot_result
+}
+
+fn reject_invalid_source() -> bool {
+  let bad_source: string = "fn broken() -> i32 { return ; }"
+  let bad_kinds: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_starts: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_lengths: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_cursor: dyn<i32> = hf_dyn_i32_new(1)
+  hf_dyn_i32_push(bad_cursor, 0)
+  let bad_node_kinds: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_first_children: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_child_counts: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_name_starts: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_name_lengths: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_span_starts: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_span_ends: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_symbols: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_types: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_children: dyn<i32> = hf_dyn_i32_new(64)
+  let bad_lex: bool = p9_lex(bad_source, bad_kinds, bad_starts, bad_lengths)
+  let bad_root: i32 = p9_parse_program(bad_kinds, bad_starts, bad_lengths, bad_cursor, bad_node_kinds, bad_first_children, bad_child_counts, bad_name_starts, bad_name_lengths, bad_span_starts, bad_span_ends, bad_symbols, bad_types, bad_children)
+  let rejected: bool = bad_lex && bad_root < 0
+  hf_dyn_i32_free(bad_kinds)
+  hf_dyn_i32_free(bad_starts)
+  hf_dyn_i32_free(bad_lengths)
+  hf_dyn_i32_free(bad_cursor)
+  hf_dyn_i32_free(bad_node_kinds)
+  hf_dyn_i32_free(bad_first_children)
+  hf_dyn_i32_free(bad_child_counts)
+  hf_dyn_i32_free(bad_name_starts)
+  hf_dyn_i32_free(bad_name_lengths)
+  hf_dyn_i32_free(bad_span_starts)
+  hf_dyn_i32_free(bad_span_ends)
+  hf_dyn_i32_free(bad_symbols)
+  hf_dyn_i32_free(bad_types)
+  hf_dyn_i32_free(bad_children)
+  return rejected
+}
+

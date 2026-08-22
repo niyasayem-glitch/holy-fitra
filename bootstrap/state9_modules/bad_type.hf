@@ -1,0 +1,3 @@
+module bad_type
+import core.inc
+pub fn bad() -> i32 { return inc(true); }

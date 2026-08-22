@@ -1,0 +1,4 @@
+module core
+pub fn answer() -> i32 { return 42; }
+pub fn inc(x: i32) -> i32 { return x + 1; }
+fn secret() -> i32 { return 7; }
