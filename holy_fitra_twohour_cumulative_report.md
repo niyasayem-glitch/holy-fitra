@@ -512,3 +512,26 @@ Inter-module resolution matches target module identity hashes plus name lengths,
 | Python compileall and shell syntax | Passed |
 
 State 6 is the filesystem-backed module-graph foundation, not yet a complete multi-file compiler. The next boundary is to retain source text and parser AST arenas per module, merge their export signatures into the self-hosted type checker, and lower the resolved module graph into typed HIR with cross-module call validation.
+
+## State 7 — filesystem exports connected to canonical types and typed HIR retained — 2026-08-22
+
+State 7 threads canonical export type IDs through the filesystem loader and lowers the resolved module graph into a bounded typed HIR arena. Export records now carry public visibility, name length, stable hash, and canonical type ID. The HIR contains deterministic module records and resolved-import records; each cross-module import is emitted only when its target module is resolved, its export is public, and its imported signature is available. The positive `app -> core.answer` edge lowers with type ID 1, while private, missing, and cyclic modules remain excluded from accepted HIR and retain their State-6 diagnostics.
+
+The HIR snapshot records stable node ID, HIR kind, owning module ID, imported symbol ID, and canonical type ID. It is written atomically, read back, and compared byte-for-byte. State 7 also fixed an intermediate lowering defect where a temporary empty module-length table prevented target lookup; the lowerer now consumes the real module identity tables.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-7 filesystem/type integration | Passed; x86-64 host |
+| Export type propagation | Passed; canonical type ID 1 |
+| Public cross-module import | Passed; `app -> core.answer` |
+| Private/missing/cyclic exclusion | Passed; only resolved modules enter HIR |
+| Typed HIR node shape | Passed; 3 deterministic records |
+| HIR snapshot determinism | Passed; byte-identical repeated runs |
+| State-7 ASAN/UBSan with leak detection | Passed |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-7 object | Passed; 27,600 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 7 is a typed-HIR foundation rather than general lowering. The next boundary is to retain the complete parser AST per loaded module, replace the bounded declaration scanner with parser-produced declarations, add function signatures and imported call expressions, and lower HIR into explicit CFG-based MIR.

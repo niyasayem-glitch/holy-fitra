@@ -1,0 +1,476 @@
+module selfhost_state7
+
+// State-6 filesystem-backed module loader.
+// Diagnostic codes: HF4001 missing module, HF4002 import cycle,
+// HF4003 missing export, HF4004 private export.
+
+fn is_ident_start(ch: i32) -> bool {
+  return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95
+}
+
+fn is_ident_continue(ch: i32) -> bool {
+  return is_ident_start(ch) || (ch >= 48 && ch <= 57)
+}
+
+fn text_at(source: string, start: i32, needle: string) -> bool {
+  let source_length: i32 = hf_string_len32(source)
+  let needle_length: i32 = hf_string_len32(needle)
+  if start < 0 || start + needle_length > source_length { return false }
+  var index: i32 = 0
+  var equal: bool = true
+  while index < needle_length {
+    if hf_string_byte32(source, start + index) != hf_string_byte32(needle, index) { equal = false }
+    index = index + 1
+  }
+  return equal
+}
+
+fn same_text(left: string, right: string) -> bool {
+  let left_length: i32 = hf_string_len32(left)
+  if left_length != hf_string_len32(right) { return false }
+  var index: i32 = 0
+  var equal: bool = true
+  while index < left_length {
+    if hf_string_byte32(left, index) != hf_string_byte32(right, index) { equal = false }
+    index = index + 1
+  }
+  return equal
+}
+
+fn find_text(source: string, needle: string, after: i32) -> i32 {
+  let source_length: i32 = hf_string_len32(source)
+  let needle_length: i32 = hf_string_len32(needle)
+  var candidate: i32 = after
+  while candidate + needle_length <= source_length {
+    if text_at(source, candidate, needle) { return candidate }
+    candidate = candidate + 1
+  }
+  return -1
+}
+
+fn span_hash(source: string, start: i32, length: i32) -> i32 {
+  var hash_value: i32 = 216613626
+  var index: i32 = 0
+  while index < length {
+    hash_value = hash_value * 16777619 + hf_string_byte32(source, start + index)
+    index = index + 1
+  }
+  if hash_value == 0 { return 1 }
+  return hash_value
+}
+
+fn add_module_from_source(source: string, source_id: i32, module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>) -> i32 {
+  let marker: i32 = find_text(source, "module ", 0)
+  if marker < 0 { return -1 }
+  let name_start: i32 = marker + 7
+  var name_end: i32 = name_start
+  let source_length: i32 = hf_string_len32(source)
+  while name_end < source_length && is_ident_continue(hf_string_byte32(source, name_end)) { name_end = name_end + 1 }
+  let name_length: i32 = name_end - name_start
+  if name_length <= 0 { return -1 }
+  let module_id: i32 = hf_dyn_i32_len32(module_hashes)
+  if !hf_dyn_i32_push(module_hashes, span_hash(source, name_start, name_length)) { return -1 }
+  if !hf_dyn_i32_push(module_lengths, name_length) { return -1 }
+  if !hf_dyn_i32_push(module_sources, source_id) { return -1 }
+  if !hf_dyn_i32_push(states, 0) { return -1 }
+  return module_id
+}
+
+fn parse_import(source: string, module_id: i32, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>) -> bool {
+  let marker: i32 = find_text(source, "import ", 0)
+  if marker < 0 { return true }
+  let target_start: i32 = marker + 7
+  var dot: i32 = target_start
+  let source_length: i32 = hf_string_len32(source)
+  while dot < source_length && hf_string_byte32(source, dot) != 46 { dot = dot + 1 }
+  if dot >= source_length { return false }
+  let target_length: i32 = dot - target_start
+  let symbol_start: i32 = dot + 1
+  var symbol_end: i32 = symbol_start
+  while symbol_end < source_length && is_ident_continue(hf_string_byte32(source, symbol_end)) { symbol_end = symbol_end + 1 }
+  let symbol_length: i32 = symbol_end - symbol_start
+  if target_length <= 0 || symbol_length <= 0 { return false }
+  return hf_dyn_i32_push(import_from, module_id) && hf_dyn_i32_push(import_target_hashes, span_hash(source, target_start, target_length)) && hf_dyn_i32_push(import_target_lengths, target_length) && hf_dyn_i32_push(import_symbol_hashes, span_hash(source, symbol_start, symbol_length)) && hf_dyn_i32_push(import_symbol_lengths, symbol_length)
+}
+
+fn parse_exports(source: string, module_id: i32, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>) -> bool {
+  let public_marker: i32 = find_text(source, "pub fn ", 0)
+  if public_marker >= 0 {
+    let name_start: i32 = public_marker + 7
+    var name_end: i32 = name_start
+    let source_length: i32 = hf_string_len32(source)
+    while name_end < source_length && is_ident_continue(hf_string_byte32(source, name_end)) { name_end = name_end + 1 }
+    let name_length: i32 = name_end - name_start
+    if name_length <= 0 { return false }
+    if !hf_dyn_i32_push(export_modules, module_id) { return false }
+    if !hf_dyn_i32_push(export_hashes, span_hash(source, name_start, name_length)) { return false }
+    if !hf_dyn_i32_push(export_lengths, name_length) { return false }
+    if !hf_dyn_i32_push(export_public, 1) { return false }
+    if !hf_dyn_i32_push(export_type_ids, 1) { return false }
+  }
+  let private_marker: i32 = find_text(source, "\nfn ", 0)
+  if private_marker >= 0 {
+    let private_name_start: i32 = private_marker + 4
+    var private_name_end: i32 = private_name_start
+    let private_source_length: i32 = hf_string_len32(source)
+    while private_name_end < private_source_length && is_ident_continue(hf_string_byte32(source, private_name_end)) { private_name_end = private_name_end + 1 }
+    let private_name_length: i32 = private_name_end - private_name_start
+    if private_name_length <= 0 { return false }
+    if !hf_dyn_i32_push(export_modules, module_id) { return false }
+    if !hf_dyn_i32_push(export_hashes, span_hash(source, private_name_start, private_name_length)) { return false }
+    if !hf_dyn_i32_push(export_lengths, private_name_length) { return false }
+    if !hf_dyn_i32_push(export_public, 0) { return false }
+    if !hf_dyn_i32_push(export_type_ids, 1) { return false }
+  }
+  return true
+}
+
+fn load_module(path: string, source_id: i32, module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>) -> i32 {
+  let canonical_path: string = hf_path_canonicalize(path)
+  if hf_string_len32(canonical_path) == 0 { return -1 }
+  let source: string = hf_read_text(canonical_path)
+  if hf_string_len32(source) == 0 { hf_string_free(canonical_path); return -1 }
+  let module_id: i32 = add_module_from_source(source, source_id, module_hashes, module_lengths, module_sources, states)
+  let import_ok: bool = module_id >= 0 && parse_import(source, module_id, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths)
+  let export_ok: bool = import_ok && parse_exports(source, module_id, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  hf_string_free(source)
+  hf_string_free(canonical_path)
+  if !export_ok { return -1 }
+  return module_id
+}
+
+fn find_module(module_hashes: dyn<i32>, module_lengths: dyn<i32>, query_hash: i32, query_length: i32) -> i32 {
+  var module_index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  while module_index < module_count {
+    if hf_dyn_i32_get32(module_hashes, module_index) == query_hash && hf_dyn_i32_get32(module_lengths, module_index) == query_length { return module_index }
+    module_index = module_index + 1
+  }
+  return -1
+}
+
+fn find_export(export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, module_id: i32, query_hash: i32, query_length: i32) -> i32 {
+  var export_index: i32 = 0
+  let export_count: i32 = hf_dyn_i32_len32(export_modules)
+  while export_index < export_count {
+    if hf_dyn_i32_get32(export_modules, export_index) == module_id && hf_dyn_i32_get32(export_hashes, export_index) == query_hash && hf_dyn_i32_get32(export_lengths, export_index) == query_length {
+      if hf_dyn_i32_get32(export_public, export_index) == 1 { return export_index }
+      return -2
+    }
+    export_index = export_index + 1
+  }
+  return -1
+}
+
+fn add_diagnostic(code: i32, module_id: i32, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> bool {
+  return hf_dyn_i32_push(diagnostic_codes, code) && hf_dyn_i32_push(diagnostic_modules, module_id)
+}
+
+fn resolve_module(module_id: i32, states: dyn<i32>, module_hashes: dyn<i32>, module_lengths: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> bool {
+  if module_id < 0 || module_id >= hf_dyn_i32_len32(states) { return false }
+  let state: i32 = hf_dyn_i32_get32(states, module_id)
+  if state == 1 {
+    add_diagnostic(4002, module_id, diagnostic_codes, diagnostic_modules)
+    hf_dyn_i32_set32(states, module_id, 3)
+    return false
+  }
+  if state == 2 { return true }
+  if state == 3 { return false }
+  hf_dyn_i32_set32(states, module_id, 1)
+  var import_index: i32 = 0
+  var resolved: bool = true
+  let import_count: i32 = hf_dyn_i32_len32(import_from)
+  while import_index < import_count {
+    if hf_dyn_i32_get32(import_from, import_index) == module_id {
+      let target_module: i32 = find_module(module_hashes, module_lengths, hf_dyn_i32_get32(import_target_hashes, import_index), hf_dyn_i32_get32(import_target_lengths, import_index))
+      if target_module < 0 {
+        add_diagnostic(4001, module_id, diagnostic_codes, diagnostic_modules)
+        resolved = false
+      } else {
+        if !resolve_module(target_module, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules) { resolved = false }
+        let export_result: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, target_module, hf_dyn_i32_get32(import_symbol_hashes, import_index), hf_dyn_i32_get32(import_symbol_lengths, import_index))
+        if export_result == -2 {
+          add_diagnostic(4004, module_id, diagnostic_codes, diagnostic_modules)
+          resolved = false
+        } else {
+          if export_result < 0 {
+            add_diagnostic(4003, module_id, diagnostic_codes, diagnostic_modules)
+            resolved = false
+          }
+        }
+      }
+    }
+    import_index = import_index + 1
+  }
+  if resolved {
+    hf_dyn_i32_set32(states, module_id, 2)
+  } else {
+    hf_dyn_i32_set32(states, module_id, 3)
+  }
+  return resolved
+}
+
+fn graph_snapshot(module_hashes: dyn<i32>, module_lengths: dyn<i32>, module_sources: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, diagnostic_codes: dyn<i32>, diagnostic_modules: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(8192)
+  var index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  while index < module_count {
+    hf_buf_append_i32(buffer, index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_hashes, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_lengths, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(module_sources, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(states, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  let import_count: i32 = hf_dyn_i32_len32(import_from)
+  while index < import_count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_from, index))
+    hf_buf_append_str(buffer, "->")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_target_hashes, index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_target_lengths, index))
+    hf_buf_append_str(buffer, ".")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(import_symbol_hashes, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  let diagnostic_count: i32 = hf_dyn_i32_len32(diagnostic_codes)
+  while index < diagnostic_count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(diagnostic_codes, index))
+    hf_buf_append_str(buffer, "@")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(diagnostic_modules, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn legacy_state6_main() -> i32 {
+  let root: string = "/tmp/holyfitra_state6_modules"
+  let core_path: string = "/tmp/holyfitra_state6_modules/./core.hf"
+  let app_path: string = "/tmp/holyfitra_state6_modules/../holyfitra_state6_modules/app.hf"
+  let user_path: string = "/tmp/holyfitra_state6_modules/user.hf"
+  let missing_path: string = "/tmp/holyfitra_state6_modules/missing.hf"
+  let cycle_a_path: string = "/tmp/holyfitra_state6_modules/cycle_a.hf"
+  let cycle_b_path: string = "/tmp/holyfitra_state6_modules/cycle_b.hf"
+  let unsafe_path: string = "/../../holyfitra_escape.hf"
+  let module_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let module_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let module_sources: dyn<i32> = hf_dyn_i32_new(16)
+  let states: dyn<i32> = hf_dyn_i32_new(16)
+  let import_from: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let export_modules: dyn<i32> = hf_dyn_i32_new(32)
+  let export_hashes: dyn<i32> = hf_dyn_i32_new(32)
+  let export_lengths: dyn<i32> = hf_dyn_i32_new(32)
+  let export_public: dyn<i32> = hf_dyn_i32_new(32)
+  let export_type_ids: dyn<i32> = hf_dyn_i32_new(32)
+  let core_id: i32 = load_module(core_path, 0, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let app_id: i32 = load_module(app_path, 1, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let user_id: i32 = load_module(user_path, 2, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let missing_id: i32 = load_module(missing_path, 3, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let cycle_a_id: i32 = load_module(cycle_a_path, 4, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let cycle_b_id: i32 = load_module(cycle_b_path, 5, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let diagnostic_codes: dyn<i32> = hf_dyn_i32_new(16)
+  let diagnostic_modules: dyn<i32> = hf_dyn_i32_new(16)
+  var module_index: i32 = 0
+  var app_ok: bool = false
+  while module_index < hf_dyn_i32_len32(module_hashes) {
+    let module_ok: bool = resolve_module(module_index, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules)
+    if module_index == app_id { app_ok = module_ok }
+    module_index = module_index + 1
+  }
+  let core_name_hash: i32 = span_hash("core", 0, 4)
+  let answer_hash: i32 = span_hash("answer", 0, 6)
+  let secret_hash: i32 = span_hash("secret", 0, 6)
+  let answer_export: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, core_id, answer_hash, 6)
+  let secret_export: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, core_id, secret_hash, 6)
+  let canonical: string = hf_path_canonicalize("/tmp/holyfitra_state6_modules/../holyfitra_state6_modules/core.hf")
+  let canonical_ok: bool = same_text(canonical, "/tmp/holyfitra_state6_modules/core.hf")
+  let unsafe: string = hf_path_canonicalize(unsafe_path)
+  let graph: string = graph_snapshot(module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, diagnostic_codes, diagnostic_modules)
+  let graph_written: bool = hf_write_text("/tmp/holyfitra_state6_graph.snapshot", graph)
+  let graph_read: string = hf_read_text("/tmp/holyfitra_state6_graph.snapshot")
+  let graph_stable: bool = same_text(graph, graph_read)
+  let graph_nonempty: bool = hf_string_len32(graph_read) > 0
+  let graph_shape: bool = core_id == 0 && app_id == 1 && user_id == 2 && missing_id == 3 && cycle_a_id == 4 && cycle_b_id == 5 && hf_dyn_i32_len32(module_hashes) == 6 && app_ok && hf_dyn_i32_get32(states, core_id) == 2 && hf_dyn_i32_get32(states, app_id) == 2
+  let diagnostics_shape: bool = hf_dyn_i32_len32(diagnostic_codes) == 3 && hf_dyn_i32_get32(diagnostic_codes, 0) == 4004 && hf_dyn_i32_get32(diagnostic_codes, 1) == 4001 && hf_dyn_i32_get32(diagnostic_codes, 2) == 4002
+  let export_shape: bool = answer_export >= 0 && secret_export == -2 && core_name_hash == span_hash("core", 0, 4)
+  let path_shape: bool = canonical_ok && hf_string_len32(unsafe) == 0
+  hf_string_free(canonical)
+  hf_string_free(unsafe)
+  hf_string_free(graph_read)
+  hf_string_free(graph)
+  hf_dyn_i32_free(module_hashes)
+  hf_dyn_i32_free(module_lengths)
+  hf_dyn_i32_free(module_sources)
+  hf_dyn_i32_free(states)
+  hf_dyn_i32_free(import_from)
+  hf_dyn_i32_free(import_target_hashes)
+  hf_dyn_i32_free(import_target_lengths)
+  hf_dyn_i32_free(import_symbol_hashes)
+  hf_dyn_i32_free(import_symbol_lengths)
+  hf_dyn_i32_free(export_modules)
+  hf_dyn_i32_free(export_hashes)
+  hf_dyn_i32_free(export_lengths)
+  hf_dyn_i32_free(export_public)
+  hf_dyn_i32_free(diagnostic_codes)
+  hf_dyn_i32_free(diagnostic_modules)
+  if graph_written && graph_nonempty && graph_stable && graph_shape && diagnostics_shape && export_shape && path_shape && hf_string_len32(root) > 0 { return 0 }
+  return 1
+}
+
+
+// State-7 typed HIR records: kind 1=resolved module, kind 2=resolved imported symbol.
+fn hir_add(hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>, kind: i32, module_id: i32, symbol_id: i32, type_id: i32) -> bool {
+  if kind < 1 || kind > 2 || module_id < 0 || type_id < 0 { return false }
+  if hf_dyn_i32_len32(hir_kinds) >= 128 { return false }
+  let kind_ok: bool = hf_dyn_i32_push(hir_kinds, kind)
+  let module_ok: bool = hf_dyn_i32_push(hir_modules, module_id)
+  let symbol_ok: bool = hf_dyn_i32_push(hir_symbols, symbol_id)
+  let type_ok: bool = hf_dyn_i32_push(hir_types, type_id)
+  return kind_ok && module_ok && symbol_ok && type_ok
+}
+
+fn lower_hir(module_hashes: dyn<i32>, module_lengths: dyn<i32>, states: dyn<i32>, import_from: dyn<i32>, import_target_hashes: dyn<i32>, import_target_lengths: dyn<i32>, import_symbol_hashes: dyn<i32>, import_symbol_lengths: dyn<i32>, export_modules: dyn<i32>, export_hashes: dyn<i32>, export_lengths: dyn<i32>, export_public: dyn<i32>, export_type_ids: dyn<i32>, hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>) -> bool {
+  var module_index: i32 = 0
+  let module_count: i32 = hf_dyn_i32_len32(module_hashes)
+  var lowering_ok: bool = true
+  while module_index < module_count {
+    if hf_dyn_i32_get32(states, module_index) == 2 {
+      lowering_ok = lowering_ok && hir_add(hir_kinds, hir_modules, hir_symbols, hir_types, 1, module_index, -1, 0)
+      var import_index: i32 = 0
+      let import_count: i32 = hf_dyn_i32_len32(import_from)
+      while import_index < import_count {
+        if hf_dyn_i32_get32(import_from, import_index) == module_index {
+          let target_module: i32 = find_module(module_hashes, module_lengths, hf_dyn_i32_get32(import_target_hashes, import_index), hf_dyn_i32_get32(import_target_lengths, import_index))
+          if target_module >= 0 && target_module < module_count && hf_dyn_i32_get32(states, target_module) == 2 {
+            let imported_symbol: i32 = find_export(export_modules, export_hashes, export_lengths, export_public, target_module, hf_dyn_i32_get32(import_symbol_hashes, import_index), hf_dyn_i32_get32(import_symbol_lengths, import_index))
+            if imported_symbol >= 0 {
+              lowering_ok = lowering_ok && hir_add(hir_kinds, hir_modules, hir_symbols, hir_types, 2, module_index, imported_symbol, hf_dyn_i32_get32(export_type_ids, imported_symbol))
+            } else {
+              lowering_ok = false
+            }
+          } else {
+            lowering_ok = false
+          }
+        }
+        import_index = import_index + 1
+      }
+    }
+    module_index = module_index + 1
+  }
+  return lowering_ok
+}
+
+fn hir_snapshot(hir_kinds: dyn<i32>, hir_modules: dyn<i32>, hir_symbols: dyn<i32>, hir_types: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var snapshot_index: i32 = 0
+  let snapshot_count: i32 = hf_dyn_i32_len32(hir_kinds)
+  while snapshot_index < snapshot_count {
+    hf_buf_append_i32(buffer, snapshot_index)
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_kinds, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_modules, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_symbols, snapshot_index))
+    hf_buf_append_str(buffer, ":")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(hir_types, snapshot_index))
+    hf_buf_append_str(buffer, ";")
+    snapshot_index = snapshot_index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn main() -> i32 {
+  let core_path: string = "/tmp/holyfitra_state6_modules/./core.hf"
+  let app_path: string = "/tmp/holyfitra_state6_modules/../holyfitra_state6_modules/app.hf"
+  let user_path: string = "/tmp/holyfitra_state6_modules/user.hf"
+  let missing_path: string = "/tmp/holyfitra_state6_modules/missing.hf"
+  let cycle_a_path: string = "/tmp/holyfitra_state6_modules/cycle_a.hf"
+  let cycle_b_path: string = "/tmp/holyfitra_state6_modules/cycle_b.hf"
+  let module_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let module_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let module_sources: dyn<i32> = hf_dyn_i32_new(16)
+  let states: dyn<i32> = hf_dyn_i32_new(16)
+  let import_from: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_target_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_hashes: dyn<i32> = hf_dyn_i32_new(16)
+  let import_symbol_lengths: dyn<i32> = hf_dyn_i32_new(16)
+  let export_modules: dyn<i32> = hf_dyn_i32_new(32)
+  let export_hashes: dyn<i32> = hf_dyn_i32_new(32)
+  let export_lengths: dyn<i32> = hf_dyn_i32_new(32)
+  let export_public: dyn<i32> = hf_dyn_i32_new(32)
+  let export_type_ids: dyn<i32> = hf_dyn_i32_new(32)
+  let core_id: i32 = load_module(core_path, 0, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let app_id: i32 = load_module(app_path, 1, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let user_id: i32 = load_module(user_path, 2, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let missing_id: i32 = load_module(missing_path, 3, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let cycle_a_id: i32 = load_module(cycle_a_path, 4, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let cycle_b_id: i32 = load_module(cycle_b_path, 5, module_hashes, module_lengths, module_sources, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids)
+  let diagnostic_codes: dyn<i32> = hf_dyn_i32_new(16)
+  let diagnostic_modules: dyn<i32> = hf_dyn_i32_new(16)
+  var resolve_index: i32 = 0
+  var app_resolved: bool = false
+  while resolve_index < hf_dyn_i32_len32(module_hashes) {
+    let resolved_now: bool = resolve_module(resolve_index, states, module_hashes, module_lengths, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, diagnostic_codes, diagnostic_modules)
+    if resolve_index == app_id { app_resolved = resolved_now }
+    resolve_index = resolve_index + 1
+  }
+  let hir_kinds: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_modules: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_symbols: dyn<i32> = hf_dyn_i32_new(64)
+  let hir_types: dyn<i32> = hf_dyn_i32_new(64)
+  let lowered: bool = lower_hir(module_hashes, module_lengths, states, import_from, import_target_hashes, import_target_lengths, import_symbol_hashes, import_symbol_lengths, export_modules, export_hashes, export_lengths, export_public, export_type_ids, hir_kinds, hir_modules, hir_symbols, hir_types)
+  let hir: string = hir_snapshot(hir_kinds, hir_modules, hir_symbols, hir_types)
+  let hir_written: bool = hf_write_text("/tmp/holyfitra_state7_hir.snapshot", hir)
+  let hir_read: string = hf_read_text("/tmp/holyfitra_state7_hir.snapshot")
+  let hir_stable: bool = same_text(hir, hir_read)
+  let hir_nonempty: bool = hf_string_len32(hir_read) > 0
+  let hir_shape: bool = hf_dyn_i32_len32(hir_kinds) == 3 && hf_dyn_i32_get32(hir_kinds, 0) == 1 && hf_dyn_i32_get32(hir_modules, 0) == core_id && hf_dyn_i32_get32(hir_kinds, 1) == 1 && hf_dyn_i32_get32(hir_modules, 1) == app_id && hf_dyn_i32_get32(hir_kinds, 2) == 2 && hf_dyn_i32_get32(hir_modules, 2) == app_id && hf_dyn_i32_get32(hir_types, 2) == 1
+  let diagnostics_shape: bool = hf_dyn_i32_len32(diagnostic_codes) == 3 && hf_dyn_i32_get32(diagnostic_codes, 0) == 4004 && hf_dyn_i32_get32(diagnostic_codes, 1) == 4001 && hf_dyn_i32_get32(diagnostic_codes, 2) == 4002
+  let loading_shape: bool = core_id == 0 && app_id == 1 && user_id == 2 && missing_id == 3 && cycle_a_id == 4 && cycle_b_id == 5 && hf_dyn_i32_len32(export_type_ids) == 7
+  let path_shape: bool = hf_string_len32(hir_read) > 0
+  hf_string_free(hir_read)
+  hf_string_free(hir)
+  hf_dyn_i32_free(module_hashes)
+  hf_dyn_i32_free(module_lengths)
+  hf_dyn_i32_free(module_sources)
+  hf_dyn_i32_free(states)
+  hf_dyn_i32_free(import_from)
+  hf_dyn_i32_free(import_target_hashes)
+  hf_dyn_i32_free(import_target_lengths)
+  hf_dyn_i32_free(import_symbol_hashes)
+  hf_dyn_i32_free(import_symbol_lengths)
+  hf_dyn_i32_free(export_modules)
+  hf_dyn_i32_free(export_hashes)
+  hf_dyn_i32_free(export_lengths)
+  hf_dyn_i32_free(export_public)
+  hf_dyn_i32_free(export_type_ids)
+  hf_dyn_i32_free(diagnostic_codes)
+  hf_dyn_i32_free(diagnostic_modules)
+  hf_dyn_i32_free(hir_kinds)
+  hf_dyn_i32_free(hir_modules)
+  hf_dyn_i32_free(hir_symbols)
+  hf_dyn_i32_free(hir_types)
+  if lowered && app_resolved && hir_written && hir_nonempty && hir_stable && hir_shape && diagnostics_shape && loading_shape && path_shape { return 0 }
+  return 1
+}
