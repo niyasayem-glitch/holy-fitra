@@ -35,6 +35,8 @@ class TensorSpec:
 class Tensor:
     def __init__(self, data, *, requires_grad: bool = False, copy: bool = True, _parents=(), _backward: Callable[[], None] | None = None):
         array = np.asarray(data, dtype=np.float32)
+        if array.size == 0 or not np.all(np.isfinite(array)):
+            raise ValueError("Tensor data must be non-empty and finite")
         if copy:
             self.data = np.ascontiguousarray(array)
         else:
@@ -59,6 +61,8 @@ class Tensor:
         return TensorSpec(self.shape)
 
     def __matmul__(self, other: "Tensor") -> "Tensor":
+        if not isinstance(other, Tensor) or self.data.ndim != 2 or other.data.ndim != 2 or self.data.shape[1] != other.data.shape[0]:
+            raise ValueError("matrix multiplication requires compatible two-dimensional tensors")
         output = Tensor(self.data @ other.data, requires_grad=self.requires_grad or other.requires_grad, _parents=(self, other))
 
         def backward() -> None:
@@ -113,6 +117,10 @@ class Tensor:
         return output
 
     def backward(self, gradient: np.ndarray | None = None) -> None:
+        if gradient is not None:
+            supplied = np.asarray(gradient, dtype=np.float32)
+            if supplied.shape != self.data.shape or not np.all(np.isfinite(supplied)):
+                raise ValueError("backward gradient must be finite and match tensor shape")
         order: list[Tensor] = []
         visited: set[int] = set()
 
@@ -126,9 +134,9 @@ class Tensor:
 
         visit(self)
         if self.grad is None:
-            self.grad = np.ones_like(self.data) if gradient is None else np.asarray(gradient, dtype=np.float32)
+            self.grad = np.ones_like(self.data) if gradient is None else supplied
         else:
-            self.grad[...] = np.ones_like(self.data) if gradient is None else np.asarray(gradient, dtype=np.float32)
+            self.grad[...] = np.ones_like(self.data) if gradient is None else supplied
         for node in reversed(order):
             node._backward()
 
@@ -146,6 +154,8 @@ def relu(value: Tensor) -> Tensor:
 
 class Dense:
     def __init__(self, input_dim: int, output_dim: int, seed: int = 0):
+        if not isinstance(input_dim, int) or isinstance(input_dim, bool) or not isinstance(output_dim, int) or isinstance(output_dim, bool) or input_dim <= 0 or output_dim <= 0:
+            raise ValueError("Dense dimensions must be positive integers")
         rng = np.random.default_rng(seed)
         self.weight = Tensor(rng.normal(0.0, 1.0 / np.sqrt(input_dim), (input_dim, output_dim)), requires_grad=True)
         self.bias = Tensor(np.zeros(output_dim, dtype=np.float32), requires_grad=True)
@@ -159,6 +169,8 @@ class Dense:
 
 
 def mse(prediction: Tensor, target: Tensor) -> Tensor:
+    if prediction.shape != target.shape:
+        raise ValueError("MSE tensors must have identical shapes")
     difference = prediction - target
     return (difference * difference).mean()
 

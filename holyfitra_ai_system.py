@@ -211,6 +211,10 @@ class ToolRegistry:
         self._tools[spec.name] = spec
 
     def invoke(self, name: str, arguments: dict[str, Any], *, grants: frozenset[str]) -> ToolResult:
+        if not isinstance(arguments, dict):
+            raise ValueError("tool arguments must be an object")
+        if not isinstance(grants, frozenset):
+            raise ValueError("tool grants must be a frozenset")
         spec = self._tools.get(name)
         if spec is None:
             raise KeyError(f"unknown tool: {name}")
@@ -267,9 +271,13 @@ class AgentRuntime:
         self._cancelled = False
         ledger = EvidenceLedger()
         trace: list[AuditEvent] = []
-        action_list = tuple(actions)
-        if len(action_list) > self.max_steps:
-            raise ValueError("agent plan exceeds step budget")
+        action_list: list[AgentAction] = []
+        for index, action in enumerate(actions):
+            if index >= self.max_steps:
+                raise ValueError("agent plan exceeds step budget")
+            if not isinstance(action, AgentAction):
+                raise ValueError("agent actions must use AgentAction records")
+            action_list.append(action)
         for step, action in enumerate(action_list, start=1):
             if self._cancelled:
                 trace.append(AuditEvent(step, "cancelled", "execution cancelled before action"))

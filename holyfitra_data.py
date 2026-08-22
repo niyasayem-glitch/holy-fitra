@@ -27,12 +27,12 @@ class Batch:
     step: int
 
     def __post_init__(self) -> None:
-        if self.inputs.ndim != 2 or self.targets.ndim != 2 or self.inputs.shape[0] != self.targets.shape[0]:
-            raise ValueError("batch arrays must be two-dimensional with equal row counts")
+        if self.inputs.ndim != 2 or self.targets.ndim != 2 or self.inputs.shape[0] == 0 or self.inputs.shape[0] != self.targets.shape[0]:
+            raise ValueError("batch arrays must be non-empty two-dimensional arrays with equal row counts")
         if self.indices.ndim != 1 or self.indices.shape[0] != self.inputs.shape[0]:
             raise ValueError("batch indices must match batch row count")
-        if self.inputs.dtype != np.float32 or self.targets.dtype != np.float32:
-            raise ValueError("batch arrays must use float32")
+        if self.inputs.dtype != np.float32 or self.targets.dtype != np.float32 or not np.all(np.isfinite(self.inputs)) or not np.all(np.isfinite(self.targets)):
+            raise ValueError("batch arrays must use finite float32 values")
 
     @property
     def size(self) -> int:
@@ -51,9 +51,9 @@ class StreamingDataset:
     """A repeatable, validated stream of fixed-shape supervised samples."""
 
     def __init__(self, source: Source, *, input_shape: tuple[int, ...], target_shape: tuple[int, ...], seed: int = 0, name: str = "dataset", cardinality: int | None = None):
-        if not input_shape or not target_shape or any(int(d) <= 0 for d in input_shape + target_shape):
-            raise ValueError("dataset shapes must contain positive dimensions")
-        if cardinality is not None and cardinality < 0:
+        if not input_shape or not target_shape or any(not isinstance(d, int) or isinstance(d, bool) or d <= 0 for d in input_shape + target_shape):
+            raise ValueError("dataset shapes must contain positive integer dimensions")
+        if cardinality is not None and (not isinstance(cardinality, int) or isinstance(cardinality, bool) or cardinality < 0):
             raise ValueError("cardinality must be non-negative")
         self.input_shape = tuple(int(d) for d in input_shape)
         self.target_shape = tuple(int(d) for d in target_shape)
@@ -72,8 +72,8 @@ class StreamingDataset:
     def from_arrays(cls, inputs: np.ndarray, targets: np.ndarray, *, seed: int = 0, name: str = "array_dataset") -> "StreamingDataset":
         x = np.ascontiguousarray(np.asarray(inputs, dtype=np.float32))
         y = np.ascontiguousarray(np.asarray(targets, dtype=np.float32))
-        if x.ndim != 2 or y.ndim != 2 or x.shape[0] == 0 or x.shape[0] != y.shape[0]:
-            raise ValueError("array dataset requires non-empty 2D arrays with equal row counts")
+        if x.ndim != 2 or y.ndim != 2 or x.shape[0] == 0 or x.shape[0] != y.shape[0] or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+            raise ValueError("array dataset requires non-empty finite 2D arrays with equal row counts")
         def source() -> Iterator[Sample]:
             for index in range(x.shape[0]):
                 yield x[index], y[index]
@@ -134,12 +134,12 @@ class StreamingDataset:
         )
 
     def iter_batches(self, batch_size: int, *, epoch: int = 0, shuffle: bool = False, shuffle_buffer: int | None = None, drop_last: bool = False) -> Iterator[Batch]:
-        if batch_size <= 0 or epoch < 0:
-            raise ValueError("batch_size must be positive and epoch must be non-negative")
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or not isinstance(epoch, int) or isinstance(epoch, bool) or batch_size <= 0 or epoch < 0:
+            raise ValueError("batch_size and epoch must be valid integers")
         if shuffle_buffer is None:
             shuffle_buffer = max(batch_size * 4, batch_size)
-        if shuffle_buffer <= 0:
-            raise ValueError("shuffle_buffer must be positive")
+        if not isinstance(shuffle_buffer, int) or isinstance(shuffle_buffer, bool) or shuffle_buffer <= 0:
+            raise ValueError("shuffle_buffer must be a positive integer")
         rows: Iterable[tuple[int, Sample]] = self._indexed_samples()
         if shuffle:
             rows = _buffer_shuffle(rows, max(batch_size, int(shuffle_buffer)), _epoch_rng(self.seed, epoch))

@@ -53,6 +53,25 @@ class HolyFitraLearningTests(unittest.TestCase):
             self.assertEqual(len(restored_replay), len(replay))
             self.assertEqual(manifest["version"], 1)
 
+    def test_optimizer_step_is_atomic_on_nonfinite_later_parameter(self):
+        model = TrainableMLP(2, 4, 1, seed=2)
+        optimizer = Adam(model.parameters)
+        for parameter in model.parameters:
+            parameter.grad = np.ones_like(parameter.data)
+        model.parameters[-1].grad[...] = np.nan
+        before_data = [parameter.data.copy() for parameter in model.parameters]
+        before_m = [value.copy() for value in optimizer._m]
+        before_v = [value.copy() for value in optimizer._v]
+        with self.assertRaises(FloatingPointError):
+            optimizer.step(model.parameters)
+        self.assertEqual(optimizer.step_count, 0)
+        for parameter, expected in zip(model.parameters, before_data):
+            np.testing.assert_array_equal(parameter.data, expected)
+        for value, expected in zip(optimizer._m, before_m):
+            np.testing.assert_array_equal(value, expected)
+        for value, expected in zip(optimizer._v, before_v):
+            np.testing.assert_array_equal(value, expected)
+
     def test_nonfinite_gradient_is_rejected(self):
         model = TrainableMLP(2, 4, 1, seed=2)
         optimizer = Adam(model.parameters)

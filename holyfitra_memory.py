@@ -7,6 +7,7 @@ It does not claim hardware-coherent RAM or physical device unification.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -101,7 +102,7 @@ class UnifiedMemoryArena:
     """Aligned reusable backing storage shared by host-side tensor views."""
 
     def __init__(self, capacity_bytes: int, *, alignment: int = 64):
-        if capacity_bytes <= 0 or alignment <= 0 or alignment & (alignment - 1):
+        if not isinstance(capacity_bytes, int) or isinstance(capacity_bytes, bool) or not isinstance(alignment, int) or isinstance(alignment, bool) or capacity_bytes <= 0 or alignment <= 0 or alignment & (alignment - 1):
             raise ValueError("capacity must be positive and alignment must be a power of two")
         self.capacity_bytes = int(capacity_bytes)
         self.alignment = int(alignment)
@@ -128,13 +129,20 @@ class UnifiedMemoryArena:
         return tuple(ArenaView(self, block) for block in self._blocks if not block.released)
 
     def allocate(self, shape: tuple[int, ...] | list[int], *, dtype: str | np.dtype = np.float32, readonly: bool = False) -> ArenaView:
-        normalized_shape = tuple(int(dimension) for dimension in shape)
-        if not normalized_shape or any(dimension <= 0 for dimension in normalized_shape):
-            raise ValueError("arena shape must contain positive dimensions")
+        try:
+            raw_shape = tuple(shape)
+        except TypeError as error:
+            raise ValueError("arena shape must be an iterable of dimensions") from error
+        if not raw_shape or any(not isinstance(dimension, int) or isinstance(dimension, bool) or dimension <= 0 for dimension in raw_shape):
+            raise ValueError("arena shape must contain positive integer dimensions")
+        normalized_shape = tuple(raw_shape)
         normalized_dtype = np.dtype(dtype)
         if normalized_dtype.hasobject:
             raise TypeError("object dtypes are not supported")
-        nbytes = int(np.prod(normalized_shape, dtype=np.int64)) * normalized_dtype.itemsize
+        elements = math.prod(normalized_shape)
+        nbytes = elements * normalized_dtype.itemsize
+        if nbytes <= 0:
+            raise ValueError("arena allocation size overflowed")
         for index, (start, size) in enumerate(self._free):
             offset = self._aligned(start, self.alignment)
             padding = offset - start

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import json
 import tempfile
 import unittest
 from pathlib import Path
 import numpy as np
 from hyperc_nn import Tensor
-from holyfitra_deploy import export_mlp, load_deployment
+from holyfitra_deploy import _validate_manifest, export_mlp, load_deployment
 from holyfitra_learning import TrainableMLP, TrainingConfig, train_supervised
 from holyfitra_qat import QuantizationAwareMLP, QuantizationQualityError, QuantizationQualityGate, QuantizationSpec, fake_quantize_tensor, quantize_array
 
@@ -52,6 +53,37 @@ class HolyFitraQATDeploymentTests(unittest.TestCase):
             np.testing.assert_allclose(bundle.predict(inputs), model.predict(inputs), atol=1e-6)
             self.assertEqual(bundle.digest, artifact_a.digest)
             self.assertEqual(bundle.manifest["format"], "holyfitra.deployment")
+
+    def test_manifest_validation_rejects_corrupt_quantization_metadata(self):
+        model = TrainableMLP(3, 5, 2, seed=8)
+        with tempfile.TemporaryDirectory() as directory:
+            artifact = export_mlp(model, Path(directory) / "valid.hfbin", weight_spec=QuantizationSpec(bits=8, axis=0), quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0))
+            manifest = json.loads(json.dumps(artifact.manifest))
+            manifest["arrays"][0]["bytes"] -= 1
+            with self.assertRaises(ValueError):
+                _validate_manifest(manifest)
+            manifest = json.loads(json.dumps(artifact.manifest))
+            manifest["arrays"][0]["quantization"]["scales"][0][0] = 0.0
+            with self.assertRaises(ValueError):
+                _validate_manifest(manifest)
+            manifest = json.loads(json.dumps(artifact.manifest))
+            manifest["model"]["dimensions"]["hidden_dim"] = 0
+            with self.assertRaises(ValueError):
+                _validate_manifest(manifest)
+
+    def test_quantization_contracts_reject_nonfinite_and_malformed_inputs(self):
+        with self.assertRaises(ValueError):
+            QuantizationSpec(bits=4, axis=True)
+        with self.assertRaises(ValueError):
+            QuantizationQualityGate(float("nan"), 0.1)
+        with self.assertRaises(ValueError):
+            from holyfitra_qat import quantization_quality
+            quantization_quality(np.empty((0,), dtype=np.float32), np.empty((0,), dtype=np.float32))
+        from holyfitra_qat import QuantizedArray
+        with self.assertRaises(ValueError):
+            QuantizedArray(np.zeros(1, dtype=np.int8), np.ones((1,), dtype=np.float32), (2,), 8, None, 0.0, 0.0)
+        with self.assertRaises(ValueError):
+            QuantizedArray(np.zeros(1, dtype=np.uint8), np.zeros((1,), dtype=np.float32), (2,), 4, None, 0.0, 0.0)
 
     def test_export_quality_gate_fails_closed(self):
         model = TrainableMLP(3, 5, 2, seed=8)

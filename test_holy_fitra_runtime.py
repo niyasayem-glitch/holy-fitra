@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import math
 import unittest
 
 from holy_fitra_runtime import (
@@ -70,6 +71,19 @@ class HolyFitraRuntimeTests(unittest.TestCase):
         graph.repair("package", "p1")
         self.assertTrue(all(node.valid for node in graph.nodes.values()))
 
+    def test_privacy_release_permit_is_single_use_and_expires_at_boundary(self):
+        from holy_fitra_runtime import PrivacyReleasePermit
+        value = PrivateValue("diagnosis", PrivacyLabel.SENSITIVE)
+        permit = PrivacyReleasePermit(PrivacyLabel.SENSITIVE, PrivacyLabel.PRIVATE, "local.summary", "summary", "once", 10.0)
+        value.declassify("summary", PrivacyLabel.PRIVATE, permit, destination="local.summary", purpose="summary", now=1.0)
+        with self.assertRaises(HolyFitraError):
+            value.declassify("again", PrivacyLabel.PRIVATE, permit, destination="local.summary", purpose="summary", now=2.0)
+        expired = PrivacyReleasePermit(PrivacyLabel.SENSITIVE, PrivacyLabel.PRIVATE, "local.summary", "summary", "expired", 10.0)
+        with self.assertRaises(HolyFitraError):
+            value.declassify("late", PrivacyLabel.PRIVATE, expired, destination="local.summary", purpose="summary", now=10.0)
+        with self.assertRaises(HolyFitraError):
+            PrivacyReleasePermit(PrivacyLabel.SENSITIVE, PrivacyLabel.PRIVATE, "local.summary", "summary", "nan", math.nan)
+
     def test_privacy_release_requires_matching_permit(self):
         from holy_fitra_runtime import PrivacyReleasePermit
         value = PrivateValue("diagnosis", PrivacyLabel.SENSITIVE)
@@ -104,6 +118,16 @@ class HolyFitraRuntimeTests(unittest.TestCase):
         self.assertTrue(log.verify())
         log.events[0].payload["profile"] = "full"
         self.assertFalse(log.verify())
+
+    def test_energy_policy_rejects_invalid_signals(self):
+        profiles = (ExecutionProfile("eco", "int4", 1, 1, False),)
+        policy = EnergyPolicy(profiles)
+        with self.assertRaises(HolyFitraError):
+            policy.choose(energy_budget=math.nan, battery=1.0, thermal="cool", offline=False)
+        with self.assertRaises(HolyFitraError):
+            policy.choose(energy_budget=1.0, battery=1.0, thermal="unknown", offline=False)
+        with self.assertRaises(HolyFitraError):
+            policy.choose(energy_budget=1.0, battery=math.nan, thermal="cool", offline=False)
 
     def test_consent_audience_and_scheduler_hysteresis(self):
         from holy_fitra_runtime import EnergyPolicy, ExecutionProfile, StableEnergyPolicy

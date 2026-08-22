@@ -26,8 +26,10 @@ class QuantizationSpec:
     symmetric: bool = True
 
     def __post_init__(self) -> None:
-        if self.bits not in {4, 8}:
+        if not isinstance(self.bits, int) or isinstance(self.bits, bool) or self.bits not in {4, 8}:
             raise ValueError("quantization bits must be 4 or 8")
+        if self.axis is not None and (not isinstance(self.axis, int) or isinstance(self.axis, bool)):
+            raise ValueError("quantization axis must be an integer or None")
         if not self.symmetric:
             raise ValueError("only symmetric quantization is currently supported")
 
@@ -49,6 +51,27 @@ class QuantizedArray:
     axis: int | None
     max_abs_error: float
     mse: float
+
+    def __post_init__(self) -> None:
+        if self.bits not in {4, 8} or not self.logical_shape or any(not isinstance(dimension, int) or isinstance(dimension, bool) or dimension <= 0 for dimension in self.logical_shape):
+            raise ValueError("quantized array shape or bit width is invalid")
+        if self.axis is not None and (not isinstance(self.axis, int) or isinstance(self.axis, bool) or self.axis < -len(self.logical_shape) or self.axis >= len(self.logical_shape)):
+            raise ValueError("quantized array axis is invalid")
+        packed = np.asarray(self.packed)
+        expected_count = int(np.prod(self.logical_shape, dtype=np.int64))
+        expected_size = (expected_count + 1) // 2 if self.bits == 4 else expected_count
+        expected_dtype = np.dtype(np.uint8) if self.bits == 4 else np.dtype(np.int8)
+        if packed.dtype != expected_dtype or packed.size != expected_size:
+            raise ValueError("quantized payload shape or dtype is invalid")
+        scales = np.asarray(self.scales)
+        if scales.dtype != np.dtype(np.float32) or scales.size == 0 or not np.all(np.isfinite(scales)) or np.any(scales <= 0.0):
+            raise ValueError("quantized scales must be finite positive float32 values")
+        try:
+            np.broadcast_to(scales, self.logical_shape)
+        except ValueError as error:
+            raise ValueError("quantized scales do not broadcast to logical shape") from error
+        if not np.isfinite(self.max_abs_error) or self.max_abs_error < 0.0 or not np.isfinite(self.mse) or self.mse < 0.0:
+            raise ValueError("quantized errors must be finite and non-negative")
 
     @property
     def storage_bytes(self) -> int:
@@ -116,8 +139,8 @@ class QuantizationQualityGate:
     max_abs_error: float
 
     def __post_init__(self) -> None:
-        if self.max_mse < 0.0 or self.max_abs_error < 0.0:
-            raise ValueError("quality limits must be non-negative")
+        if not np.isfinite(self.max_mse) or not np.isfinite(self.max_abs_error) or self.max_mse < 0.0 or self.max_abs_error < 0.0:
+            raise ValueError("quality limits must be finite and non-negative")
 
     def enforce(self, reference: np.ndarray, candidate: np.ndarray) -> dict[str, float | bool]:
         quality = quantization_quality(reference, candidate)
@@ -129,8 +152,8 @@ class QuantizationQualityGate:
 def quantization_quality(reference: np.ndarray, candidate: np.ndarray) -> dict[str, float]:
     reference = np.asarray(reference, dtype=np.float32)
     candidate = np.asarray(candidate, dtype=np.float32)
-    if reference.shape != candidate.shape or not np.all(np.isfinite(reference)) or not np.all(np.isfinite(candidate)):
-        raise ValueError("quality arrays must have equal finite shapes")
+    if reference.shape != candidate.shape or reference.size == 0 or not np.all(np.isfinite(reference)) or not np.all(np.isfinite(candidate)):
+        raise ValueError("quality arrays must be non-empty with equal finite shapes")
     error = reference - candidate
     return {"mse": float(np.mean(error * error)), "max_abs_error": float(np.max(np.abs(error)) if error.size else 0.0)}
 

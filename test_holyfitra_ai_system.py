@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
+import itertools
 import unittest
 from holyfitra_ai_system import AgentAction, AgentRuntime, CapabilityError, ClaimVerifier, Evidence, EvidenceKind, EvidenceLedger, MemoryDocument, ToolRegistry, ToolResult, ToolSpec, VectorMemory, VerificationStatus
 
@@ -40,6 +41,17 @@ class HolyFitraAISystemTests(unittest.TestCase):
         self.assertEqual([event.event for event in result.trace], ["retrieve", "claim_verification", "tool"])
         self.assertTrue(any(e.evidence_id == "memory:fact-a" for e in result.evidence))
         self.assertTrue(any(e.evidence_id == "tool:2:safe_echo" for e in result.evidence))
+
+    def test_agent_plan_budget_bounds_unbounded_iterators(self):
+        runtime = AgentRuntime(self.memory, self.tools, max_steps=2)
+        with self.assertRaises(ValueError):
+            runtime.run((1.0, 0.0, 0.0), (AgentAction("retrieve") for _ in itertools.count()))
+
+    def test_tool_registry_rejects_malformed_argument_contracts(self):
+        with self.assertRaises(ValueError):
+            self.tools.invoke("safe_echo", [], grants=frozenset({"cap.echo"}))
+        with self.assertRaises(ValueError):
+            self.tools.invoke("safe_echo", {}, grants={"cap.echo"})
 
     def test_agent_plan_budget_and_cancellation(self):
         runtime = AgentRuntime(self.memory, self.tools, max_steps=1)

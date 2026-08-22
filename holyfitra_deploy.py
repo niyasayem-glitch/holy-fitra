@@ -134,8 +134,12 @@ def _decode(payload: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
         end = cursor + size
         if end > len(payload):
             raise ValueError("truncated deployment array")
-        dtype = np.dtype(item["dtype"])
+        try:
+            dtype = np.dtype(item["dtype"])
+        except TypeError as error:
+            raise ValueError("deployment array dtype is invalid") from error
         raw = np.frombuffer(payload[cursor:end], dtype=dtype).copy()
+
         shape = tuple(int(value) for value in item["shape"])
         if raw.size != int(np.prod(shape, dtype=np.int64)) and item["quantization"] is None:
             raise ValueError("deployment array shape does not match payload")
@@ -157,16 +161,62 @@ def _decode(payload: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
-    if manifest.get("format") != "holyfitra.deployment" or manifest.get("version") != 1:
+    if not isinstance(manifest, dict) or manifest.get("format") != "holyfitra.deployment" or manifest.get("version") != 1:
         raise ValueError("unsupported deployment format")
-    if manifest.get("model", {}).get("type") != "mlp":
+    model = manifest.get("model")
+    if not isinstance(model, dict) or model.get("type") != "mlp":
         raise ValueError("unsupported deployment model type")
-    dimensions = manifest["model"].get("dimensions", {})
-    if any(int(dimensions.get(key, 0)) <= 0 for key in ("input_dim", "hidden_dim", "output_dim")):
+    dimensions = model.get("dimensions")
+    if not isinstance(dimensions, dict):
+        raise ValueError("deployment dimensions are missing")
+    try:
+        input_dim, hidden_dim, output_dim = (int(dimensions[key]) for key in ("input_dim", "hidden_dim", "output_dim"))
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("invalid deployment dimensions") from error
+    if min(input_dim, hidden_dim, output_dim) <= 0:
         raise ValueError("invalid deployment dimensions")
     arrays = manifest.get("arrays")
-    if [item.get("name") for item in arrays or []] != list(_ARRAY_ORDER):
-        raise ValueError("deployment arrays are not in canonical order")
+    if not isinstance(arrays, list) or len(arrays) != len(_ARRAY_ORDER):
+        raise ValueError("deployment arrays are incomplete")
+    expected_shapes = {
+        "hidden.weight": (input_dim, hidden_dim),
+        "hidden.bias": (hidden_dim,),
+        "output.weight": (hidden_dim, output_dim),
+        "output.bias": (output_dim,),
+    }
+    for expected_name, item in zip(_ARRAY_ORDER, arrays):
+        if not isinstance(item, dict) or item.get("name") != expected_name:
+            raise ValueError("deployment arrays are not in canonical order")
+        try:
+            shape = tuple(int(value) for value in item["shape"])
+            byte_count = int(item["bytes"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("deployment array metadata is malformed") from error
+        if shape != expected_shapes[expected_name] or byte_count < 0:
+            raise ValueError("deployment array shape or byte count is invalid")
+        quantization = item.get("quantization")
+        element_count = int(np.prod(shape, dtype=np.int64))
+        if quantization is None:
+            if expected_name.endswith("weight"):
+                raise ValueError("deployment weights require quantization metadata")
+            if item.get("dtype") != "<f4" or byte_count != element_count * 4:
+                raise ValueError("deployment floating array metadata is invalid")
+            continue
+        if not expected_name.endswith("weight") or not isinstance(quantization, dict):
+            raise ValueError("deployment quantization metadata is invalid")
+        bits = quantization.get("bits")
+        if bits not in {4, 8}:
+            raise ValueError("deployment quantization bits are invalid")
+        expected_bytes = (element_count + 1) // 2 if bits == 4 else element_count
+        if byte_count != expected_bytes or item.get("dtype") not in {"|u1", "|i1"}:
+            raise ValueError("deployment quantized payload metadata is invalid")
+        try:
+            scales = np.asarray(quantization["scales"], dtype=np.float32)
+            if scales.size == 0 or not np.all(np.isfinite(scales)) or np.any(scales <= 0.0):
+                raise ValueError("deployment scales are invalid")
+            np.broadcast_to(scales, shape)
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("deployment scales are not broadcast-compatible") from error
 
 
 def _ensure_json_value(value: Any) -> None:

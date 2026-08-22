@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import time
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -60,6 +61,18 @@ class KernelCandidate:
     supported_cores: tuple[CorePolicy, ...] = (CorePolicy.ANY, CorePolicy.BIG_PREFERRED, CorePolicy.LITTLE_PREFERRED)
     proof_hash: str = ""
 
+    def __post_init__(self) -> None:
+        if not self.name or not isinstance(self.precision, Precision) or not isinstance(self.abi_version, int) or isinstance(self.abi_version, bool) or self.abi_version <= 0:
+            raise PlanError("kernel candidate identity or ABI is invalid")
+        if not math.isfinite(self.calibration_mse) or self.calibration_mse < 0.0 or not math.isfinite(self.max_mse) or self.max_mse < 0.0:
+            raise PlanError("kernel candidate quality bounds must be finite and non-negative")
+        if not isinstance(self.memory_bytes, int) or isinstance(self.memory_bytes, bool) or self.memory_bytes < 0:
+            raise PlanError("kernel candidate memory must be a non-negative integer")
+        if not math.isfinite(self.estimated_energy) or self.estimated_energy < 0.0:
+            raise PlanError("kernel candidate energy must be finite and non-negative")
+        if not self.supported_cores or any(not isinstance(core, CorePolicy) for core in self.supported_cores):
+            raise PlanError("kernel candidate core policy set is invalid")
+
     def passes_quality_gate(self) -> bool:
         return self.calibration_mse <= self.max_mse and bool(self.proof_hash)
 
@@ -75,6 +88,24 @@ class PlanConstraints:
     required_abi: int = 1
     allowed_cores: tuple[CorePolicy, ...] = (CorePolicy.ANY, CorePolicy.BIG_PREFERRED, CorePolicy.LITTLE_PREFERRED)
     allow_precision_fallback: bool = True
+
+    def __post_init__(self) -> None:
+        if not math.isfinite(self.max_mse) or self.max_mse < 0.0:
+            raise PlanError("maximum MSE must be finite and non-negative")
+        if not isinstance(self.memory_budget_bytes, int) or isinstance(self.memory_budget_bytes, bool) or self.memory_budget_bytes <= 0:
+            raise PlanError("memory budget must be a positive integer")
+        if not math.isfinite(self.energy_budget) or self.energy_budget < 0.0:
+            raise PlanError("energy budget must be finite and non-negative")
+        if not isinstance(self.thermal, Thermal) or not isinstance(self.priority, Priority):
+            raise PlanError("thermal and priority policies are invalid")
+        if not isinstance(self.deadline_ns, int) or isinstance(self.deadline_ns, bool) or self.deadline_ns < 0:
+            raise PlanError("deadline must be a non-negative integer")
+        if not isinstance(self.required_abi, int) or isinstance(self.required_abi, bool) or self.required_abi <= 0:
+            raise PlanError("required ABI must be a positive integer")
+        if not self.allowed_cores or any(not isinstance(core, CorePolicy) for core in self.allowed_cores):
+            raise PlanError("allowed core policy set is invalid")
+        if not isinstance(self.allow_precision_fallback, bool):
+            raise PlanError("precision fallback policy must be boolean")
 
 
 @dataclass(frozen=True)
@@ -126,8 +157,8 @@ class ExecutionPlan:
             raise PlanError("execution plan digest mismatch")
         if self.kernel_abi <= 0 or not self.kernel_name or not self.model_hash or not self.proof_hash:
             raise PlanError("execution plan is missing identity or proof fields")
-        if self.memory_bytes < 0 or self.estimated_energy < 0 or self.calibration_mse < 0:
-            raise PlanError("execution plan contains negative resource or quality values")
+        if not isinstance(self.memory_bytes, int) or isinstance(self.memory_bytes, bool) or self.memory_bytes < 0 or not math.isfinite(self.estimated_energy) or self.estimated_energy < 0 or not math.isfinite(self.calibration_mse) or self.calibration_mse < 0:
+            raise PlanError("execution plan contains invalid resource or quality values")
         if self.deadline_ns and (now_ns if now_ns is not None else time.monotonic_ns()) > self.deadline_ns:
             raise PlanError("execution plan deadline has expired")
         if self.thermal is Thermal.CRITICAL and self.core_policy is CorePolicy.BIG_ONLY:
@@ -160,6 +191,12 @@ class ExecutionReceipt:
     timestamp_ns: int
 
     def verify_against(self, plan: ExecutionPlan) -> None:
+        if not self.success:
+            raise PlanError("execution receipt reports unsuccessful execution")
+        if not isinstance(self.timestamp_ns, int) or isinstance(self.timestamp_ns, bool) or self.timestamp_ns < 0:
+            raise PlanError("execution receipt timestamp is invalid")
+        if not math.isfinite(self.measured_mse) or self.measured_mse < 0.0 or not isinstance(self.measured_memory_bytes, int) or isinstance(self.measured_memory_bytes, bool) or self.measured_memory_bytes < 0 or not math.isfinite(self.measured_energy) or self.measured_energy < 0.0:
+            raise PlanError("execution receipt contains invalid measurements")
         plan.verify(now_ns=self.timestamp_ns)
         if self.plan_id != plan.plan_id or self.model_hash != plan.model_hash:
             raise PlanError("receipt is bound to a different plan or model")

@@ -23,7 +23,7 @@ class TrainableMLP:
     """A two-layer trainable MLP with explicit state serialization."""
 
     def __init__(self, input_dim: int, hidden_dim: int, output_dim: int, *, seed: int = 0):
-        if min(input_dim, hidden_dim, output_dim) <= 0:
+        if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in (input_dim, hidden_dim, output_dim)):
             raise ValueError("MLP dimensions must be positive")
         self.input_dim = int(input_dim)
         self.hidden_dim = int(hidden_dim)
@@ -66,7 +66,7 @@ class Adam:
     """Small Adam optimizer with serializable moment state."""
 
     def __init__(self, parameters: tuple[Tensor, ...], *, learning_rate: float = 1e-3, beta1: float = 0.9, beta2: float = 0.999, epsilon: float = 1e-8):
-        if learning_rate <= 0.0 or not 0.0 < beta1 < 1.0 or not 0.0 < beta2 < 1.0 or epsilon <= 0.0:
+        if any(not np.isfinite(value) for value in (learning_rate, beta1, beta2, epsilon)) or learning_rate <= 0.0 or not 0.0 < beta1 < 1.0 or not 0.0 < beta2 < 1.0 or epsilon <= 0.0:
             raise ValueError("invalid Adam hyperparameters")
         self.learning_rate = float(learning_rate)
         self.beta1 = float(beta1)
@@ -79,21 +79,29 @@ class Adam:
     def step(self, parameters: tuple[Tensor, ...]) -> None:
         if len(parameters) != len(self._m):
             raise ValueError("optimizer parameter count changed")
-        self.step_count += 1
-        correction1 = 1.0 - self.beta1**self.step_count
-        correction2 = 1.0 - self.beta2**self.step_count
+        next_step = self.step_count + 1
+        correction1 = 1.0 - self.beta1**next_step
+        correction2 = 1.0 - self.beta2**next_step
+        proposals: list[tuple[np.ndarray, np.ndarray, np.ndarray]] = []
         for index, parameter in enumerate(parameters):
-            if parameter.grad is None or not np.all(np.isfinite(parameter.grad)):
+            if parameter.data.shape != self._m[index].shape or parameter.data.shape != self._v[index].shape:
+                raise ValueError("optimizer parameter shape changed")
+            if not np.all(np.isfinite(parameter.data)) or parameter.grad is None or not np.all(np.isfinite(parameter.grad)):
                 raise FloatingPointError("non-finite gradient rejected")
             gradient = np.asarray(parameter.grad, dtype=np.float32)
-            self._m[index] = self.beta1 * self._m[index] + (1.0 - self.beta1) * gradient
-            self._v[index] = self.beta2 * self._v[index] + (1.0 - self.beta2) * (gradient * gradient)
-            update = (self._m[index] / correction1) / (np.sqrt(self._v[index] / correction2) + self.epsilon)
-            if not np.all(np.isfinite(update)):
+            next_m = self.beta1 * self._m[index] + (1.0 - self.beta1) * gradient
+            next_v = self.beta2 * self._v[index] + (1.0 - self.beta2) * (gradient * gradient)
+            update = (next_m / correction1) / (np.sqrt(next_v / correction2) + self.epsilon)
+            next_data = parameter.data - self.learning_rate * update
+            if not np.all(np.isfinite(next_m)) or not np.all(np.isfinite(next_v)) or not np.all(np.isfinite(update)) or not np.all(np.isfinite(next_data)):
                 raise FloatingPointError("non-finite Adam update rejected")
-            parameter.data[...] -= self.learning_rate * update
-            if not np.all(np.isfinite(parameter.data)):
-                raise FloatingPointError("non-finite parameter update rejected")
+            proposals.append((next_m, next_v, next_data))
+        self.step_count = next_step
+        for index, parameter in enumerate(parameters):
+            next_m, next_v, next_data = proposals[index]
+            self._m[index] = next_m
+            self._v[index] = next_v
+            parameter.data[...] = next_data
 
     def state_dict(self) -> dict[str, Any]:
         return {"step_count": self.step_count, "m": [value.copy() for value in self._m], "v": [value.copy() for value in self._v], "learning_rate": self.learning_rate, "beta1": self.beta1, "beta2": self.beta2, "epsilon": self.epsilon}
@@ -120,8 +128,8 @@ def zero_grad(parameters: tuple[Tensor, ...]) -> None:
 
 
 def clip_grad_norm(parameters: tuple[Tensor, ...], max_norm: float) -> float:
-    if max_norm <= 0.0:
-        raise ValueError("max_norm must be positive")
+    if not np.isfinite(max_norm) or max_norm <= 0.0:
+        raise ValueError("max_norm must be finite and positive")
     norm = float(np.sqrt(sum(float(np.sum(parameter.grad * parameter.grad)) for parameter in parameters if parameter.grad is not None)))
     if not np.isfinite(norm):
         raise FloatingPointError("non-finite gradient norm rejected")
@@ -137,13 +145,15 @@ class ReplayBuffer:
     """Bounded deterministic reservoir replay for continual learning."""
 
     def __init__(self, capacity: int, *, seed: int = 0):
-        if capacity <= 0:
+        if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity <= 0:
             raise ValueError("replay capacity must be positive")
         self.capacity = int(capacity)
         self._rng = np.random.default_rng(seed)
         self._seen = 0
         self._inputs: list[np.ndarray] = []
         self._targets: list[np.ndarray] = []
+        self._input_shape: tuple[int, ...] | None = None
+        self._target_shape: tuple[int, ...] | None = None
 
     def __len__(self) -> int:
         return len(self._inputs)
@@ -155,8 +165,13 @@ class ReplayBuffer:
     def add_batch(self, inputs: np.ndarray, targets: np.ndarray) -> None:
         x = np.asarray(inputs, dtype=np.float32)
         y = np.asarray(targets, dtype=np.float32)
-        if x.ndim != 2 or y.ndim != 2 or x.shape[0] != y.shape[0]:
-            raise ValueError("replay batch shapes are invalid")
+        if x.ndim != 2 or y.ndim != 2 or x.shape[0] == 0 or x.shape[0] != y.shape[0] or not np.all(np.isfinite(x)) or not np.all(np.isfinite(y)):
+            raise ValueError("replay batch shapes or values are invalid")
+        if self._input_shape is None:
+            self._input_shape = tuple(x.shape[1:])
+            self._target_shape = tuple(y.shape[1:])
+        if tuple(x.shape[1:]) != self._input_shape or tuple(y.shape[1:]) != self._target_shape:
+            raise ValueError("replay feature or target shape changed")
         for row, target in zip(x, y):
             self._seen += 1
             if len(self._inputs) < self.capacity:
@@ -183,11 +198,13 @@ class ReplayBuffer:
     def load_state_dict(self, state: dict[str, Any]) -> None:
         inputs = np.asarray(state["inputs"], dtype=np.float32)
         targets = np.asarray(state["targets"], dtype=np.float32)
-        if inputs.ndim != 2 or targets.ndim != 2 or inputs.shape[0] != targets.shape[0] or inputs.shape[0] > self.capacity:
+        if inputs.ndim != 2 or targets.ndim != 2 or inputs.shape[0] != targets.shape[0] or inputs.shape[0] > self.capacity or not np.all(np.isfinite(inputs)) or not np.all(np.isfinite(targets)):
             raise ValueError("invalid replay state")
         self._seen = int(state["seen"])
-        if self._seen < inputs.shape[0]:
+        if self._seen < 0 or self._seen < inputs.shape[0]:
             raise ValueError("replay seen count is invalid")
+        self._input_shape = tuple(inputs.shape[1:]) if inputs.shape[0] else None
+        self._target_shape = tuple(targets.shape[1:]) if targets.shape[0] else None
         self._inputs = [np.ascontiguousarray(row) for row in inputs]
         self._targets = [np.ascontiguousarray(row) for row in targets]
 
@@ -203,7 +220,7 @@ class TrainingConfig:
     shuffle_buffer: int = 0
 
     def __post_init__(self) -> None:
-        if self.epochs <= 0 or self.batch_size <= 0 or not 0.0 <= self.replay_ratio <= 1.0 or self.max_grad_norm <= 0.0 or self.checkpoint_every < 0 or self.shuffle_buffer < 0:
+        if not isinstance(self.epochs, int) or isinstance(self.epochs, bool) or not isinstance(self.batch_size, int) or isinstance(self.batch_size, bool) or not isinstance(self.checkpoint_every, int) or isinstance(self.checkpoint_every, bool) or not isinstance(self.shuffle_buffer, int) or isinstance(self.shuffle_buffer, bool) or any(not np.isfinite(value) for value in (self.replay_ratio, self.max_grad_norm)) or self.epochs <= 0 or self.batch_size <= 0 or not 0.0 <= self.replay_ratio <= 1.0 or self.max_grad_norm <= 0.0 or self.checkpoint_every < 0 or self.shuffle_buffer < 0:
             raise ValueError("invalid training configuration")
 
 

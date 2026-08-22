@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import math
 import time
 import unittest
 
@@ -74,6 +75,23 @@ class ExecutionPlanTests(unittest.TestCase):
     def test_abi_refuses_mismatch(self):
         with self.assertRaises(PlanError):
             PlanCompiler().compile(model_hash="m", candidates=self.candidates(), constraints=PlanConstraints(0.05, 20000, 2.0, required_abi=2))
+
+    def test_nonfinite_candidate_and_constraint_values_are_rejected(self):
+        with self.assertRaises(PlanError):
+            KernelCandidate("nan", Precision.INT8, 1, math.nan, 0.1, 100, 1.0, proof_hash="p")
+        with self.assertRaises(PlanError):
+            KernelCandidate("inf", Precision.INT8, 1, 0.1, 0.1, 100, math.inf, proof_hash="p")
+        with self.assertRaises(PlanError):
+            PlanConstraints(math.inf, 1000, 1.0)
+        with self.assertRaises(PlanError):
+            PlanConstraints(0.1, 1000, math.nan)
+
+    def test_receipt_rejects_nonfinite_measurements_and_failure_status(self):
+        plan = PlanCompiler().compile(model_hash="m", candidates=self.candidates(), constraints=PlanConstraints(0.05, 20000, 2.0))
+        with self.assertRaises(PlanError):
+            ExecutionReceipt(plan.plan_id, plan.model_hash, plan.kernel_name, plan.precision, plan.core_policy, math.nan, plan.memory_bytes, 0.1, True, time.monotonic_ns()).verify_against(plan)
+        with self.assertRaises(PlanError):
+            ExecutionReceipt(plan.plan_id, plan.model_hash, plan.kernel_name, plan.precision, plan.core_policy, 0.001, plan.memory_bytes, 0.1, False, time.monotonic_ns()).verify_against(plan)
 
     def test_cache_revalidates_tamper(self):
         plan = PlanCompiler().compile(model_hash="m", candidates=self.candidates(), constraints=PlanConstraints(0.05, 20000, 2.0))

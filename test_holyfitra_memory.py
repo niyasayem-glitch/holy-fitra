@@ -51,6 +51,13 @@ class HolyFitraMemoryTests(unittest.TestCase):
         alias.release()
         self.assertEqual(arena.stats.live_bytes, 0)
 
+    def test_allocation_rejects_overflow_sized_or_boolean_shapes(self):
+        arena = UnifiedMemoryArena(1024)
+        with self.assertRaises(MemoryError):
+            arena.allocate((2**32, 2**32), dtype=np.uint8)
+        with self.assertRaises(ValueError):
+            arena.allocate((True, 2), dtype=np.uint8)
+
     def test_arena_exposes_high_water_and_capacity(self):
         arena = UnifiedMemoryArena(4096)
         a = arena.allocate((128,), dtype=np.float32)

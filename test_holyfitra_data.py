@@ -64,6 +64,15 @@ class HolyFitraDatasetTests(unittest.TestCase):
         self.assertLess(history.final_loss, history.initial_loss)
         self.assertLess(evaluate_streaming_mse(model, train, batch_size=5), 0.2)
 
+    def test_batch_and_iterator_contracts_reject_invalid_values(self):
+        dataset = StreamingDataset.from_arrays(np.ones((2, 2), dtype=np.float32), np.ones((2, 1), dtype=np.float32))
+        with self.assertRaises(ValueError):
+            next(dataset.iter_batches(True))
+        with self.assertRaises(ValueError):
+            next(dataset.iter_batches(2, shuffle_buffer=1.5))
+        with self.assertRaises(ValueError):
+            StreamingDataset.from_arrays(np.array([[np.nan, 1.0]], dtype=np.float32), np.zeros((1, 1), dtype=np.float32))
+
     def test_sample_validation_and_one_shot_source_rejection(self):
         with self.assertRaises(ValueError):
             StreamingDataset((sample for sample in [(np.zeros(2), np.zeros(1))]), input_shape=(1,), target_shape=(1,))

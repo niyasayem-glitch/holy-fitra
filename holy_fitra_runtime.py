@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import math
 import threading
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,7 +32,7 @@ class PrivacyLabel(str, Enum):
         return rank[self] <= rank[target]
 
 
-@dataclass(frozen=True)
+@dataclass
 class PrivacyReleasePermit:
     source: PrivacyLabel
     target: PrivacyLabel
@@ -40,6 +41,25 @@ class PrivacyReleasePermit:
     permit_id: str
     expires_at: float
     used: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if not self.permit_id or not self.destination or not self.purpose or not math.isfinite(self.expires_at):
+            raise HolyFitraError("invalid privacy release permit")
+        if self.expires_at < 0.0:
+            raise HolyFitraError("privacy release permit expiry must be non-negative")
+
+    def consume(self, source: PrivacyLabel, target: PrivacyLabel, destination: str, purpose: str, now: float) -> None:
+        with self._lock:
+            if self.used:
+                raise HolyFitraError("privacy release permit has already been used")
+            if not math.isfinite(now) or now >= self.expires_at:
+                raise HolyFitraError("privacy release permit has expired")
+            if self.source is not source or self.target is not target:
+                raise HolyFitraError("privacy release permit labels do not match")
+            if self.destination != destination or self.purpose != purpose:
+                raise HolyFitraError("privacy release permit destination or purpose does not match")
+            self.used = True
 
 
 @dataclass(frozen=True)
@@ -54,19 +74,9 @@ class PrivateValue:
         return PrivateValue(output, output_label, self.provenance + (operation,))
 
     def declassify(self, output: object, target: PrivacyLabel, permit: PrivacyReleasePermit, *, destination: str, purpose: str, now: float) -> "PrivateValue":
-        if permit.used:
-            raise HolyFitraError("privacy release permit has already been used")
-        if now > permit.expires_at:
-            raise HolyFitraError("privacy release permit has expired")
-        if permit.source is not self.label or permit.target is not target:
-            raise HolyFitraError("privacy release permit labels do not match")
-        if permit.destination != destination or permit.purpose != purpose:
-            raise HolyFitraError("privacy release permit destination or purpose does not match")
+        permit.consume(self.label, target, destination, purpose, now)
         if self.label.can_flow_to(target):
             return self.transform(output, target, f"release:{permit.permit_id}")
-        # The immutable permit is deliberately consumed by the caller-owned
-        # issuance record in production. This prototype records its identity
-        # and requires the caller to issue a fresh permit for each release.
         return PrivateValue(output, target, self.provenance + (f"authorized-release:{permit.permit_id}",))
 
 
@@ -90,11 +100,17 @@ class ConsentToken:
     used: bool = False
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
 
+    def __post_init__(self) -> None:
+        if not self.action or not self.scope or not self.token_id or not math.isfinite(self.expires_at):
+            raise HolyFitraError("invalid consent token")
+        if self.expires_at < 0.0:
+            raise HolyFitraError("consent token expiry must be non-negative")
+
     def consume(self, action: str, scope: str, now: float, audience: str = "*") -> None:
         with self._lock:
             if self.used:
                 raise HolyFitraError("consent token has already been consumed")
-            if now > self.expires_at:
+            if not math.isfinite(now) or now >= self.expires_at:
                 raise HolyFitraError("consent token has expired")
             if action != self.action or not scope_allows(self.scope, scope):
                 raise HolyFitraError("consent token scope does not authorize this action")
@@ -135,6 +151,8 @@ class IntentFirewall:
 
     def authorize(self, intent: Intent, *, approved: bool, capability: str | None) -> bool:
         if intent.kind in {IntentKind.DATA, IntentKind.SUGGESTION}:
+            return False
+        if intent.requested_effect not in self.command_effects:
             return False
         if not approved or not capability or capability != intent.requested_effect:
             return False
@@ -200,13 +218,23 @@ class ExecutionProfile:
     threads: int
     network_allowed: bool
 
+    def __post_init__(self) -> None:
+        if not self.name or not self.model_precision or not isinstance(self.draft_k, int) or isinstance(self.draft_k, bool) or self.draft_k < 0 or not isinstance(self.threads, int) or isinstance(self.threads, bool) or self.threads <= 0 or not isinstance(self.network_allowed, bool):
+            raise HolyFitraError("invalid execution profile")
+
 
 @dataclass
 class EnergyPolicy:
     profiles: tuple[ExecutionProfile, ...]
     minimum_battery: float = 0.0
 
+    def __post_init__(self) -> None:
+        if not self.profiles or len({profile.name for profile in self.profiles}) != len(self.profiles) or not math.isfinite(self.minimum_battery) or self.minimum_battery < 0.0:
+            raise HolyFitraError("invalid energy policy")
+
     def choose(self, *, energy_budget: float, battery: float, thermal: str, offline: bool) -> ExecutionProfile:
+        if not math.isfinite(energy_budget) or energy_budget < 0.0 or not math.isfinite(battery) or battery < 0.0 or thermal not in {"cool", "normal", "hot", "critical"} or not isinstance(offline, bool):
+            raise HolyFitraError("invalid energy policy signals")
         if battery < self.minimum_battery or thermal == "critical":
             return min(self.profiles, key=lambda profile: (profile.threads, profile.draft_k))
         candidates = [profile for profile in self.profiles if (not offline or not profile.network_allowed)]
@@ -255,7 +283,7 @@ class GovernedMemory:
     entries: dict[str, MemoryEntry] = field(default_factory=dict)
 
     def write(self, key: str, value: PrivateValue, *, now: float, retention_seconds: float, consent: ConsentToken | None = None) -> None:
-        if retention_seconds <= 0:
+        if not key or not math.isfinite(now) or not math.isfinite(retention_seconds) or retention_seconds <= 0.0:
             raise HolyFitraError("retention must be positive")
         if value.label is not PrivacyLabel.PUBLIC and consent is None:
             raise HolyFitraError("non-public memory requires consent")
@@ -264,6 +292,8 @@ class GovernedMemory:
         self.entries[key] = MemoryEntry(key, value, now, now + retention_seconds, consent.token_id if consent else None)
 
     def read(self, key: str, *, now: float) -> PrivateValue:
+        if not math.isfinite(now):
+            raise HolyFitraError("memory read time must be finite")
         entry = self.entries.get(key)
         if entry is None or now >= entry.expires_at:
             self.entries.pop(key, None)
@@ -271,6 +301,8 @@ class GovernedMemory:
         return entry.value
 
     def purge_expired(self, *, now: float) -> int:
+        if not math.isfinite(now):
+            raise HolyFitraError("memory purge time must be finite")
         expired = [key for key, entry in self.entries.items() if now >= entry.expires_at]
         for key in expired:
             del self.entries[key]
