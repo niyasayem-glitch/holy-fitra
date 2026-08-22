@@ -26,6 +26,7 @@ py-modules = [
   "holyfitra_ai_pipeline",
   "holyfitra_ai_api",
   "holyfitra_agent",
+  "holyfitra_campaign",
   "holyfitra_obsidian",
   "holyfitra_hybrid",
   "holyfitra_telemetry",

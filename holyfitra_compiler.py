@@ -1411,6 +1411,18 @@ def agent_command(root: Path, goal: str, apply: bool, improve_rounds: int, provi
     return 0 if result.get("status") in {"planned", "applied"} or "runs" in result else 1
 
 
+def campaign_command(config: Path, goal: str | None, apply: bool) -> int:
+    from holyfitra_campaign import CampaignError, MultiAICampaign, load_campaign_config
+    try:
+        settings = load_campaign_config(config, goal=goal, apply=apply)
+        result = MultiAICampaign(settings).run()
+    except CampaignError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    return 0 if result.get("summary", {}).get("rolled_back_rounds", 0) == 0 else 1
+
+
 def doctor_report() -> dict[str, object]:
     import importlib.util
     checks: dict[str, object] = {
@@ -1456,6 +1468,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     agent_parser.add_argument("--improve-rounds", type=int, default=0, help="retain only rounds whose validation passes")
     agent_parser.add_argument("--provider")
     agent_parser.add_argument("--model")
+    campaign_parser = subparsers.add_parser("campaign", help="run a bounded multi-AI coding campaign")
+    campaign_parser.add_argument("config", type=Path, help="TOML campaign configuration")
+    campaign_parser.add_argument("--goal", help="override the goal from the configuration")
+    campaign_parser.add_argument("--apply", action="store_true", help="write and validate only on a high-risk/* Git branch")
     ai_parser = subparsers.add_parser("ai", help="use configured AI providers from Holy Fitra")
     ai_subparsers = ai_parser.add_subparsers(dest="ai_command", required=True)
     ai_subparsers.add_parser("providers", help="list provider configuration without exposing credentials")
@@ -1520,6 +1536,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return doctor()
         if args.command == "agent":
             return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
+        if args.command == "campaign":
+            return campaign_command(args.config, args.goal, args.apply)
         if args.command == "ai":
             if args.ai_command == "providers":
                 return ai_providers()

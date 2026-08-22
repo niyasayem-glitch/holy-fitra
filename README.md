@@ -273,7 +273,7 @@ holyfitra check generated/main.hf
 
 The AI layer does not execute model-supplied tools or generated code automatically. Generated Fitra is parsed and validated before it is written, while future tool-calling loops must use the existing capability grants and evidence-verification contracts.
 
-For an AI that can plan, edit, test, debug, build, and safely improve a project for you, use the supervised coding agent. It plans by default and requires explicit `--apply` before writing or running allowlisted checks. See [`HOLY_FITRA_AGENT.md`](HOLY_FITRA_AGENT.md). Use the two-lane development process in [`DEVELOPMENT_LANES.md`](DEVELOPMENT_LANES.md) to isolate high-risk experiments and promote them only after the dedicated gates pass.
+For an AI that can plan, edit, test, debug, build, and safely improve a project for you, use the supervised coding agent. It plans by default and requires explicit `--apply` before writing or running allowlisted checks. See [`HOLY_FITRA_AGENT.md`](HOLY_FITRA_AGENT.md). Use the multi-AI campaign in [`HOLY_FITRA_MULTI_AI_CAMPAIGN.md`](HOLY_FITRA_MULTI_AI_CAMPAIGN.md) to compare independent provider proposals, and use the two-lane development process in [`DEVELOPMENT_LANES.md`](DEVELOPMENT_LANES.md) to isolate high-risk experiments and promote them only after the dedicated gates pass.
 
 ```bash
 holyfitra agent ./my-project 'Add a tested feature to this project.' --provider openai

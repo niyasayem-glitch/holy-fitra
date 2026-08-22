@@ -1,0 +1,22 @@
+[campaign]
+# Run this file from the repository root, or override --goal and workspace.
+workspace = "."
+goal = "Inspect the project, propose the smallest high-value self-improvements, add regression coverage, and preserve only validated changes."
+# Empty means: use every currently configured provider, up to the campaign limit.
+providers = []
+rounds = 3
+max_workers = 3
+# With three providers, two matching plans are required before apply mode selects one.
+min_consensus = 2
+# Plan-only is the default. Apply requires: --apply and a high-risk/* Git branch.
+apply = false
+output = ".holyfitra/campaign/latest.json"
+
+[models]
+# Optional provider-specific overrides. Omit entries to use provider defaults.
+# openai = "gpt-5-mini"
+# anthropic = "claude-sonnet-4-6"
+# gemini = "gemini-3-flash-preview"
+# openrouter = "openai/gpt-4o-mini"
+# ollama = "llama3.2"
+# lmstudio = "local-model"
