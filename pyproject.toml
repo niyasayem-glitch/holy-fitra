@@ -24,6 +24,7 @@ py-modules = [
   "holyfitra_qat",
   "holyfitra_deploy",
   "holyfitra_ai_pipeline",
+  "holyfitra_obsidian",
   "holyfitra_hybrid",
   "holyfitra_telemetry",
   "hyperc_language_core",

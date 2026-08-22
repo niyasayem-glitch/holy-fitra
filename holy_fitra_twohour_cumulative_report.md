@@ -288,3 +288,21 @@ The pipeline refuses empty or non-finite validation data, non-finite model state
 | Python compileall and shell syntax | Passed |
 
 This is a host-validated integration. No physical Android device execution was performed. The next high-impact AI candidates are deterministic distillation with teacher/student quality gates, provenance-aware retrieval evaluation, and a typed agent plan graph. Compiler-native AI syntax remains gated on the self-hosted HIR/type system.
+
+## Obsidian second-brain integration retained
+
+The intended upstream repository was identified as [`kepano/obsidian-skills`](https://github.com/kepano/obsidian-skills), an MIT-licensed collection covering Obsidian Markdown, Bases, JSON Canvas, CLI workflows, and clean web ingestion. Holy Fitra does not copy the repository wholesale. It now contains an independently implemented `holyfitra_obsidian.py` adapter that uses the same open formats and interoperable concepts.
+
+The adapter provides deterministic local-vault indexing, SHA-256 note and snapshot identity, frontmatter and tag parsing, headings and block IDs, Wikilink and Markdown-link resolution, unresolved-link reporting, backlinks, lexical retrieval, context packs, claim-level evidence with source provenance, a capability-gated `obsidian.search` agent tool, JSON Canvas graph export, and Bases YAML export. Vault reads are opt-in and local. Writes require the explicit `obsidian.write` capability. Hidden/configuration directories, parent traversal, symlink escapes, oversized notes, unsupported prediction evidence, and invalid artifact paths fail closed.
+
+| Validation | Result |
+|---|---:|
+| Obsidian-focused tests | Passed; 7 tests |
+| Complete Python regression suite | Passed; 186 tests, 0 failures |
+| Termux-compatible host gate | Passed; 136 tests |
+| No-Python bootstrap gate | Passed |
+| Self-hosted frontend gate | Passed |
+| AArch64 artifact generation | Passed; cross-compilation only |
+| Python compileall and shell syntax | Passed |
+
+No live Obsidian vault was accessed and no live connector was enabled in this task. The integration is ready for a caller-supplied local vault path. Future live CLI or REST/MCP access must remain separately configured and capability-gated.

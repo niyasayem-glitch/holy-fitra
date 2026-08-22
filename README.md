@@ -282,6 +282,22 @@ python3 -m unittest -v \
 
 Native scheduler tests require Clang and the ragged kernel object. `termux-build.sh --host-tests` performs this build on Termux or Linux.
 
+## Obsidian second brain
+Holy Fitra includes an optional privacy-preserving adapter for the open-format workflow documented by [`kepano/obsidian-skills`](https://github.com/kepano/obsidian-skills). It indexes a local Markdown vault deterministically, resolves Wikilinks and backlinks, exposes provenance-bearing claim context to capability-gated agents, and exports compatible `.canvas` and `.base` artifacts.
+
+```python
+from holyfitra_ai_system import ToolRegistry
+from holyfitra_obsidian import ObsidianVaultIndex
+
+index = ObsidianVaultIndex("/path/to/vault")
+print(index.refresh())
+print(index.context_pack("self-hosted compiler", max_chars=8000))
+registry = ToolRegistry()
+index.register_read_tool(registry)
+```
+
+Vault reads are enabled explicitly by the caller. Writes require the `obsidian.write` capability, and imported notes remain `CLAIM` evidence rather than being silently promoted to facts or predictions. See [`HOLY_FITRA_OBSIDIAN_INTEGRATION.md`](HOLY_FITRA_OBSIDIAN_INTEGRATION.md) for privacy boundaries, supported syntax, setup, and attribution.
+
 ## Current boundary
 
 Holy Fitra is beyond a documentation-only prototype: it has an installable CLI that parses, checks, plans, emits LLVM, links native executables, initializes projects, caches compilation, and creates signed package manifests. The remaining major compiler milestone is a self-hosted frontend with full tensor ABI lowering, richer control flow and data types, dependency-aware incremental compilation, and direct Android NDK library packaging.
