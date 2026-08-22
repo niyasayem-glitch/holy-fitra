@@ -98,6 +98,8 @@ jobs:
           PROMOTION_REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git fetch origin "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
           git merge --no-ff --no-edit "origin/${SOURCE_BRANCH}" \
             -m "promote: validated high-risk change" \
