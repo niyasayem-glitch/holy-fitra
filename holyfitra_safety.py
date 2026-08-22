@@ -7,6 +7,8 @@ from pathlib import Path
 
 MAX_SOURCE_BYTES = 8 * 1024 * 1024
 MAX_AST_DEPTH = 512
+MAX_FUNCTIONS = 4096
+MAX_TOKENS = 1 << 16
 MAX_TENSOR_ELEMENTS = 1 << 26
 MAX_TELEMETRY_EVENTS = 500
 
@@ -42,7 +44,9 @@ def read_source(path: Path, *, max_bytes: int = MAX_SOURCE_BYTES) -> str:
 __all__ = [
     "Frontend",
     "MAX_AST_DEPTH",
+    "MAX_FUNCTIONS",
     "MAX_SOURCE_BYTES",
+    "MAX_TOKENS",
     "MAX_TELEMETRY_EVENTS",
     "MAX_TENSOR_ELEMENTS",
     "parse_frontend",

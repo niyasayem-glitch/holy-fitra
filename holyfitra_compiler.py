@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from holyfitra_safety import Frontend, MAX_AST_DEPTH, parse_frontend, read_source
+from holyfitra_safety import Frontend, MAX_AST_DEPTH, MAX_FUNCTIONS, MAX_TOKENS, parse_frontend, read_source
 
 
 _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
@@ -200,6 +200,8 @@ def lex(source: str) -> tuple[Token, ...]:
         text = match.group(0)
         kind = match.lastgroup or ""
         if kind not in {"ws", "comment"}:
+            if len(tokens) >= MAX_TOKENS:
+                raise HolyFitraError(f"source token limit exceeded at {line}:{column}")
             normalized = "ARROW" if kind == "arrow" else "OP" if kind == "cmp" else kind.upper()
             tokens.append(Token(normalized, text, line, column))
         newlines = text.count("\n")
@@ -246,6 +248,8 @@ class Parser:
             module = self.expect("IDENT").text
         functions: list[Function] = []
         while self.current.kind != "EOF":
+            if len(functions) >= MAX_FUNCTIONS and self.current.kind == "IDENT" and self.current.text in {"fn", "hybrid"}:
+                raise HolyFitraError(f"function count exceeds {MAX_FUNCTIONS}")
             if self.accept("IDENT", "capability"):
                 self._skip_balanced_block()
                 continue

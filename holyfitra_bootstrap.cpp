@@ -30,8 +30,9 @@
 namespace hf0 {
 
 constexpr std::size_t kMaxSourceBytes = 8u * 1024u * 1024u;
-constexpr std::size_t kMaxTokens = 1u << 20;
+constexpr std::size_t kMaxTokens = 1u << 16;
 constexpr std::size_t kMaxNesting = 512;
+constexpr std::size_t kMaxFunctions = 4096;
 constexpr std::size_t kMaxArrayElements = 1u << 20;
 constexpr std::size_t kMaxStringBytes = 1u << 20;
 
@@ -94,6 +95,7 @@ public:
     std::vector<Token> run() {
         std::vector<Token> result;
         while (position_ < source_.size()) {
+            if (result.size() >= kMaxTokens) fail("source token limit exceeded", line_, column_);
             const char c = source_[position_];
             if (c == ' ' || c == '\t' || c == '\r' || c == '\n') { advance(); continue; }
             if ((c == '/' && peek(1) == '/') || c == '#') { skipComment(); continue; }
@@ -310,6 +312,7 @@ public:
         Program program;
         if (accept(TokenKind::Identifier,"module")) program.module = expect(TokenKind::Identifier,"module name").text;
         while (!is(TokenKind::Eof)) {
+            if (program.functions.size() >= kMaxFunctions && isText(TokenKind::Identifier,"fn")) fail("function count exceeds v1 limit", current().line, current().column);
             if (accept(TokenKind::Identifier,"struct")) program.structs.push_back(parseStruct());
             else if (accept(TokenKind::Identifier,"fn")) program.functions.push_back(parseFunction());
             else unexpected("struct or function");
