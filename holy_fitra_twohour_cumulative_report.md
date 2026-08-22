@@ -414,3 +414,27 @@ The fixture parses `fn main() -> i32 { var y: i32 = 41; return y + 1; }`, verifi
 | Python compileall and shell syntax | Passed |
 
 State 2 is still a parser-to-arena milestone, not a complete self-hosted compiler. The next step is connecting the parser’s node IDs to declaration collection, deterministic scopes, symbol IDs, canonical type IDs, and structured diagnostics.
+
+## State 3 — declaration collection, name resolution, and canonical annotations retained — 2026-08-22
+
+State 3 now runs semantic passes over the real parser-produced AST node IDs. The fixture reserves symbol ID 0, collects a module-level function declaration, creates a nested function scope, declares the mutable local from its declaration node, resolves the later name-use node through the scope chain, and annotates declaration, literal, name, binary, return, and function nodes with canonical type IDs. Duplicate declarations are rejected in the same scope, unknown names are rejected through semantic traversal, and an `i32` literal assigned to `bool` is rejected through the parsed AST rather than by a direct helper-only check.
+
+The parser child-range implementation was also corrected to stage block and module members before committing ranges, preventing nested parser-created children from being interleaved into parent ranges. Owned strings returned by file reads and buffer finishing are explicitly released through `hf_string_free`; the State-3 semantic fixture passes its own ASAN/UBSan leak check.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-3 semantic fixture | Passed; x86-64 host |
+| Declaration collection | Passed; stable function/local symbol IDs |
+| Name resolution | Passed; nested scope lookup |
+| Canonical type annotation | Passed; literals, names, binary, return, function |
+| Duplicate declaration rejection | Passed |
+| Unknown-name rejection | Passed |
+| Type-mismatch rejection | Passed |
+| State-3 ASAN/UBSan fixture | Passed with leak detection |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-3 object | Passed; 40,672 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 3 is a connected semantic-core milestone, not yet a general self-hosted compiler. The next boundary is structured diagnostic records for semantic failures, followed by typed HIR and CFG-based MIR so LLVM lowering can consume verified semantics rather than AST fixtures.

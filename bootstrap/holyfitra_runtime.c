@@ -157,6 +157,10 @@ _Bool hf_write_text(const char *path, const char *text) {
     return 1;
 }
 
+void hf_string_free(void *opaque) {
+    free(opaque);
+}
+
 void *hf_buf_new(uint64_t capacity) {
     if (capacity == 0 || capacity > HF_MAX_BUFFER_BYTES || capacity == UINT64_MAX) return NULL;
     HF_Buffer *buffer = (HF_Buffer *)calloc(1, sizeof(HF_Buffer));
