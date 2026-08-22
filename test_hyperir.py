@@ -25,6 +25,15 @@ from hyperc_proof_quant import select_matrix
 
 
 class HyperIRTests(unittest.TestCase):
+    def test_hyperir_rejects_invalid_numeric_and_shape_contracts(self):
+        import math
+        with self.assertRaises(HyperIRError):
+            TensorType((True, 4))
+        with self.assertRaises(HyperIRError):
+            EvidenceType(EvidenceKind.PREDICTION, "String", math.nan)
+        with self.assertRaises(HyperIRError):
+            QuantizationProof("m", "sha", "int4", 4, math.nan, 0.9, 0.9, 0.2, 0.8, "kernel", "cpu")
+
     def test_tensor_validation_and_lowering(self):
         with self.assertRaises(HyperIRError):
             TensorType((0, 4))
@@ -51,6 +60,13 @@ class HyperIRTests(unittest.TestCase):
         self.assertFalse(prediction.can_flow_to(fact))
         self.assertTrue(claim.can_flow_to(claim))
 
+    def test_capability_scope_does_not_overgrant_prefix_collisions(self):
+        rule = Capability("files", "read", "/public")
+        self.assertTrue(rule.allows(Capability("files", "read", "/public")))
+        self.assertFalse(rule.allows(Capability("files", "read", "/publicity/report")))
+        slash_rule = Capability("files", "read", "/public/")
+        self.assertTrue(slash_rule.allows(Capability("files", "read", "/public/report")))
+
     def test_capability_policy_deny_overrides_allow(self):
         policy = CapabilityPolicy(
             allow=[Capability("files", "read", "/public/")],
@@ -67,6 +83,28 @@ class HyperIRTests(unittest.TestCase):
         self.assertTrue(passing.verify())
         self.assertFalse(failing.verify())
         self.assertFalse(failing.verified)
+
+    def test_add_requires_matching_dtype(self):
+        ir = HyperIR("dtype")
+        ir.add_value(Value("a", "Tensor", TensorType((2, 2), "f32", "cpu")))
+        ir.add_value(Value("b", "Tensor", TensorType((2, 2), "int8", "cpu")))
+        op = Operation("add", ("a", "b"), ("c",))
+        ir.add_operation(op)
+        ir.add_output_value(op, Value("c", "Tensor", TensorType((2, 2), "f32", "cpu")))
+        self.assertTrue(any("incompatible" in error for error in ir.verify()))
+
+    def test_attention_requires_matching_query_and_key_head_dimensions(self):
+        ir = HyperIR("attention")
+        for name, shape in (("q", (1, 2, 3, 4)), ("k", (1, 2, 5, 8)), ("v", (1, 2, 5, 8))):
+            ir.add_value(Value(name, "Tensor", TensorType(shape, "f16", "neon")))
+        op = Operation("attention", ("q", "k", "v"), ("out",))
+        ir.add_operation(op)
+        ir.add_output_value(op, Value("out", "Tensor", TensorType((1, 2, 3, 4), "f16", "neon")))
+        self.assertTrue(any("head and sequence" in error for error in ir.verify()))
+
+    def test_malformed_text_is_wrapped_as_hyperir_error(self):
+        with self.assertRaises(HyperIRError):
+            HyperIR.from_text('{"format":"holyfitra.hyperir","version":1,"ir":{"name":"x","values":[]}}')
 
     def test_cache_transaction_contracts(self):
         ir = HyperIR("cache")

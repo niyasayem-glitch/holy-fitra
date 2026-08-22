@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import re
 from collections import OrderedDict
 from dataclasses import asdict, dataclass, field
 from enum import Enum
@@ -53,7 +55,7 @@ class TensorType:
     layout: str = "row_major"
 
     def __post_init__(self) -> None:
-        if not self.shape or any(isinstance(dim, int) and dim <= 0 for dim in self.shape):
+        if not self.shape or any((not isinstance(dim, (int, str)) or isinstance(dim, bool) or (isinstance(dim, int) and dim <= 0) or (isinstance(dim, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", dim) is None)) for dim in self.shape):
             raise HyperIRError(f"invalid tensor shape: {self.shape}")
         if self.dtype not in {"f32", "f16", "bf16", "int8", "int4"}:
             raise HyperIRError(f"unsupported dtype: {self.dtype}")
@@ -66,7 +68,7 @@ class TensorType:
         for left, right in zip(self.shape, other.shape):
             if isinstance(left, int) and isinstance(right, int) and left != right:
                 return False
-        return self.device == other.device and self.layout == other.layout
+        return self.dtype == other.dtype and self.device == other.device and self.layout == other.layout
 
     def jsonable(self) -> dict[str, Any]:
         return {"shape": list(self.shape), "dtype": self.dtype, "device": self.device, "layout": self.layout}
@@ -80,8 +82,8 @@ class EvidenceType:
     sources: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
-            raise HyperIRError("confidence must be between 0 and 1")
+        if not self.payload_type or (self.confidence is not None and (not math.isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0)):
+            raise HyperIRError("invalid evidence type")
         if self.kind is EvidenceKind.FACT and not self.sources:
             raise HyperIRError("a Fact requires at least one source")
 
@@ -96,12 +98,21 @@ class Capability:
     operation: str
     scope: str = "*"
 
+    def __post_init__(self) -> None:
+        if not self.resource or not self.operation or not self.scope or "\x00" in self.resource + self.operation + self.scope:
+            raise HyperIRError("invalid capability")
+
     def allows(self, requested: "Capability") -> bool:
         if self.resource != requested.resource or self.operation != requested.operation:
             return False
         if self.scope == "*":
             return True
-        return requested.scope == self.scope or requested.scope.startswith(self.scope.rstrip("*") )
+        if self.scope.endswith("*"):
+            prefix = self.scope[:-1]
+            return requested.scope.startswith(prefix)
+        if self.scope.endswith("/"):
+            return requested.scope.startswith(self.scope)
+        return requested.scope == self.scope
 
 
 @dataclass
@@ -148,11 +159,16 @@ class QuantizationProof:
     device: str
     verified: bool = False
 
+    def __post_init__(self) -> None:
+        if not self.model or not self.calibration_sha256 or not self.kernel or not self.device or self.precision not in {"int4", "int8", "f16", "f32"}:
+            raise HyperIRError("invalid quantization proof identity")
+        if not isinstance(self.group_size, int) or isinstance(self.group_size, bool) or self.group_size <= 0:
+            raise HyperIRError("group_size must be a positive integer")
+        numeric_values = (self.layer_error, self.max_layer_error, self.task_score, self.baseline_task_score, self.minimum_task_score)
+        if any(value is not None and (not math.isfinite(value) or value < 0.0) for value in numeric_values):
+            raise HyperIRError("quantization proof metrics must be finite and non-negative")
+
     def verify(self) -> bool:
-        if self.precision not in {"int4", "int8", "f16", "f32"}:
-            raise HyperIRError(f"unsupported proof precision: {self.precision}")
-        if self.group_size <= 0:
-            raise HyperIRError("group_size must be positive")
         if self.layer_error > self.max_layer_error:
             self.verified = False
             return False
@@ -250,7 +266,7 @@ class HyperIR:
             q, k, v, result = [value.tensor for value in inputs + outputs]
             if len(q.shape) != 4 or len(k.shape) != 4 or len(v.shape) != 4 or len(result.shape) != 4:
                 raise HyperIRError("attention tensors must be rank-4")
-            if q.shape[0] != k.shape[0] or q.shape[1] != k.shape[1] or k.shape[2] != v.shape[2] or k.shape[3] != v.shape[3]:
+            if q.shape[0] != k.shape[0] or q.shape[1] != k.shape[1] or q.shape[3] != k.shape[3] or k.shape[2] != v.shape[2] or k.shape[3] != v.shape[3]:
                 raise HyperIRError("attention head and sequence dimensions disagree")
             if result.shape != q.shape:
                 raise HyperIRError(f"attention output {result.shape} != q shape {q.shape}")
@@ -313,7 +329,10 @@ class HyperIR:
         return plan
 
     def digest(self) -> str:
-        payload = json.dumps(self.to_jsonable(), sort_keys=True, separators=(",", ":"), default=str)
+        try:
+            payload = json.dumps(self.to_jsonable(), sort_keys=True, separators=(",", ":"), allow_nan=False)
+        except (TypeError, ValueError) as error:
+            raise HyperIRError("HyperIR contains non-canonical JSON data") from error
         return hashlib.sha256(payload.encode()).hexdigest()
 
     def to_jsonable(self) -> dict[str, Any]:
@@ -407,7 +426,7 @@ class HyperIR:
                     if output in parsed_values:
                         ir.add_output_value(operation, parsed_values[output])
             ir.quantization_proofs = [QuantizationProof(**proof_data) for proof_data in data.get("quantization_proofs", [])]
-        except (KeyError, TypeError, ValueError, HyperIRError) as exc:
+        except (AttributeError, KeyError, TypeError, ValueError, HyperIRError) as exc:
             raise HyperIRError(f"invalid HyperIR object: {exc}") from exc
         return ir
 
@@ -419,7 +438,7 @@ class HyperIR:
         path.write_text(self.to_text(), encoding="utf-8")
 
     def write_json(self, path: Path) -> None:
-        path.write_text(json.dumps(self.to_jsonable(), indent=2, sort_keys=True, default=str))
+        path.write_text(json.dumps(self.to_jsonable(), indent=2, sort_keys=True, allow_nan=False) + "\n")
 
 
 def demo_ir() -> HyperIR:

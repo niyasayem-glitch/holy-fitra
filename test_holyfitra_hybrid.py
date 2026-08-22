@@ -72,6 +72,15 @@ class HolyFitraHybridTests(unittest.TestCase):
         with self.assertRaisesRegex(HybridFunctionError, "hybrid branch failed"):
             fanout(3)
 
+    def test_hybrid_metadata_and_reducer_types_fail_closed(self):
+        with self.assertRaises(HybridFunctionError):
+            TypedReducer(sum, (int, 1), int)
+        reducer = TypedReducer(sum, int, int)
+        with self.assertRaises(HybridFunctionError):
+            parallel_hybrid("float_workers", double, increment, reducer=reducer, max_workers=1.5)
+        with self.assertRaises(HybridFunctionError):
+            hybrid("bad_effect", double, increment, effects=("",))
+
     def test_arity_and_invalid_composition_fail_closed(self):
         with self.assertRaises(TypeError):
             hybrid("pipeline", double, increment)(1, 2)

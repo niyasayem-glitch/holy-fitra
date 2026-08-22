@@ -306,3 +306,22 @@ The adapter provides deterministic local-vault indexing, SHA-256 note and snapsh
 | Python compileall and shell syntax | Passed |
 
 No live Obsidian vault was accessed and no live connector was enabled in this task. The integration is ready for a caller-supplied local vault path. Future live CLI or REST/MCP access must remain separately configured and capability-gated.
+
+## Deep adversarial hardening continuation retained — 2026-08-22
+
+A second hardening pass targeted the highest-risk AI and runtime boundaries. HyperIR now enforces dtype-safe tensor compatibility, attention head-dimension compatibility, finite evidence and quantization metrics, exact capability scopes, and strict canonical JSON identity. Ragged attention re-verifies payload digests, requires finite float32 payloads, uses int64 offsets, and performs bounded Python-integer work arithmetic. Dynamic prefill rejects non-finite tokens, duplicate sequence identifiers, invalid cost profiles, and stale packed-batch digests.
+
+Speculative decoding now validates finite logits, probability-distribution integrity, plan structure, vocabulary compatibility, strict integer counts, and cache capacity. Android transformer buffers reject boolean dimensions, enforce a one-million-token capacity bound, validate KV shapes, and reject non-finite entries. Hybrid functions validate reducer type tuples, integer worker counts, and non-empty effects. Shared contracts now fail closed on NaN evidence, boolean task capacities, non-integer deadlines, non-finite energy budgets, invalid memory values, and non-positive specialization shapes.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| Termux-compatible host gate | Passed |
+| No-Python bootstrap gate | Passed |
+| Bootstrap sanitizer checks | Passed |
+| Native numerical and NibbleFlow checks | Passed |
+| AArch64 object generation | Passed; artifact validation only |
+| Python compileall and shell syntax | Passed |
+| Audit document append and diff check | Passed |
+
+This milestone is retained because all repairs passed focused and complete regression gates without weakening safety, quality, or quantization proofs. The validation host is x86-64; no physical Android execution, thermal measurement, or device-performance claim is made. The next major self-hosting milestones remain the byte-buffer/string-builder ABI, Holy Fitra symbol table and type checker, self-hosted LLVM emitter, compiler entry point, and Stage-1 fixed-point rebuild.

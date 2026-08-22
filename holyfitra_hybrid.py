@@ -24,10 +24,8 @@ class TypedReducer:
     def __post_init__(self) -> None:
         if not callable(self.function) or not self.name or not self.name.isidentifier():
             raise HybridFunctionError("typed reducer requires a callable and valid name")
-        if not isinstance(self.input_type, tuple) and not isinstance(self.input_type, type):
-            raise HybridFunctionError("reducer input_type must be a type or type tuple")
-        if not isinstance(self.output_type, tuple) and not isinstance(self.output_type, type):
-            raise HybridFunctionError("reducer output_type must be a type or type tuple")
+        if not _valid_type_spec(self.input_type) or not _valid_type_spec(self.output_type):
+            raise HybridFunctionError("reducer types must contain only types")
 
     def __call__(self, values: tuple[Any, ...]) -> Any:
         if not all(isinstance(value, self.input_type) for value in values):
@@ -67,11 +65,11 @@ class HybridFunction:
             raise HybridFunctionError("hybrid components must have unique names")
         if max_steps is None:
             max_steps = len(functions)
-        if max_steps < len(functions) or max_steps > 4096:
+        if not isinstance(max_steps, int) or isinstance(max_steps, bool) or max_steps < len(functions) or max_steps > 4096:
             raise HybridFunctionError("max_steps is outside the safe hybrid bound")
         normalized_effects = tuple(effects)
-        if len(set(normalized_effects)) != len(normalized_effects):
-            raise HybridFunctionError("hybrid effects must be unique")
+        if any(not isinstance(effect, str) or not effect for effect in normalized_effects) or len(set(normalized_effects)) != len(normalized_effects):
+            raise HybridFunctionError("hybrid effects must be unique non-empty strings")
         input_arity = _required_arity(functions[0])
         if mode == "parallel":
             if reducer is None:
@@ -80,7 +78,9 @@ class HybridFunction:
                 raise HybridFunctionError("parallel reducer must be a TypedReducer")
             if any(_required_arity(function) != input_arity for function in functions):
                 raise HybridFunctionError("parallel branches must have the same input arity")
-            requested_workers = 32 if max_workers is None else int(max_workers)
+            if max_workers is not None and (not isinstance(max_workers, int) or isinstance(max_workers, bool)):
+                raise HybridFunctionError("max_workers must be an integer")
+            requested_workers = 32 if max_workers is None else max_workers
             if requested_workers <= 0 or requested_workers > 32:
                 raise HybridFunctionError("max_workers must be between 1 and 32")
             workers = min(len(functions), requested_workers)
@@ -163,6 +163,12 @@ def hybrid(name: str, *functions: Callable[..., Any], effects: tuple[str, ...] =
 
 def parallel_hybrid(name: str, *functions: Callable[..., Any], reducer: TypedReducer, effects: tuple[str, ...] = (), max_steps: int | None = None, max_workers: int | None = None) -> HybridFunction:
     return hybrid(name, *functions, effects=effects, max_steps=max_steps, mode="parallel", reducer=reducer, max_workers=max_workers)
+
+
+def _valid_type_spec(value: type | tuple[type, ...]) -> bool:
+    if isinstance(value, type):
+        return True
+    return isinstance(value, tuple) and bool(value) and all(isinstance(item, type) for item in value)
 
 
 def _required_arity(function: Callable[..., Any]) -> int:

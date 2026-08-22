@@ -28,6 +28,8 @@ class CacheState:
     max_tokens: int = 4096
 
     def begin(self) -> int:
+        if not isinstance(self.max_tokens, int) or isinstance(self.max_tokens, bool) or self.max_tokens <= 0:
+            raise RuntimeError("cache capacity must be a positive integer")
         if len(self.tokens) >= self.max_tokens:
             raise RuntimeError("cache capacity exhausted")
         return len(self.tokens)
@@ -38,7 +40,7 @@ class CacheState:
         del self.tokens[checkpoint:]
 
     def commit(self, checkpoint: int, accepted: list[int]) -> None:
-        if checkpoint != len(self.tokens):
+        if checkpoint != len(self.tokens) or checkpoint < 0:
             raise RuntimeError("transaction was modified before commit")
         if len(self.tokens) + len(accepted) > self.max_tokens:
             raise RuntimeError("speculative commit exceeds cache capacity")
@@ -49,9 +51,10 @@ class MarkovModel:
     """Small deterministic next-token model used to test compiler semantics."""
 
     def __init__(self, logits: np.ndarray, name: str):
-        if logits.ndim != 2 or logits.shape[0] != logits.shape[1]:
-            raise ValueError("logits must be [vocab, vocab]")
-        self.logits = np.asarray(logits, dtype=np.float64)
+        logits = np.asarray(logits, dtype=np.float64)
+        if logits.ndim != 2 or logits.shape[0] != logits.shape[1] or logits.shape[0] <= 0 or not np.all(np.isfinite(logits)) or not name:
+            raise ValueError("logits must be a finite non-empty [vocab, vocab] matrix with a name")
+        self.logits = np.ascontiguousarray(logits)
         self.vocab = logits.shape[0]
         self.name = name
         self.calls = 0
@@ -66,7 +69,10 @@ class MarkovModel:
         self.token_evals += 1
         row = self.logits[state] - np.max(self.logits[state])
         probabilities = np.exp(row)
-        return probabilities / np.sum(probabilities)
+        probabilities /= np.sum(probabilities)
+        if not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0.0) or not np.isclose(float(np.sum(probabilities)), 1.0, rtol=1e-6, atol=1e-6):
+            raise RuntimeError("model produced an invalid probability distribution")
+        return probabilities
 
     def reset_counters(self) -> None:
         self.calls = 0
@@ -74,6 +80,13 @@ class MarkovModel:
 
 
 def sample_distribution(probabilities: np.ndarray, rng: np.random.Generator) -> int:
+    probabilities = np.asarray(probabilities, dtype=np.float64).reshape(-1)
+    if probabilities.size == 0 or not np.all(np.isfinite(probabilities)) or np.any(probabilities < 0.0):
+        raise RuntimeError("invalid sampling distribution")
+    total = float(np.sum(probabilities))
+    if not math.isfinite(total) or total <= 0.0:
+        raise RuntimeError("sampling distribution has no finite mass")
+    probabilities = probabilities / total
     return int(rng.choice(len(probabilities), p=probabilities))
 
 
@@ -82,6 +95,10 @@ class SpeculativePlan:
     draft_k: int = 5
     mode: str = "greedy"
     cache_policy: str = "transactional"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.draft_k, int) or isinstance(self.draft_k, bool) or self.draft_k <= 0 or self.mode not in {"greedy", "sample"} or self.cache_policy != "transactional" or not self.operations:
+            raise ValueError("invalid speculative plan")
     operations: tuple[str, ...] = (
         "draft.propose[k]",
         "target.verify_batch[k]",
@@ -139,6 +156,8 @@ def emit_aarch64_object(plan: SpeculativePlan, output_dir: Path) -> dict[str, ob
 
 class SpeculativeDecoder:
     def __init__(self, draft: MarkovModel, target: MarkovModel, plan: SpeculativePlan, max_tokens: int = 4096, seed: int = 17):
+        if draft.vocab != target.vocab:
+            raise ValueError("draft and target vocabularies must match")
         if plan.draft_k <= 0:
             raise ValueError("draft_k must be positive")
         if plan.mode not in ("greedy", "sample"):
@@ -146,6 +165,8 @@ class SpeculativeDecoder:
         self.draft = draft
         self.target = target
         self.plan = plan
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+            raise ValueError("max_tokens must be a positive integer")
         self.cache = CacheState(max_tokens=max_tokens)
         self.rng = np.random.default_rng(seed)
         self.rounds = 0
@@ -193,7 +214,10 @@ class SpeculativeDecoder:
         accepted: list[int] = []
         for index, token in enumerate(proposal):
             target_p = float(target_distributions[index][token])
-            draft_q = max(float(draft_distributions[index][token]), 1e-12)
+            draft_q = float(draft_distributions[index][token])
+            if not math.isfinite(target_p) or not math.isfinite(draft_q) or target_p < 0.0 or draft_q < 0.0:
+                raise RuntimeError("invalid draft or target probability")
+            draft_q = max(draft_q, 1e-12)
             probability = min(1.0, target_p / draft_q)
             if self.rng.random() <= probability:
                 accepted.append(token)
@@ -224,7 +248,7 @@ class SpeculativeDecoder:
         return emitted
 
     def generate(self, count: int) -> list[int]:
-        if count < 0:
+        if not isinstance(count, int) or isinstance(count, bool) or count < 0:
             raise ValueError("count must be non-negative")
         prefix_len = len(self.cache.tokens)
         output: list[int] = []
@@ -240,6 +264,8 @@ class SpeculativeDecoder:
 
 
 def standard_generate(target: MarkovModel, prefix: list[int], count: int) -> list[int]:
+    if not isinstance(count, int) or isinstance(count, bool) or count < 0 or not all(isinstance(token, int) and not isinstance(token, bool) and 0 <= token < target.vocab for token in prefix):
+        raise ValueError("invalid generation count or prefix")
     output = list(prefix)
     for _ in range(count):
         distribution = target.distribution(output)
@@ -248,6 +274,8 @@ def standard_generate(target: MarkovModel, prefix: list[int], count: int) -> lis
 
 
 def make_models(vocab: int = 32, seed: int = 41) -> tuple[MarkovModel, MarkovModel]:
+    if not isinstance(vocab, int) or isinstance(vocab, bool) or vocab <= 0:
+        raise ValueError("vocab must be a positive integer")
     rng = np.random.default_rng(seed)
     target_logits = rng.normal(0, 0.25, size=(vocab, vocab)).astype(np.float64)
     # A strong self-transition gives the draft a realistic high-acceptance path.

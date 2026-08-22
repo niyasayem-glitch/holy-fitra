@@ -25,6 +25,18 @@ class RaggedAttentionTests(unittest.TestCase):
         padded_cost = 3 * 16 * 16 * 4
         self.assertLess(ragged_cost, padded_cost)
 
+    def test_payload_digest_and_finite_state_are_verified(self):
+        rng = np.random.default_rng(12)
+        rows = [tuple(rng.standard_normal((3, 4)).astype(np.float32) for _ in range(3))]
+        batch = pack_sequences(rows)
+        batch.q[0, 0] = np.nan
+        with self.assertRaises(RaggedAttentionError):
+            batch.validate()
+        batch = pack_sequences(rows)
+        batch.q[0, 0] += 1.0
+        with self.assertRaises(RaggedAttentionError):
+            batch.validate()
+
     def test_offsets_must_be_strictly_increasing(self):
         rng = np.random.default_rng(10)
         rows = [tuple(rng.standard_normal((2, 4)).astype(np.float32) for _ in range(3))]
@@ -32,6 +44,10 @@ class RaggedAttentionTests(unittest.TestCase):
         invalid = RaggedBatch(batch.q, batch.k, batch.v, np.asarray([0, 0], dtype=np.int32), 1, 4, batch.digest)
         with self.assertRaises(RaggedAttentionError):
             invalid.validate()
+
+    def test_dispatch_rejects_non_boolean_flags(self):
+        with self.assertRaises(ValueError):
+            RaggedKernelDispatch(has_neon=1)
 
     def test_dispatch_priority(self):
         self.assertEqual(RaggedKernelDispatch(has_neon=False, has_sve=False).kernel_name(8), "holy_fitra_ragged_attention_scalar")

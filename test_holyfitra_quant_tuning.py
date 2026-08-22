@@ -17,6 +17,17 @@ class HolyFitraQuantTuningTests(unittest.TestCase):
         self.weight = rng.normal(0.0, 0.2, size=(16, 12)).astype(np.float32)
         self.calibration = rng.normal(size=(24, 16)).astype(np.float32)
 
+    def test_quantized_matrix_rejects_nonfinite_inputs_and_thresholds(self):
+        with self.assertRaises(ValueError):
+            QuantizedMatrix.quantize(np.array([[np.nan]], dtype=np.float32), 4, 4)
+        with self.assertRaises(ValueError):
+            QuantizedMatrix.quantize(self.weight, 4, 4, reconstruction_mode="hybrid", max_reconstruction_error=float("nan"))
+        matrix = QuantizedMatrix.quantize(self.weight, 4, 4)
+        with self.assertRaises(ValueError):
+            matrix.matmat(np.full((2, 16), np.inf, dtype=np.float32))
+        with self.assertRaises(ValueError):
+            matrix.configure_reconstruction_cache("f16", max_error=float("nan"))
+
     def test_batched_int4_matches_rowwise_reference(self):
         matrix = QuantizedMatrix.quantize(self.weight, 4, 4)
         batched = batched_matmat(matrix, self.calibration)

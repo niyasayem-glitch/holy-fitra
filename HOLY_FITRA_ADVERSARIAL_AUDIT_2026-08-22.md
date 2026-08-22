@@ -53,3 +53,25 @@ The project still needs coverage-guided fuzzing, concurrency stress under Thread
 ## Retention decision
 
 All repairs listed above passed focused tests and the complete applicable regression matrix. They are retained for publication. No benchmark number is generalized from the sandbox to Android hardware.
+
+## Deep hardening continuation — 2026-08-22
+
+A second adversarial pass found and repaired additional confirmed boundary flaws:
+
+| Subsystem | Confirmed flaw | Retained repair |
+|---|---|---|
+| HyperIR tensor types | Tensor compatibility ignored dtype, allowing unsafe mixed-dtype operations | Compatibility now requires matching dtype, device, layout, and compatible shape |
+| HyperIR attention | Query and key head dimensions were not checked | Rank-4 attention validation now requires matching head dimensions and valid Q/K/V sequence dimensions |
+| HyperIR evidence/proofs | NaN confidence and proof metrics could bypass comparisons | Evidence confidence and quantization metrics must be finite and non-negative |
+| HyperIR capabilities | Scope prefix matching over-granted names such as `/publicity` for `/public` | Exact, slash-delimited, and explicit wildcard matching are separated |
+| HyperIR serialization | `default=str` could silently change unsupported attributes into identity-bearing strings | Canonical digest and JSON output now use strict finite JSON and fail closed |
+| Ragged attention | Mutated payloads retained stale digests; non-finite values and int32 offset overflow were not rejected | Payload digest is reverified, values are finite float32, offsets use int64, and work arithmetic is Python-integer bounded |
+| Dynamic prefill | Non-finite requests, duplicate IDs, invalid policy values, and stale packed batches were accepted | Requests, policies, packed offsets, digests, and token state are validated before execution |
+| Speculative decoding | Invalid logits/probabilities, boolean counts, invalid plans, and vocabulary mismatch were under-validated | Model distributions, plans, cache capacity, generation counts, and residual sampling now fail closed |
+| Android buffers | Boolean dimensions, excessive preallocation, malformed KV entries, and NaN values were accepted | Strict positive integer dimensions, a bounded token capacity, shape checks, and finite KV writes are enforced |
+| Hybrid execution | Malformed reducer type tuples, effects, and floating worker counts could fail during execution | Metadata and reducer type specifications are validated before launch |
+| Shared contracts | NaN evidence, boolean task capacities, invalid deadlines, and non-finite kernel budgets were accepted | Contract constructors and kernel verification now enforce finite, typed, bounded values |
+
+Focused and complete validation after this continuation passed **153 Python tests with 0 failures**. The Termux-compatible host gate passed, the no-Python bootstrap gate passed, sanitizer checks passed, native numerical checks passed, AArch64 object generation passed, and compile/shell checks passed. No physical Android execution is claimed.
+
+The previously recorded 201-test figure in the earlier audit section belongs to an earlier repository state and should not be used as the current count; the current working-tree gate is 153 tests. Architectural gaps remain: full fixed-point self-hosting, coverage-guided fuzzing, ThreadSanitizer concurrency stress, complete tensor ABI lowering, and physical Android-device validation.

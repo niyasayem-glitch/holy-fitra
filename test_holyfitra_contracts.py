@@ -53,6 +53,19 @@ class HolyFitraContractTests(unittest.TestCase):
         with self.assertRaises(ContractError):
             OwnershipContract("x", OwnershipMode.BORROW).moved()
 
+    def test_contract_numeric_boundaries_fail_closed(self):
+        import math
+        with self.assertRaises(ContractError):
+            Evidence("x", EvidenceKind.CLAIM, math.nan, "source")
+        with self.assertRaises(ContractError):
+            TaskSpec("bad", capacity=True)
+        with self.assertRaises(ContractError):
+            TaskSpec("bad", deadline_ms=1.5)
+        kernel = KernelContract("q", "f16", "cpu", "row_major", memory_bytes=1.5)
+        self.assertFalse(kernel.verify().is_ok)
+        with self.assertRaises(ContractError):
+            kernel.specialization_key((0, 4))
+
     def test_task_and_supervisor_contracts(self):
         task = TaskSpec("decode", parent="root", priority=5, deadline_ms=50, capacity=4, effects=("model",))
         supervisor = SupervisorSpec("root", (task,), RestartPolicy.ONCE, max_restarts=2)

@@ -38,8 +38,12 @@ class QuantizedMatrix:
     @classmethod
     def quantize(cls, weight: np.ndarray, bits: int, group_size: int, *, reconstruction_dtype: str = "f32", max_reconstruction_error: float | None = None, reconstruction_mode: str = "f32", promote_after: int = 4, adaptive_alpha: float = 0.5, adaptive_hysteresis: int = 2, adaptive_burst_window_ms: float = 5.0, adaptive_demote_after_ms: float | None = None, adaptive_large_batch_rows: int = 512, adaptive_large_batch_bonus: int = 2) -> "QuantizedMatrix":
         weight = np.asarray(weight, dtype=np.float32)
-        if weight.ndim != 2:
-            raise ValueError("weight must be rank-2 [in, out]")
+        if weight.ndim != 2 or any(dimension <= 0 for dimension in weight.shape) or not np.all(np.isfinite(weight)):
+            raise ValueError("weight must be a finite non-empty rank-2 [in, out] array")
+        if not isinstance(bits, int) or isinstance(bits, bool) or not isinstance(group_size, int) or isinstance(group_size, bool) or group_size <= 0:
+            raise ValueError("bits and group_size must be valid integers")
+        if max_reconstruction_error is not None and (not math.isfinite(max_reconstruction_error) or max_reconstruction_error < 0.0):
+            raise ValueError("max_reconstruction_error must be finite and non-negative")
         if bits not in {4, 8}:
             raise ValueError("only int4 and int8 are supported")
         if bits == 4:
@@ -113,7 +117,7 @@ class QuantizedMatrix:
         self._adaptive_last_access_ns = None
 
     def configure_adaptive_hybrid_cache(self, *, max_error: float | None = None, promote_after: int = 4, alpha: float = 0.5, hysteresis: int = 2, burst_window_ms: float = 5.0, demote_after_ms: float | None = None, large_batch_rows: int = 512, large_batch_bonus: int = 2) -> dict[str, float | int | str]:
-        if promote_after <= 0 or not 0.0 < alpha <= 1.0 or hysteresis <= 0 or burst_window_ms <= 0.0 or (demote_after_ms is not None and demote_after_ms <= 0.0) or large_batch_rows <= 0 or large_batch_bonus < 0:
+        if not isinstance(promote_after, int) or isinstance(promote_after, bool) or not isinstance(hysteresis, int) or isinstance(hysteresis, bool) or not isinstance(large_batch_rows, int) or isinstance(large_batch_rows, bool) or not isinstance(large_batch_bonus, int) or isinstance(large_batch_bonus, bool) or not all(math.isfinite(value) for value in (alpha, burst_window_ms)) or (demote_after_ms is not None and not math.isfinite(demote_after_ms)) or promote_after <= 0 or not 0.0 < alpha <= 1.0 or hysteresis <= 0 or burst_window_ms <= 0.0 or (demote_after_ms is not None and demote_after_ms <= 0.0) or large_batch_rows <= 0 or large_batch_bonus < 0:
             raise ValueError("invalid adaptive promotion policy")
         result = self.configure_reconstruction_cache("f16", max_error=max_error)
         self._adaptive_promote_after = promote_after
@@ -144,8 +148,8 @@ class QuantizedMatrix:
         return {"promote_after": threshold, "large_batch_bonus": bonus}
 
     def configure_hybrid_reconstruction_cache(self, *, max_error: float | None = None, promote_after: int = 4) -> dict[str, float | int | str]:
-        if promote_after <= 0:
-            raise ValueError("promote_after must be positive")
+        if not isinstance(promote_after, int) or isinstance(promote_after, bool) or promote_after <= 0:
+            raise ValueError("promote_after must be a positive integer")
         result = self.configure_reconstruction_cache("f16", max_error=max_error)
         self._hybrid_promote_after = promote_after
         self._matmat_calls = 0
@@ -176,6 +180,8 @@ class QuantizedMatrix:
             raise ValueError("reconstruction cache dtype must be f32 or f16")
         if dtype == "f16" and max_error is None:
             raise ValueError("float16 reconstruction cache requires max_error")
+        if max_error is not None and (not math.isfinite(max_error) or max_error < 0.0):
+            raise ValueError("reconstruction cache max_error must be finite and non-negative")
         reconstructed = np.ascontiguousarray(self.packed.reconstruct(), dtype=np.float32)
         candidate = reconstructed if dtype == "f32" else np.ascontiguousarray(reconstructed, dtype=np.float16)
         error = 0.0 if dtype == "f32" else float(np.max(np.abs(reconstructed - candidate.astype(np.float32))))
@@ -219,6 +225,9 @@ class QuantizedMatrix:
         return self._reconstruction_dtype
 
     def matvec(self, vector: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+        vector = np.asarray(vector, dtype=np.float32).reshape(-1)
+        if not np.all(np.isfinite(vector)):
+            raise ValueError("vector must contain finite values")
         if hasattr(self.packed, "matvec_reference"):
             result = self.packed.matvec_reference(vector)
         else:
@@ -230,7 +239,7 @@ class QuantizedMatrix:
 
     def matmat(self, matrix: np.ndarray, *, access_timestamp_ns: int | None = None) -> np.ndarray:
         matrix = np.ascontiguousarray(matrix, dtype=np.float32)
-        if matrix.ndim != 2 or matrix.shape[1] != self._raw_shape[0]:
+        if matrix.ndim != 2 or matrix.shape[0] <= 0 or matrix.shape[1] != self._raw_shape[0] or not np.all(np.isfinite(matrix)):
             raise ValueError("matrix dimension mismatch")
         if self.bits == 4:
             if self._reconstructed_weight is None:
@@ -275,6 +284,8 @@ class QuantizedAndroidMHA:
     def __init__(self, attention, max_tokens: int, bits: int = 4, group_size: int = 16):
         from hyperc_android_transformer import AndroidBuffers
 
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens <= 0:
+            raise ValueError("max_tokens must be a positive integer")
         self.attention = attention
         self.spec = attention.spec
         self.head_dim = attention.head_dim
@@ -301,8 +312,8 @@ class QuantizedAndroidMHA:
 
     def decode_one(self, token: np.ndarray) -> np.ndarray:
         token = np.asarray(token, dtype=np.float32).reshape(-1)
-        if token.size != self.spec.d_model:
-            raise ValueError("token dimension mismatch")
+        if token.size != self.spec.d_model or not np.all(np.isfinite(token)):
+            raise ValueError("token dimension or finite-state mismatch")
         query = self.wq.matvec(token).reshape(self.spec.heads, self.head_dim)
         key = self.wk.matvec(token).reshape(self.spec.heads, self.head_dim)
         value = self.wv.matvec(token).reshape(self.spec.heads, self.head_dim)

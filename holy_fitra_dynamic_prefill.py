@@ -24,7 +24,7 @@ class SequenceRequest:
 
     @property
     def length(self) -> int:
-        if self.tokens.ndim != 2 or self.tokens.shape[0] <= 0:
+        if not self.request_id or not isinstance(self.deadline_ns, int) or isinstance(self.deadline_ns, bool) or self.deadline_ns < 0 or not isinstance(self.priority, int) or isinstance(self.priority, bool) or not isinstance(self.cancelled, bool) or self.tokens.ndim != 2 or self.tokens.shape[0] <= 0 or self.tokens.shape[1] <= 0:
             raise PrefillError(f"request {self.request_id} has invalid token shape")
         return int(self.tokens.shape[0])
 
@@ -39,7 +39,7 @@ class KVLease:
 
 class KVPagePool:
     def __init__(self, capacity_tokens: int):
-        if capacity_tokens <= 0:
+        if not isinstance(capacity_tokens, int) or isinstance(capacity_tokens, bool) or capacity_tokens <= 0:
             raise ValueError("capacity_tokens must be positive")
         self.capacity = capacity_tokens
         self._used = 0
@@ -47,6 +47,8 @@ class KVPagePool:
         self._leases: dict[str, KVLease] = {}
 
     def reserve(self, request_id: str, length: int) -> KVLease:
+        if not request_id or not isinstance(length, int) or isinstance(length, bool):
+            raise PrefillError("invalid KV lease request")
         if request_id in self._leases:
             raise PrefillError("request already owns a KV lease")
         if length <= 0 or self._used + length > self.capacity:
@@ -82,6 +84,19 @@ class PackedMicroBatch:
     digest: str
     kv_leases: tuple[KVLease, ...] = ()
 
+    def validate(self) -> None:
+        if not self.requests or self.tokens.dtype != np.dtype(np.float32) or self.tokens.ndim != 2 or self.tokens.shape[0] <= 0 or self.offsets.dtype.kind not in "iu" or self.lengths.dtype.kind not in "iu":
+            raise PrefillError("invalid packed microbatch arrays")
+        if len({request.request_id for request in self.requests}) != len(self.requests):
+            raise PrefillError("packed microbatch contains duplicate request IDs")
+        if self.offsets.shape != (len(self.requests) + 1,) or self.lengths.shape != (len(self.requests),) or int(self.offsets[0]) != 0 or int(self.offsets[-1]) != self.tokens.shape[0] or not np.array_equal(np.diff(self.offsets), self.lengths) or np.any(self.lengths <= 0) or self.padded_length <= 0:
+            raise PrefillError("packed microbatch offsets or lengths are invalid")
+        if any(request.tokens.dtype not in (np.float16, np.float32) or request.tokens.shape[1] != self.tokens.shape[1] or not np.all(np.isfinite(request.tokens)) for request in self.requests) or not np.all(np.isfinite(self.tokens)):
+            raise PrefillError("packed microbatch token values are invalid")
+        expected = hashlib.sha256(b"".join(request.request_id.encode() + request.tokens.tobytes() for request in self.requests)).hexdigest()
+        if self.digest != expected:
+            raise PrefillError("packed microbatch digest does not match payload")
+
     @property
     def batch_size(self) -> int:
         return len(self.requests)
@@ -98,12 +113,17 @@ class PrefillCostProfile:
     max_padding_ratio: float = 1.25
     min_fused_sequences: int = 4
 
+    def __post_init__(self) -> None:
+        if any(not math.isfinite(value) or value < 0.0 for value in (self.scalar_launch_cost, self.fused_launch_cost, self.max_padding_ratio)) or not isinstance(self.min_fused_sequences, int) or isinstance(self.min_fused_sequences, bool) or self.min_fused_sequences <= 0:
+            raise ValueError("invalid prefill cost profile")
+
 
 class AdaptivePrefillPolicy:
     def __init__(self, profile: PrefillCostProfile | None = None):
         self.profile = profile or PrefillCostProfile()
 
     def choose(self, batch: PackedMicroBatch) -> str:
+        batch.validate()
         if batch.batch_size < self.profile.min_fused_sequences:
             return "scalar"
         padding_ratio = (batch.batch_size * batch.padded_length) / max(1, batch.token_count)
@@ -116,7 +136,7 @@ class AdaptivePrefillPolicy:
 
 class DynamicPrefillPacker:
     def __init__(self, *, bucket_width: int = 8, max_tokens: int = 2048, max_sequences: int = 32):
-        if bucket_width <= 0 or max_tokens <= 0 or max_sequences <= 0:
+        if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in (bucket_width, max_tokens, max_sequences)):
             raise ValueError("bucket_width, max_tokens, and max_sequences must be positive")
         self.bucket_width = bucket_width
         self.max_tokens = max_tokens
@@ -129,6 +149,8 @@ class DynamicPrefillPacker:
         _ = request.length
         if request.tokens.dtype not in (np.float16, np.float32):
             raise PrefillError("tokens must be float16 or float32")
+        if not np.all(np.isfinite(request.tokens)):
+            raise PrefillError("tokens must be finite")
         if request.cancelled:
             raise PrefillError("request cancelled")
         if request.deadline_ns and request.deadline_ns < now_ns:
@@ -136,9 +158,15 @@ class DynamicPrefillPacker:
 
     def pack(self, requests: Iterable[SequenceRequest], *, now_ns: int | None = None, kv_pool: KVPagePool | None = None) -> list[PackedMicroBatch]:
         now = time.monotonic_ns() if now_ns is None else now_ns
+        if not isinstance(now, int) or isinstance(now, bool) or now < 0:
+            raise PrefillError("now_ns must be a non-negative integer")
         valid: list[SequenceRequest] = []
+        seen_ids: set[str] = set()
         for request in requests:
             self._validate(request, now)
+            if request.request_id in seen_ids:
+                raise PrefillError("duplicate request ID")
+            seen_ids.add(request.request_id)
             valid.append(request)
         valid.sort(key=lambda request: (self.bucket_for(request.length), -request.priority, request.deadline_ns or (1 << 63)))
         batches: list[PackedMicroBatch] = []
@@ -150,9 +178,9 @@ class DynamicPrefillPacker:
             nonlocal current, current_bucket, current_tokens
             if not current:
                 return
-            lengths = np.asarray([request.length for request in current], dtype=np.int32)
-            offsets = np.zeros(len(current) + 1, dtype=np.int32)
-            offsets[1:] = np.cumsum(lengths, dtype=np.int32)
+            lengths = np.asarray([request.length for request in current], dtype=np.int64)
+            offsets = np.zeros(len(current) + 1, dtype=np.int64)
+            offsets[1:] = np.cumsum(lengths, dtype=np.int64)
             tokens = np.concatenate([request.tokens.astype(np.float32, copy=False) for request in current], axis=0)
             padded_length = max(lengths.tolist())
             deadline_values = [request.deadline_ns for request in current if request.deadline_ns]
@@ -163,7 +191,9 @@ class DynamicPrefillPacker:
             if kv_pool is not None:
                 for request in current:
                     leases.append(kv_pool.reserve(request.request_id, request.length))
-            batches.append(PackedMicroBatch(list(current), tokens, offsets, lengths, padded_length, int(current_bucket), deadline, digest, tuple(leases)))
+            batch = PackedMicroBatch(list(current), tokens, offsets, lengths, padded_length, int(current_bucket), deadline, digest, tuple(leases))
+            batch.validate()
+            batches.append(batch)
             current = []
             current_bucket = None
             current_tokens = 0
@@ -183,6 +213,8 @@ class ToyCausalPrefill:
     """Reference causal attention with a padded batched implementation."""
 
     def __init__(self, d_model: int, seed: int = 7):
+        if not isinstance(d_model, int) or isinstance(d_model, bool) or d_model <= 0:
+            raise ValueError("d_model must be a positive integer")
         rng = np.random.default_rng(seed)
         self.d_model = d_model
         scale = 1.0 / math.sqrt(d_model)
@@ -192,6 +224,9 @@ class ToyCausalPrefill:
         self.wo = (rng.standard_normal((d_model, d_model)) * scale).astype(np.float32)
 
     def single(self, tokens: np.ndarray) -> np.ndarray:
+        tokens = np.asarray(tokens, dtype=np.float32)
+        if tokens.ndim != 2 or tokens.shape[1] != self.d_model or tokens.shape[0] <= 0 or not np.all(np.isfinite(tokens)):
+            raise PrefillError("tokens must be a finite non-empty [length, d_model] array")
         q = tokens @ self.wq
         k = tokens @ self.wk
         v = tokens @ self.wv
@@ -204,6 +239,7 @@ class ToyCausalPrefill:
         return (weights @ v) @ self.wo
 
     def packed_bucket(self, batch: PackedMicroBatch) -> dict[str, np.ndarray]:
+        batch.validate()
         bsz = batch.batch_size
         length = batch.padded_length
         padded = np.zeros((bsz, length, self.d_model), dtype=np.float32)

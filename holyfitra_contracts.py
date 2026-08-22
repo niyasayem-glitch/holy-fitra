@@ -12,6 +12,7 @@ from enum import Enum
 from typing import Generic, Iterable, Sequence, TypeVar
 import hashlib
 import json
+import math
 
 T = TypeVar("T")
 E = TypeVar("E")
@@ -90,8 +91,8 @@ class Evidence(Generic[T]):
     provenance: str
 
     def __post_init__(self) -> None:
-        if not 0.0 <= self.confidence <= 1.0:
-            raise ContractError("evidence confidence must be between 0 and 1")
+        if not math.isfinite(self.confidence) or not 0.0 <= self.confidence <= 1.0:
+            raise ContractError("evidence confidence must be finite and between 0 and 1")
         if not self.provenance:
             raise ContractError("evidence provenance is required")
 
@@ -136,12 +137,12 @@ class TaskSpec:
     effects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.capacity <= 0:
-            raise ContractError("task capacity must be positive")
-        if self.deadline_ms is not None and self.deadline_ms <= 0:
-            raise ContractError("task deadline must be positive")
-        if len(set(self.effects)) != len(self.effects):
-            raise ContractError("task effects must be unique")
+        if not self.name or not isinstance(self.capacity, int) or isinstance(self.capacity, bool) or self.capacity <= 0:
+            raise ContractError("task name and capacity must be valid")
+        if self.deadline_ms is not None and (not isinstance(self.deadline_ms, int) or isinstance(self.deadline_ms, bool) or self.deadline_ms <= 0):
+            raise ContractError("task deadline must be a positive integer")
+        if not isinstance(self.priority, int) or isinstance(self.priority, bool) or not isinstance(self.cancelable, bool) or any(not isinstance(effect, str) or not effect for effect in self.effects) or len(set(self.effects)) != len(self.effects):
+            raise ContractError("task priority, cancellation, or effects are invalid")
 
 
 class RestartPolicy(str, Enum):
@@ -188,8 +189,8 @@ class SupervisorSpec:
     fallback: str = "safe"
 
     def __post_init__(self) -> None:
-        if self.max_restarts < 0:
-            raise ContractError("max_restarts cannot be negative")
+        if not self.name or not isinstance(self.max_restarts, int) or isinstance(self.max_restarts, bool) or self.max_restarts < 0:
+            raise ContractError("supervisor name or restart bound is invalid")
         names = [child.name for child in self.children]
         if len(names) != len(set(names)):
             raise ContractError("supervisor child names must be unique")
@@ -231,12 +232,18 @@ class KernelContract:
     required_effects: tuple[str, ...] = ()
 
     def specialization_key(self, shape: Sequence[int] = ()) -> KernelSpecializationKey:
+        if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in shape):
+            raise ContractError("kernel specialization shape must contain positive integers")
         fallback = self.fallbacks[0] if self.fallbacks else "f16"
-        return KernelSpecializationKey(self.name, self.dtype, self.device, self.layout, tuple(int(value) for value in shape), self.quantization_proof, fallback)
+        return KernelSpecializationKey(self.name, self.dtype, self.device, self.layout, tuple(shape), self.quantization_proof, fallback)
 
     def verify(self, *, available_memory: int | None = None, allowed_effects: Iterable[str] = ()) -> Result["KernelContract", str]:
-        if self.memory_bytes is not None and self.memory_bytes < 0:
-            return Result.err("kernel memory_bytes cannot be negative")
+        if self.memory_bytes is not None and (not isinstance(self.memory_bytes, int) or isinstance(self.memory_bytes, bool) or self.memory_bytes < 0):
+            return Result.err("kernel memory_bytes must be a non-negative integer")
+        if available_memory is not None and (not isinstance(available_memory, int) or isinstance(available_memory, bool) or available_memory < 0):
+            return Result.err("available_memory must be a non-negative integer")
+        if self.energy_budget_mj is not None and (not math.isfinite(self.energy_budget_mj) or self.energy_budget_mj < 0.0):
+            return Result.err("kernel energy_budget_mj must be finite and non-negative")
         if available_memory is not None and self.memory_bytes is not None and self.memory_bytes > available_memory:
             return Result.err("kernel exceeds available memory")
         allowed = set(allowed_effects)

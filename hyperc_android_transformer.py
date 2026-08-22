@@ -7,6 +7,9 @@ from dataclasses import dataclass
 import numpy as np
 
 
+_MAX_ANDROID_BUFFER_TOKENS = 1_000_000
+
+
 @dataclass
 class AndroidBuffers:
     max_tokens: int
@@ -15,8 +18,11 @@ class AndroidBuffers:
     d_model: int
 
     def __post_init__(self) -> None:
-        if min(self.max_tokens, self.heads, self.head_dim, self.d_model) <= 0:
-            raise ValueError("Android buffer dimensions must be positive")
+        dimensions = (self.max_tokens, self.heads, self.head_dim, self.d_model)
+        if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in dimensions):
+            raise ValueError("Android buffer dimensions must be positive integers")
+        if self.max_tokens > _MAX_ANDROID_BUFFER_TOKENS:
+            raise ValueError("Android buffer token capacity exceeds safety limit")
         self.keys = np.zeros((self.max_tokens, self.heads, self.head_dim), dtype=np.float32)
         self.values = np.zeros_like(self.keys)
         self.output = np.zeros((self.d_model,), dtype=np.float32)
@@ -32,8 +38,13 @@ class AndroidBuffers:
     def append(self, keys: np.ndarray, values: np.ndarray) -> None:
         if self.length >= self.max_tokens:
             raise ValueError("Android KV buffer capacity exceeded")
-        key = np.asarray(keys, dtype=np.float32).reshape(self.heads, self.head_dim)
-        value = np.asarray(values, dtype=np.float32).reshape(self.heads, self.head_dim)
+        try:
+            key = np.asarray(keys, dtype=np.float32).reshape(self.heads, self.head_dim)
+            value = np.asarray(values, dtype=np.float32).reshape(self.heads, self.head_dim)
+        except (TypeError, ValueError) as error:
+            raise ValueError("Android KV entries have invalid shape") from error
+        if not np.all(np.isfinite(key)) or not np.all(np.isfinite(value)):
+            raise ValueError("Android KV entries must be finite")
         self.keys[self.length] = key
         self.values[self.length] = value
         self.length += 1
