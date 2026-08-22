@@ -277,6 +277,7 @@ static const std::vector<Function>& builtinFunctions() {
         result.emplace_back(Function{"hf_read_text", {{"path", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::String), {}, 0, true});
         result.emplace_back(Function{"hf_write_text", {{"path", Type::scalar(TypeKind::String)}, {"text", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::Bool), {}, 0, true});
         result.emplace_back(Function{"hf_string_free", {{"text", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::Void), {}, 0, true});
+        result.emplace_back(Function{"hf_path_canonicalize", {{"path", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::String), {}, 0, true});
         result.emplace_back(Function{"hf_buf_new", {{"capacity", Type::scalar(TypeKind::I64)}}, Type::scalar(TypeKind::Buffer), {}, 0, true});
         result.emplace_back(Function{"hf_buf_append_byte", {{"buffer", Type::scalar(TypeKind::Buffer)}, {"value", Type::scalar(TypeKind::I32)}}, Type::scalar(TypeKind::Bool), {}, 0, true});
         result.emplace_back(Function{"hf_buf_append_str", {{"buffer", Type::scalar(TypeKind::Buffer)}, {"text", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::Bool), {}, 0, true});

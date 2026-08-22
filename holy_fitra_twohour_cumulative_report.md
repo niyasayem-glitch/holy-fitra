@@ -486,3 +486,29 @@ A cycle-state defect found during adversarial execution was repaired by making f
 | Python compileall and shell syntax | Passed |
 
 This is the module-graph and table foundation, not yet a general filesystem-backed multi-file compiler. The next boundary is to load actual module files, canonicalize paths, parse import declarations, resolve exported symbols by source names rather than fixture-provided edges, and carry the resulting diagnostics into typed HIR.
+
+## State 6 — filesystem-backed module loading and inter-module resolution retained — 2026-08-22
+
+State 6 replaces fixture-provided import edges with real source-file loading. The bootstrap runtime now exposes bounded lexical path canonicalization: it normalizes repeated separators, `.` and `..` segments, rejects traversal above an absolute root, limits path size, and returns owned strings. The self-hosted loader canonicalizes each module path, reads source text through the bounded file API, extracts module declarations, parses import and public/private export declarations, and constructs deterministic module and symbol tables from the files.
+
+Inter-module resolution matches target module identity hashes plus name lengths, resolves imported symbol hashes plus lengths, enforces public visibility, and uses terminal graph states to deduplicate cycle errors. The repository includes core, app, private-visibility, missing-dependency, and cyclic module fixtures. A non-canonical app path resolves successfully, the private import produces `HF4004`, the missing module produces `HF4001`, and the cycle produces one `HF4002`. Graph snapshots are written atomically and compare byte-for-byte across repeated executions.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-6 filesystem loader | Passed; x86-64 host |
+| Path canonicalization | Passed; normalization and traversal rejection |
+| Source-file loading | Passed; six repository fixtures |
+| Public export resolution | Passed; `core.answer` |
+| Private export rejection | Passed; `HF4004` |
+| Missing module rejection | Passed; `HF4001` |
+| Cycle rejection | Passed; one `HF4002` |
+| Graph snapshot determinism | Passed; byte-identical repeated runs |
+| Runtime canonicalizer sanitizer tests | Passed under ASAN/UBSan |
+| State-6 ASAN/UBSan | Passed with leak detection |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-6 object | Passed; 19,024 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 6 is the filesystem-backed module-graph foundation, not yet a complete multi-file compiler. The next boundary is to retain source text and parser AST arenas per module, merge their export signatures into the self-hosted type checker, and lower the resolved module graph into typed HIR with cross-module call validation.

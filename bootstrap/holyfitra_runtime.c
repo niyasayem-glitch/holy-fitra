@@ -157,6 +157,57 @@ _Bool hf_write_text(const char *path, const char *text) {
     return 1;
 }
 
+char *hf_path_canonicalize(const char *path) {
+    if (!path || path[0] == '\0') return NULL;
+    size_t length = strlen(path);
+    if (length >= HF_MAX_PATH_BYTES) return NULL;
+    _Bool absolute = path[0] == '/';
+    size_t segment_starts[256];
+    size_t segment_lengths[256];
+    size_t segment_count = 0;
+    size_t index = 0;
+    while (index < length) {
+        while (index < length && path[index] == '/') index++;
+        if (index >= length) break;
+        size_t start = index;
+        while (index < length && path[index] != '/') index++;
+        size_t segment_length = index - start;
+        if (segment_length == 1 && path[start] == '.') continue;
+        if (segment_length == 2 && path[start] == '.' && path[start + 1] == '.') {
+            if (segment_count > 0 && !(segment_lengths[segment_count - 1] == 2 && path[segment_starts[segment_count - 1]] == '.' && path[segment_starts[segment_count - 1] + 1] == '.')) {
+                segment_count--;
+                continue;
+            }
+            if (absolute) return NULL;
+        }
+        if (segment_count >= 256) return NULL;
+        segment_starts[segment_count] = start;
+        segment_lengths[segment_count] = segment_length;
+        segment_count++;
+    }
+    char *result = (char *)calloc((size_t)HF_MAX_PATH_BYTES, 1);
+    if (!result) return NULL;
+    size_t output_length = 0;
+    if (absolute) result[output_length++] = '/';
+    for (size_t segment_index = 0; segment_index < segment_count; segment_index++) {
+        if (output_length > 0 && result[output_length - 1] != '/') result[output_length++] = '/';
+        size_t segment_length = segment_lengths[segment_index];
+        if (output_length + segment_length >= HF_MAX_PATH_BYTES) {
+            free(result);
+            return NULL;
+        }
+        memcpy(result + output_length, path + segment_starts[segment_index], segment_length);
+        output_length += segment_length;
+    }
+    if (output_length == 0) {
+        result[0] = absolute ? '/' : '.';
+        result[1] = '\0';
+    } else {
+        result[output_length] = '\0';
+    }
+    return result;
+}
+
 void hf_string_free(void *opaque) {
     free(opaque);
 }

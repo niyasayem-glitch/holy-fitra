@@ -20,6 +20,7 @@ _Bool hf_buf_append_i32(void *, int32_t);
 char *hf_buf_finish(void *);
 void hf_buf_free(void *);
 void hf_string_free(void *);
+char *hf_path_canonicalize(const char *);
 _Bool hf_write_text(const char *, const char *);
 
 int main(void) {
@@ -37,6 +38,19 @@ int main(void) {
     hf_dyn_i32_free(array);
     assert(hf_file_open("/path/that/does/not/exist") == NULL);
     assert(hf_read_text("/path/that/does/not/exist") == NULL);
+    char *canonical = hf_path_canonicalize("/a/./b/../c");
+    assert(canonical != NULL);
+    assert(strcmp(canonical, "/a/c") == 0);
+    hf_string_free(canonical);
+    canonical = hf_path_canonicalize("a/../b");
+    assert(canonical != NULL);
+    assert(strcmp(canonical, "b") == 0);
+    hf_string_free(canonical);
+    assert(hf_path_canonicalize("/../../escape") == NULL);
+    char too_long_path[4097];
+    memset(too_long_path, 'x', sizeof(too_long_path) - 1);
+    too_long_path[sizeof(too_long_path) - 1] = '\0';
+    assert(hf_path_canonicalize(too_long_path) == NULL);
 
     assert(hf_buf_new(0) == NULL);
     assert(hf_buf_new(((uint64_t)64u << 20) + 1) == NULL);
