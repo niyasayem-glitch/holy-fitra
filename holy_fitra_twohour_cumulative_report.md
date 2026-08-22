@@ -462,3 +462,27 @@ The diagnostic driver now parses and semantically checks unknown-name, duplicate
 | Python compileall and shell syntax | Passed |
 
 State 4 establishes structured reporting but is not yet the final CLI diagnostic pipeline. The next boundary is to carry diagnostic records through the actual self-hosted module driver and then lower accepted, fully annotated ASTs into typed HIR.
+
+## State 5 — self-hosted module graph and export/import tables retained — 2026-08-22
+
+State 5 adds a Stage-0-compilable module-driver foundation. Module identities are assigned deterministically in source order, module names are extracted from source bytes through the bounded buffer ABI, and graph resolution uses explicit unseen/visiting/resolved/error states. Export tables record module ownership, public/private visibility, canonical name length, stable name hash, and type ID. Import edges are resolved through the graph driver, private exports are rejected, missing targets produce `HF4001`, and cycles produce one idempotent `HF4002` diagnostic rather than duplicate reports from repeated traversal.
+
+A cycle-state defect found during adversarial execution was repaired by making failed modules terminal error states. An additional export-name length check reduces false matches from hash-only lookup. The graph snapshot records module IDs, identity hashes, source IDs, terminal states, import edges, and diagnostics; repeated executions are byte-identical. The raw-byte append runtime primitive was added with bounds checking and direct ASAN/UBSan coverage.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-5 module-driver fixture | Passed; x86-64 host |
+| Deterministic module IDs | Passed; IDs 0–4 stable |
+| Export lookup and visibility | Passed; public export resolves, private export rejects |
+| Cycle detection | Passed; one `HF4002` diagnostic |
+| Missing-module detection | Passed; one `HF4001` diagnostic |
+| Terminal error-state deduplication | Passed |
+| State-5 ASAN/UBSan with leak detection | Passed |
+| Runtime byte-append tests | Passed |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-5 object | Passed; 14,160 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+This is the module-graph and table foundation, not yet a general filesystem-backed multi-file compiler. The next boundary is to load actual module files, canonicalize paths, parse import declarations, resolve exported symbols by source names rather than fixture-provided edges, and carry the resulting diagnostics into typed HIR.

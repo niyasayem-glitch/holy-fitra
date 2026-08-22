@@ -183,6 +183,12 @@ static _Bool hf_buf_append_bytes(HF_Buffer *buffer, const char *text, uint64_t l
     return 1;
 }
 
+_Bool hf_buf_append_byte(void *opaque, int32_t value) {
+    if (value < 0 || value > 255) return 0;
+    char byte = (char)value;
+    return hf_buf_append_bytes((HF_Buffer *)opaque, &byte, 1);
+}
+
 _Bool hf_buf_append_str(void *opaque, const char *text) {
     HF_Buffer *buffer = (HF_Buffer *)opaque;
     if (!text) return 0;

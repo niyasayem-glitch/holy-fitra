@@ -14,6 +14,7 @@ void *hf_file_read_all(void *);
 void hf_file_close(void *);
 void *hf_read_text(const char *);
 void *hf_buf_new(uint64_t);
+_Bool hf_buf_append_byte(void *, int32_t);
 _Bool hf_buf_append_str(void *, const char *);
 _Bool hf_buf_append_i32(void *, int32_t);
 char *hf_buf_finish(void *);
@@ -46,8 +47,20 @@ int main(void) {
     char *finished = hf_buf_finish(buffer);
     assert(finished != NULL);
     assert(strcmp(finished, "ab") == 0);
-    free(finished);
+    hf_string_free(finished);
     hf_buf_free(buffer);
+
+    void *bytes = hf_buf_new(2);
+    assert(bytes != NULL);
+    assert(hf_buf_append_byte(bytes, 0));
+    assert(hf_buf_append_byte(bytes, 255));
+    assert(!hf_buf_append_byte(bytes, 256));
+    finished = hf_buf_finish(bytes);
+    assert(finished != NULL);
+    assert((unsigned char)finished[0] == 0);
+    assert((unsigned char)finished[1] == 255);
+    hf_string_free(finished);
+    hf_buf_free(bytes);
 
     void *number = hf_buf_new(11);
     assert(number != NULL);
