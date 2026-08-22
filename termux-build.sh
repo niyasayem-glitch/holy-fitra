@@ -229,7 +229,8 @@ run_tests() {
     test_holyfitra_qat_deploy.py test_holyfitra_hybrid.py test_language_core.py \
     test_hyperir.py test_package.py test_holy_fitra_runtime.py \
     test_holy_fitra_execution_plan.py test_holy_fitra_ragged.py \
-    test_holy_fitra_dynamic_prefill.py test_smooth_runtime.py
+    test_holy_fitra_dynamic_prefill.py \
+    test_smooth_runtime.py test_holyfitra_ai_api.py
   "$python" validate_nibbleflow.py
   "$python" validate_holy_fitra_ragged.py
   if (( native_tests )); then
@@ -241,6 +242,7 @@ run_tests() {
   fi
   ./holyfitra --help >/dev/null
   ./holyfitra doctor >/dev/null
+  ./holyfitra ai providers >/dev/null
   ./holyfitra contracts >/dev/null
   ./holyfitra tui . --snapshot >/dev/null
   local bench_root

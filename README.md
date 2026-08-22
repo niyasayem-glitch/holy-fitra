@@ -259,6 +259,20 @@ python3 holy_fitra_execution_plan.py
 
 The AI stack includes dense layers and autodiff, transformer attention and KV caching, int4/int8/f16 selection with calibration gates, adaptive speculative decoding, privacy-flow and consent contracts, reversible receipts, and deterministic execution plans.
 
+## AI development system
+
+Holy Fitra can use hosted and local AI providers through a single provider-neutral API layer. It supports OpenAI-compatible gateways, OpenRouter, Gemini, Anthropic, Ollama, and LM Studio, with environment-only credentials and validated Fitra generation. See [`HOLY_FITRA_AI.md`](HOLY_FITRA_AI.md).
+
+```bash
+holyfitra ai providers
+export OPENAI_API_KEY='your-key'
+holyfitra ai chat 'Explain this compiler diagnostic.' --provider openai
+holyfitra ai generate-fitra 'Write a program that returns 42.' --provider openai -o generated/main.hf
+holyfitra check generated/main.hf
+```
+
+The AI layer does not execute model-supplied tools or generated code automatically. Generated Fitra is parsed and validated before it is written, while future tool-calling loops must use the existing capability grants and evidence-verification contracts.
+
 ## Native and Android validation
 
 ```bash

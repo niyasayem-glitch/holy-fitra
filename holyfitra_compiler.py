@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from holyfitra_ai_api import AIConfigurationError, AIProviderError
 from holyfitra_safety import Frontend, MAX_AST_DEPTH, MAX_FUNCTIONS, MAX_TOKENS, parse_frontend, read_source
 
 
@@ -1375,6 +1376,34 @@ def check_file(source_path: Path, frontend: Frontend | str | None = None) -> int
         return 1
 
 
+def ai_providers() -> int:
+    from holyfitra_ai_api import provider_status_json
+    print(json.dumps({"providers": provider_status_json()}, indent=2, sort_keys=True))
+    return 0
+
+
+def ai_chat(prompt: str, provider: str | None, model: str | None, system: str | None, max_tokens: int) -> int:
+    from holyfitra_ai_api import AIClient
+    response = AIClient().chat(prompt, provider=provider, model=model, system=system, max_tokens=max_tokens)
+    print(json.dumps({"provider": response.provider, "model": response.model, "text": response.text, "finish_reason": response.finish_reason, "request_id": response.request_id, "usage": response.usage}, indent=2, sort_keys=True, default=str))
+    return 0
+
+
+def ai_embed(texts: Sequence[str], provider: str | None, model: str | None) -> int:
+    from holyfitra_ai_api import AIClient
+    vectors = AIClient().embed(texts, provider=provider, model=model)
+    print(json.dumps({"provider": provider or os.environ.get("HOLYFITRA_AI_PROVIDER") or "auto", "model": model, "count": len(vectors), "dimension": len(vectors[0]) if vectors else 0, "embeddings": vectors}, sort_keys=True))
+    return 0
+
+
+def ai_generate_fitra(prompt: str, output: Path, provider: str | None, model: str | None, max_tokens: int) -> int:
+    from holyfitra_ai_api import AIClient, write_validated_fitra
+    response = AIClient().generate_fitra(prompt, provider=provider, model=model, max_tokens=max_tokens)
+    source = write_validated_fitra(response.text, output, lambda text: validate_native(parse_native(text)))
+    print(json.dumps({"ok": True, "output": str(output), "bytes": len(source.encode("utf-8")), "provider": response.provider, "model": response.model, "request_id": response.request_id}, sort_keys=True))
+    return 0
+
+
 def doctor_report() -> dict[str, object]:
     import importlib.util
     checks: dict[str, object] = {
@@ -1413,6 +1442,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     init_parser.add_argument("directory", type=Path)
     init_parser.add_argument("--name")
     doctor_parser = subparsers.add_parser("doctor", help="inspect compiler, Termux, LLVM, NumPy, and Android readiness")
+    ai_parser = subparsers.add_parser("ai", help="use configured AI providers from Holy Fitra")
+    ai_subparsers = ai_parser.add_subparsers(dest="ai_command", required=True)
+    ai_subparsers.add_parser("providers", help="list provider configuration without exposing credentials")
+    ai_chat_parser = ai_subparsers.add_parser("chat", help="send a text prompt to a configured provider")
+    ai_chat_parser.add_argument("prompt")
+    ai_chat_parser.add_argument("--provider")
+    ai_chat_parser.add_argument("--model")
+    ai_chat_parser.add_argument("--system")
+    ai_chat_parser.add_argument("--max-tokens", type=int, default=1024)
+    ai_embed_parser = ai_subparsers.add_parser("embed", help="create embeddings for one or more text values")
+    ai_embed_parser.add_argument("texts", nargs="+")
+    ai_embed_parser.add_argument("--provider")
+    ai_embed_parser.add_argument("--model")
+    ai_generate_parser = ai_subparsers.add_parser("generate-fitra", help="generate and validate a native Holy Fitra source file")
+    ai_generate_parser.add_argument("prompt")
+    ai_generate_parser.add_argument("-o", "--output", type=Path, required=True)
+    ai_generate_parser.add_argument("--provider")
+    ai_generate_parser.add_argument("--model")
+    ai_generate_parser.add_argument("--max-tokens", type=int, default=4096)
     tui_parser = subparsers.add_parser("tui", help="open the Holy Fitra terminal workspace UI")
     tui_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
     tui_parser.add_argument("--snapshot", action="store_true")
@@ -1456,6 +1504,15 @@ def main(argv: Sequence[str] | None = None) -> int:
             return init_project(args.directory, args.name)
         if args.command == "doctor":
             return doctor()
+        if args.command == "ai":
+            if args.ai_command == "providers":
+                return ai_providers()
+            if args.ai_command == "chat":
+                return ai_chat(args.prompt, args.provider, args.model, args.system, args.max_tokens)
+            if args.ai_command == "embed":
+                return ai_embed(args.texts, args.provider, args.model)
+            if args.ai_command == "generate-fitra":
+                return ai_generate_fitra(args.prompt, args.output, args.provider, args.model, args.max_tokens)
         if args.command == "tui":
             from holyfitra_tui import run_tui
             return run_tui(args.path, args.snapshot, args.watch_interval)
@@ -1496,7 +1553,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 build(project.entry, executable, args.target or project.target, args.keep_llvm)
                 completed = subprocess.run([str(executable)], timeout=_run_timeout())
                 return completed.returncode
-    except (HolyFitraError, OSError, subprocess.SubprocessError) as error:
+    except (HolyFitraError, AIConfigurationError, AIProviderError, OSError, subprocess.SubprocessError) as error:
         print(f"holyfitra: error: {error}", file=sys.stderr)
         return 1
     return 2
