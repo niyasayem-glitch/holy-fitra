@@ -350,7 +350,7 @@ class ProviderRegistry:
         if requested:
             return self.get(requested)
         for provider in self._providers.values():
-            if provider.status().configured and (provider.credential_env is not None or provider.name in {"ollama", "lmstudio"}):
+            if provider.status().configured:
                 return provider
         raise AICredentialError("no configured AI provider; set HOLYFITRA_AI_PROVIDER and its API key, or start a local Ollama/LM Studio endpoint")
 

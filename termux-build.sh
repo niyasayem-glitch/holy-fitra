@@ -230,7 +230,7 @@ run_tests() {
     test_hyperir.py test_package.py test_holy_fitra_runtime.py \
     test_holy_fitra_execution_plan.py test_holy_fitra_ragged.py \
     test_holy_fitra_dynamic_prefill.py \
-    test_smooth_runtime.py test_holyfitra_ai_api.py
+    test_smooth_runtime.py test_holyfitra_ai_api.py test_holyfitra_agent.py
   "$python" validate_nibbleflow.py
   "$python" validate_holy_fitra_ragged.py
   if (( native_tests )); then

@@ -97,7 +97,7 @@ API keys are read from environment variables and are not printed by `holyfitra a
 
 Requests and responses are bounded at 8 MiB and 16 MiB respectively. Timeouts are bounded between 0.1 and 600 seconds. Provider errors are converted into actionable CLI errors. The AI layer does not automatically execute model-supplied tools, write arbitrary files, or run generated code.
 
-The existing `ToolRegistry`, capability grants, evidence ledger, claim verifier, and bounded `AgentRuntime` remain the authority for tool execution. A future agent loop should connect model tool calls to `ToolRegistry.invoke` only after explicit capability grants and claim/evidence checks.
+The existing `ToolRegistry`, capability grants, evidence ledger, claim verifier, and bounded `AgentRuntime` remain the authority for tool execution. The supervised coding agent in [`HOLY_FITRA_AGENT.md`](HOLY_FITRA_AGENT.md) currently uses a stricter allowlisted workspace runner and can plan, edit, validate, and roll back project changes. Any future model tool-call bridge must connect to `ToolRegistry.invoke` only after explicit capability grants and claim/evidence checks.
 
 ## Current boundary
 

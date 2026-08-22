@@ -1404,6 +1404,13 @@ def ai_generate_fitra(prompt: str, output: Path, provider: str | None, model: st
     return 0
 
 
+def agent_command(root: Path, goal: str, apply: bool, improve_rounds: int, provider: str | None, model: str | None) -> int:
+    from holyfitra_agent import run_agent
+    result = run_agent(root, goal, apply=apply, improve_rounds=improve_rounds, provider=provider, model=model)
+    print(json.dumps(result, indent=2, sort_keys=True, default=str))
+    return 0 if result.get("status") in {"planned", "applied"} or "runs" in result else 1
+
+
 def doctor_report() -> dict[str, object]:
     import importlib.util
     checks: dict[str, object] = {
@@ -1442,6 +1449,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     init_parser.add_argument("directory", type=Path)
     init_parser.add_argument("--name")
     doctor_parser = subparsers.add_parser("doctor", help="inspect compiler, Termux, LLVM, NumPy, and Android readiness")
+    agent_parser = subparsers.add_parser("agent", help="plan or apply supervised AI changes inside a project workspace")
+    agent_parser.add_argument("root", type=Path)
+    agent_parser.add_argument("goal")
+    agent_parser.add_argument("--apply", action="store_true", help="allow file writes and allowlisted validation commands")
+    agent_parser.add_argument("--improve-rounds", type=int, default=0, help="retain only rounds whose validation passes")
+    agent_parser.add_argument("--provider")
+    agent_parser.add_argument("--model")
     ai_parser = subparsers.add_parser("ai", help="use configured AI providers from Holy Fitra")
     ai_subparsers = ai_parser.add_subparsers(dest="ai_command", required=True)
     ai_subparsers.add_parser("providers", help="list provider configuration without exposing credentials")
@@ -1504,6 +1518,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return init_project(args.directory, args.name)
         if args.command == "doctor":
             return doctor()
+        if args.command == "agent":
+            return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
         if args.command == "ai":
             if args.ai_command == "providers":
                 return ai_providers()
