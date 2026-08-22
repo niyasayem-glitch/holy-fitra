@@ -438,3 +438,27 @@ The parser child-range implementation was also corrected to stage block and modu
 | Python compileall and shell syntax | Passed |
 
 State 3 is a connected semantic-core milestone, not yet a general self-hosted compiler. The next boundary is structured diagnostic records for semantic failures, followed by typed HIR and CFG-based MIR so LLVM lowering can consume verified semantics rather than AST fixtures.
+
+## State 4 — structured semantic diagnostics retained — 2026-08-22
+
+State 4 adds a bounded diagnostic arena over parser and semantic failures. Each record stores a stable diagnostic code, severity, source start, source length, and message ID in parallel dynamic arrays. The message catalog is deterministic and currently covers unknown names (`HF2001`), duplicate declarations (`HF2002`), type mismatches (`HF3001`), invalid syntax (`HF1001`), and invalid semantic nodes (`HF5001`). Invalid severity, negative spans, unknown message IDs, and diagnostic-capacity exhaustion fail closed.
+
+The diagnostic driver now parses and semantically checks unknown-name, duplicate-declaration, and type-mismatch programs before recording their diagnostics. It emits deterministic human-readable records and machine-readable JSON, writes both atomically, reads them back, checks byte-identical round trips, and validates the JSON with a standard parser. The current output contains `HF2001`, `HF2002`, and `HF3001` with severity 3 and source spans tied to the corresponding failing source text.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-4 diagnostic fixture | Passed; x86-64 host |
+| Unknown-name diagnostic | Passed; `HF2001` |
+| Duplicate-declaration diagnostic | Passed; `HF2002` |
+| Type-mismatch diagnostic | Passed; `HF3001` |
+| Text diagnostic round trip | Passed |
+| JSON diagnostic round trip | Passed; valid JSON |
+| Repeated diagnostic artifact comparison | Passed; byte-identical |
+| State-4 ASAN/UBSan with leak detection | Passed |
+| No-Python bootstrap gate | Passed |
+| AArch64 State-4 object | Passed; 49,936 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 4 establishes structured reporting but is not yet the final CLI diagnostic pipeline. The next boundary is to carry diagnostic records through the actual self-hosted module driver and then lower accepted, fully annotated ASTs into typed HIR.
