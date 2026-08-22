@@ -1,0 +1,131 @@
+name: Promote high-risk Holy Fitra change
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_branch:
+        description: 'Existing high-risk/** branch to validate and promote'
+        required: true
+        type: string
+      confirmation:
+        description: 'Type PROMOTE to permit promotion after validation'
+        required: true
+        type: string
+      reason:
+        description: 'Short reason and expected benefit for this promotion'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: high-risk-promotion-master
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate high-risk branch
+    if: ${{ inputs.confirmation == 'PROMOTE' && startsWith(inputs.source_branch, 'high-risk/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out high-risk branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_branch }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm cmake
+
+      - name: Install package
+        run: python -m pip install --upgrade pip && python -m pip install -e .
+
+      - name: Run full validation
+        run: |
+          git diff --check origin/master...HEAD
+          bash -n holyfitra holyfitra-v1.sh termux-build.sh make-holyfitra-v1-release.sh
+          python -m py_compile holyfitra_*.py hyperc_*.py test_*.py
+          python -m unittest -q
+          bash termux-build.sh test --native-tests
+          bash make-holyfitra-v1-release.sh /tmp/holyfitra-high-risk-release.tar.gz
+
+      - name: Record promotion evidence
+        run: |
+          {
+            echo "source_branch=${{ inputs.source_branch }}"
+            echo "source_commit=$(git rev-parse HEAD)"
+            echo "reason=${{ inputs.reason }}"
+            echo "validated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  promote:
+    name: Merge validated high-risk branch into master
+    needs: validate
+    if: ${{ needs.validate.result == 'success' && inputs.confirmation == 'PROMOTE' && startsWith(inputs.source_branch, 'high-risk/') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create or reuse promotion pull request
+        id: pr
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_BRANCH: ${{ inputs.source_branch }}
+          PROMOTION_REASON: ${{ inputs.reason }}
+        run: |
+          set -euo pipefail
+          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SOURCE_BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$existing" ]]; then
+            echo "number=$existing" >> "$GITHUB_OUTPUT"
+          else
+            pr_url="$(gh pr create \
+              --repo "$GITHUB_REPOSITORY" \
+              --base master \
+              --head "$SOURCE_BRANCH" \
+              --title "Promote high-risk change: $SOURCE_BRANCH" \
+              --body "Automated promotion after the high-risk validation workflow passed.\n\nReason: $PROMOTION_REASON\n\nThe source branch was validated before this pull request was created.")"
+            number="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')"
+            echo "number=$number" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Squash merge validated pull request
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh pr merge "$PR_NUMBER" \
+            --repo "$GITHUB_REPOSITORY" \
+            --squash \
+            --delete-branch=false \
+            --subject "promote: validated high-risk change" \
+            --body "Full validation passed on the high-risk branch before promotion."
+
+      - name: Write promotion summary
+        run: |
+          {
+            echo "### High-risk promotion complete"
+            echo "Pull request: #${{ steps.pr.outputs.number }}"
+            echo "Source branch: `${{ inputs.source_branch }}`"
+            echo "Target branch: `master`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  rejected:
+    name: Reject invalid promotion request
+    if: ${{ !(inputs.confirmation == 'PROMOTE' && startsWith(inputs.source_branch, 'high-risk/')) }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain rejection
+        run: |
+          echo "Promotion refused: source_branch must start with high-risk/ and confirmation must equal PROMOTE." >&2
+          exit 1
