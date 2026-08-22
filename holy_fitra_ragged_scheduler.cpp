@@ -1,6 +1,7 @@
 #include "holy_fitra_ragged_scheduler.h"
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
 #include <mutex>
@@ -56,7 +57,10 @@ uint64_t RaggedThermalChunkController::target_work() const { return target_work_
 ThermalState RaggedThermalChunkController::state() const { return state_; }
 
 RaggedRequest::RaggedRequest(std::shared_ptr<RaggedGroupState> state) : state_(std::move(state)) {}
-RaggedRequest::~RaggedRequest() { cancel(); }
+RaggedRequest::~RaggedRequest() {
+    cancel();
+    wait(0);
+}
 
 RaggedWaitStatus RaggedRequest::wait(uint64_t timeout_ms) {
     if (!state_) return RaggedWaitStatus::Failed;
@@ -100,8 +104,13 @@ int32_t choose_ragged_chunk_size(const int32_t *offsets, int32_t sequence_count,
     for (int32_t sequence = start_sequence; sequence < sequence_count; ++sequence) {
         const int64_t length = static_cast<int64_t>(offsets[sequence + 1]) - static_cast<int64_t>(offsets[sequence]);
         if (length <= 0) break;
-        const uint64_t work = static_cast<uint64_t>(length) * static_cast<uint64_t>(length) * static_cast<uint64_t>(d_model);
-        if (count > 0 && accumulated + work > target_work) break;
+        const uint64_t length_u = static_cast<uint64_t>(length);
+        const uint64_t width_u = static_cast<uint64_t>(d_model);
+        if (length_u != 0 && length_u > UINT64_MAX / length_u) return std::max<int32_t>(1, count);
+        const uint64_t square = length_u * length_u;
+        if (width_u != 0 && square > UINT64_MAX / width_u) return std::max<int32_t>(1, count);
+        const uint64_t work = square * width_u;
+        if (work > UINT64_MAX - accumulated || (count > 0 && accumulated + work > target_work)) break;
         accumulated += work;
         ++count;
     }
@@ -125,45 +134,57 @@ static void invoke_ragged(RaggedKernelKind kind, const hf_ragged_attention_batch
 }
 
 std::unique_ptr<RaggedRequest> submit_ragged_attention(Scheduler &scheduler, const hf_ragged_attention_batch &batch, const RaggedDispatchPlan &plan) {
-    if (!batch.q || !batch.k || !batch.v || !batch.output || !batch.offsets || batch.sequence_count <= 0 || batch.d_model <= 0 || plan.sequences_per_task <= 0) return nullptr;
-    for (int32_t sequence = 0; sequence < batch.sequence_count; ++sequence) {
-        if (batch.offsets[sequence] < 0 || batch.offsets[sequence + 1] <= batch.offsets[sequence]) return nullptr;
-    }
+    if (!hf_validate_ragged_batch(&batch) || plan.sequences_per_task <= 0 || plan.sequences_per_task > batch.sequence_count) return nullptr;
     auto state = std::make_shared<RaggedGroupState>();
     const int32_t fixed_chunk_size = std::max<int32_t>(1, plan.sequences_per_task);
     size_t chunk_count = 0;
     for (int32_t first = 0; first < batch.sequence_count;) {
         const int32_t chunk_size = plan.adaptive_chunking ? choose_ragged_chunk_size(batch.offsets, batch.sequence_count, first, batch.d_model, plan.target_work_per_task) : fixed_chunk_size;
-        const int32_t last = std::min(batch.sequence_count, first + std::max<int32_t>(1, chunk_size));
+        const int32_t safe_chunk = std::max<int32_t>(1, std::min<int32_t>(chunk_size, batch.sequence_count - first));
+        const int32_t last = first + safe_chunk;
         ++chunk_count;
         first = last;
     }
     state->remaining = chunk_count;
     for (int32_t first = 0; first < batch.sequence_count;) {
         const int32_t chunk_size = plan.adaptive_chunking ? choose_ragged_chunk_size(batch.offsets, batch.sequence_count, first, batch.d_model, plan.target_work_per_task) : fixed_chunk_size;
-        const int32_t last = std::min(batch.sequence_count, first + std::max<int32_t>(1, chunk_size));
+        const int32_t safe_chunk = std::max<int32_t>(1, std::min<int32_t>(chunk_size, batch.sequence_count - first));
+        const int32_t last = first + safe_chunk;
         Task task;
+        auto task_finished = std::make_shared<std::atomic_bool>(false);
         task.core_class = plan.core_class;
         task.priority = plan.priority;
         task.deadline_ns = plan.deadline_ns;
         task.sequence = static_cast<uint64_t>(first);
         task.cancellation = state->cancellation;
-        task.function = [batch, first, last, plan, state](TaskContext &) {
+        task.function = [batch, first, last, plan, state, task_finished](TaskContext &) {
             hf_ragged_attention_batch chunk = batch;
             chunk.sequence_count = last - first;
             // Keep global packed pointers and use the global offset subarray. The
             // kernel indexes all rows in global token coordinates, so no worker
             // task needs to allocate or construct rebased offsets.
             chunk.offsets = batch.offsets + first;
+            chunk.offsets_count = static_cast<uint64_t>(last - first) + 1u;
             if (state->cancellation->is_cancelled()) {
-                state->finish(TaskResult::Cancelled);
+                if (!task_finished->exchange(true)) state->finish(TaskResult::Cancelled);
                 return;
             }
-            invoke_ragged(plan.kernel, chunk);
-            state->finish(TaskResult::Completed);
+            try {
+                invoke_ragged(plan.kernel, chunk);
+                if (!task_finished->exchange(true)) state->finish(TaskResult::Completed);
+            } catch (...) {
+                if (!task_finished->exchange(true)) state->finish(TaskResult::Failed);
+            }
         };
-        task.on_cancel = [state](TaskContext &) { state->finish(TaskResult::Cancelled); };
-        task.on_deadline_missed = [state](TaskContext &) { state->finish(TaskResult::DeadlineMissed); };
+        task.on_cancel = [state, task_finished](TaskContext &) {
+            if (!task_finished->exchange(true)) state->finish(TaskResult::Cancelled);
+        };
+        task.on_deadline_missed = [state, task_finished](TaskContext &) {
+            if (!task_finished->exchange(true)) state->finish(TaskResult::DeadlineMissed);
+        };
+        task.on_failure = [state, task_finished](TaskContext &) {
+            if (!task_finished->exchange(true)) state->finish(TaskResult::Failed);
+        };
         const SubmitStatus status = scheduler.submit(std::move(task));
         if (status == SubmitStatus::Backpressure || status == SubmitStatus::Stopped || status == SubmitStatus::Rejected) state->finish(TaskResult::Failed);
         first = last;

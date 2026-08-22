@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from holyfitra_compiler import HolyFitraError, compile_native_file, load_project
+from holyfitra_safety import Frontend, parse_frontend, read_source
 
 
 def _stats(values: list[float]) -> dict[str, float]:
@@ -23,9 +24,12 @@ def _stats(values: list[float]) -> dict[str, float]:
 
 def benchmark_project(path: Path, repeats: int = 5) -> dict[str, Any]:
     project = load_project(path)
-    source = project.entry.read_text(encoding="utf-8")
+    if not isinstance(repeats, int) or isinstance(repeats, bool) or repeats <= 0:
+        raise ValueError("repeats must be a positive integer")
+    source = read_source(project.entry)
     result: dict[str, Any] = {"project": project.name, "entry": str(project.entry), "repeats": repeats}
-    if "Tensor" in source or "capability" in source or "budget" in source:
+    frontend = parse_frontend(project.frontend)
+    if frontend is Frontend.HYPERIR:
         from hyperc_language_core import compile_source
         durations = []
         last_plan = None
@@ -33,7 +37,7 @@ def benchmark_project(path: Path, repeats: int = 5) -> dict[str, Any]:
             start = time.perf_counter_ns()
             last_plan = compile_source(source)
             durations.append((time.perf_counter_ns() - start) / 1_000_000.0)
-        result["frontend"] = "hyperir"
+        result["frontend"] = Frontend.HYPERIR.value
         result["compile"] = _stats(durations)
         result["valid"] = bool(last_plan["valid"])
         result["hyperir_digest"] = last_plan["hyperir_digest"]
@@ -46,7 +50,7 @@ def benchmark_project(path: Path, repeats: int = 5) -> dict[str, Any]:
             start = time.perf_counter_ns()
             _, _, last_digest = compile_native_file(project.entry, cache_dir=cache_dir)
             durations.append((time.perf_counter_ns() - start) / 1_000_000.0)
-        result["frontend"] = "native"
+        result["frontend"] = Frontend.NATIVE.value
         result["compile"] = _stats(durations)
         result["valid"] = True
         result["digest"] = last_digest

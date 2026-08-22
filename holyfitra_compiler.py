@@ -36,6 +36,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
+from holyfitra_safety import Frontend, parse_frontend, read_source
+
 
 _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
 _MEMORY_COMPILE_CACHE_LIMIT = 32
@@ -1126,6 +1128,7 @@ class Project:
     name: str
     entry: Path
     target: str | None = None
+    frontend: Frontend = Frontend.NATIVE
 
 
 def load_project(path: Path) -> Project:
@@ -1133,7 +1136,7 @@ def load_project(path: Path) -> Project:
     manifest = root / "holyfitra.toml"
     if not manifest.exists():
         if path.is_file():
-            return Project(path.parent, path.stem, path, None)
+            return Project(path.parent, path.stem, path, None, Frontend.NATIVE)
         raise HolyFitraError(f"no holyfitra.toml found in {root}")
     try:
         document = tomllib.loads(manifest.read_text(encoding="utf-8"))
@@ -1141,6 +1144,10 @@ def load_project(path: Path) -> Project:
         raise HolyFitraError(f"invalid holyfitra.toml: {error}") from error
     project = document.get("project", {})
     build_config = document.get("build", {})
+    try:
+        frontend = parse_frontend(build_config.get("frontend", project.get("frontend", "native")))
+    except ValueError as error:
+        raise HolyFitraError(str(error)) from error
     name = project.get("name") or root.name
     entry = (root / str(project.get("entry", "src/main.hf"))).resolve()
     root_resolved = root.resolve()
@@ -1148,7 +1155,7 @@ def load_project(path: Path) -> Project:
         raise HolyFitraError(f"project entry escapes project root: {entry}")
     if not entry.is_file():
         raise HolyFitraError(f"project entry does not exist: {entry}")
-    return Project(root_resolved, str(name), entry, build_config.get("target"))
+    return Project(root_resolved, str(name), entry, build_config.get("target"), frontend)
 
 
 def init_project(root: Path, name: str | None = None) -> int:
@@ -1162,7 +1169,7 @@ def init_project(root: Path, name: str | None = None) -> int:
     source = source_dir / "main.hf"
     if manifest.exists() or source.exists():
         raise HolyFitraError(f"project already exists: {root}")
-    manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "x86_64-pc-linux-gnu"\n''', encoding="utf-8")
+    manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "x86_64-pc-linux-gnu"\nfrontend = "native"\n''', encoding="utf-8")
     source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
     smoke_test = tests_dir / "smoke.hf"
     smoke_test.write_text(f"module {project_name}_tests\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
@@ -1203,7 +1210,7 @@ def package_file(source_path: Path, output: Path, version: str, target: str | No
     relative_entry = project.entry.relative_to(project.root).as_posix()
     builder = HyperPackageBuilder(project.name, version, target or project.target or "host")
     builder.add_file(project.root, relative_entry, "source")
-    builder.set_metadata(compiler="holyfitra", frontend="native+hyperir", entry=relative_entry)
+    builder.set_metadata(compiler="holyfitra", frontend=str(project.frontend), entry=relative_entry)
     package = builder.build()
     secret = os.environ.get("HOLYFITRA_PACKAGE_SECRET")
     if secret:
@@ -1229,13 +1236,13 @@ def plan_file(source_path: Path, output: Path | None = None) -> int:
     return 0 if result["valid"] else 1
 
 
-def check_file(source_path: Path) -> int:
+def check_file(source_path: Path, frontend: Frontend | str | None = None) -> int:
     project = load_project(source_path)
     source_path = project.entry
-    source = source_path.read_text(encoding="utf-8")
     try:
-        # Tensor/HyperIR programs remain fully supported by the existing frontend.
-        if "Tensor" in source or "capability" in source or "budget" in source:
+        selected_frontend = project.frontend if frontend is None else parse_frontend(frontend)
+        source = read_source(source_path)
+        if selected_frontend is Frontend.HYPERIR:
             from hyperc_language_core import compile_source
             result = compile_source(source)
             print(json.dumps(result, indent=2, sort_keys=True, default=str))
@@ -1294,6 +1301,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     bench_parser.add_argument("-o", "--output", type=Path)
     check_parser = subparsers.add_parser("check", help="parse and validate a Holy Fitra source file or project directory")
     check_parser.add_argument("source", type=Path)
+    check_parser.add_argument("--frontend", choices=[frontend.value for frontend in Frontend], help="explicitly select the frontend")
     plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
     plan_parser.add_argument("source", type=Path)
     plan_parser.add_argument("-o", "--output", type=Path)
@@ -1344,7 +1352,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(rendered)
             return 0
         if args.command == "check":
-            return check_file(args.source)
+            return check_file(args.source, args.frontend)
         if args.command == "plan":
             return plan_file(args.source, args.output)
         if args.command == "test":

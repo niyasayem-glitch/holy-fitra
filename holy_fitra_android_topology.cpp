@@ -5,6 +5,8 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <sstream>
+#include <string>
 
 namespace holyfitra {
 namespace {
@@ -16,21 +18,46 @@ long long read_number(const std::filesystem::path &path) {
     return value;
 }
 
-std::vector<int> online_cpus(const std::filesystem::path &root) {
+std::vector<int> parse_cpu_list(const std::string &text) {
+    constexpr int kMaxCpu = 4095;
+    constexpr size_t kMaxCpus = 4096;
     std::vector<int> cpus;
-    const long long online = read_number(root / "online");
-    if (online >= 0) {
-        // A single integer is common in synthetic tests; Android normally uses
-        // ranges such as 0-7, handled by the range parser below when needed.
-        cpus.push_back(static_cast<int>(online));
-    }
-    if (!cpus.empty()) return cpus;
-    for (const auto &entry : std::filesystem::directory_iterator(root)) {
-        const std::string name = entry.path().filename().string();
-        if (name.rfind("cpu", 0) != 0 || name.size() <= 3) continue;
-        try { cpus.push_back(std::stoi(name.substr(3))); } catch (...) {}
+    std::stringstream ranges(text);
+    std::string item;
+    while (std::getline(ranges, item, ',')) {
+        const size_t dash = item.find('-');
+        try {
+            const int first = std::stoi(item.substr(0, dash));
+            const int last = dash == std::string::npos ? first : std::stoi(item.substr(dash + 1));
+            if (first < 0 || last < first || last > kMaxCpu || cpus.size() + static_cast<size_t>(last - first + 1) > kMaxCpus) return {};
+            for (int cpu = first; cpu <= last; ++cpu) cpus.push_back(cpu);
+        } catch (...) {
+            return {};
+        }
     }
     std::sort(cpus.begin(), cpus.end());
+    cpus.erase(std::unique(cpus.begin(), cpus.end()), cpus.end());
+    return cpus;
+}
+
+std::vector<int> online_cpus(const std::filesystem::path &root) {
+    std::vector<int> cpus;
+    std::ifstream online_file(root / "online");
+    std::string online_text;
+    if (online_file && std::getline(online_file, online_text)) cpus = parse_cpu_list(online_text);
+    if (!cpus.empty()) return cpus;
+    try {
+        for (const auto &entry : std::filesystem::directory_iterator(root)) {
+            const std::string name = entry.path().filename().string();
+            if (name.rfind("cpu", 0) != 0 || name.size() <= 3) continue;
+            try { cpus.push_back(std::stoi(name.substr(3))); } catch (...) {}
+        }
+    } catch (...) {
+        cpus.clear();
+    }
+    std::sort(cpus.begin(), cpus.end());
+    cpus.erase(std::unique(cpus.begin(), cpus.end()), cpus.end());
+    if (cpus.size() > 4096) cpus.resize(4096);
     return cpus;
 }
 

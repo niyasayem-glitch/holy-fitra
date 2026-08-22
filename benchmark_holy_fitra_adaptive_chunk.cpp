@@ -29,7 +29,7 @@ int main() {
     for (int32_t i = 0; i < count; ++i) offsets[i + 1] = offsets[i] + lengths[i];
     const size_t elements = static_cast<size_t>(offsets[count]) * d_model;
     std::vector<float> q(elements, 0.01f), k(elements, 0.02f), v(elements, 0.03f), output(elements, 0.0f);
-    hf_ragged_attention_batch batch{q.data(), k.data(), v.data(), output.data(), offsets, count, d_model};
+    hf_ragged_attention_batch batch{q.data(), q.size(), k.data(), k.size(), v.data(), v.size(), output.data(), output.size(), offsets, static_cast<size_t>(count) + 1u, count, d_model};
     holyfitra::SchedulerConfig config;
     config.little_workers = 2;
     config.big_workers = 2;

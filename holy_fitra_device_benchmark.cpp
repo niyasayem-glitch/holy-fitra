@@ -19,6 +19,12 @@
 namespace holyfitra {
 namespace {
 
+constexpr int32_t kMaxBenchmarkDModel = 8192;
+constexpr int32_t kMaxBenchmarkSequences = 4096;
+constexpr int32_t kMaxBenchmarkLength = 4096;
+constexpr uint64_t kMaxBenchmarkTokens = 1u << 22;
+constexpr uint64_t kMaxBenchmarkElements = 1u << 27;
+
 struct ThermalSample {
     double max_temp_c = std::numeric_limits<double>::quiet_NaN();
     double avg_temp_c = std::numeric_limits<double>::quiet_NaN();
@@ -123,11 +129,12 @@ static PackedWorkload make_workload(const DeviceBenchmarkConfig &config) {
     workload.offsets.resize(static_cast<size_t>(config.sequence_count) + 1, 0);
     uint64_t random_state = config.seed;
     for (int32_t sequence = 0; sequence < config.sequence_count; ++sequence) {
-        const int32_t range = config.max_length - config.min_length + 1;
+        const int64_t range = static_cast<int64_t>(config.max_length) - static_cast<int64_t>(config.min_length) + 1;
         const int32_t length = config.min_length + static_cast<int32_t>(next_random(random_state) % static_cast<uint64_t>(range));
         workload.offsets[static_cast<size_t>(sequence + 1)] = workload.offsets[static_cast<size_t>(sequence)] + length;
     }
     const size_t total_tokens = static_cast<size_t>(workload.offsets.back());
+    if (total_tokens > kMaxBenchmarkTokens || static_cast<uint64_t>(total_tokens) > static_cast<uint64_t>(kMaxBenchmarkElements) / static_cast<uint64_t>(config.d_model)) throw std::runtime_error("benchmark workload exceeds resource limit");
     const size_t elements = total_tokens * static_cast<size_t>(config.d_model);
     workload.q.resize(elements);
     workload.k.resize(elements);
@@ -179,7 +186,7 @@ static bool has_cpu_flag(const char *needle) {
 
 DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfig &config) {
     DeviceBenchmarkResult result;
-    if (config.d_model <= 0 || config.sequence_count <= 0 || config.min_length <= 0 || config.max_length < config.min_length || config.sequences_per_task <= 0 || config.warmup_iterations < 0 || config.measured_iterations <= 0) {
+    if (config.d_model <= 0 || config.d_model > kMaxBenchmarkDModel || config.sequence_count <= 0 || config.sequence_count > kMaxBenchmarkSequences || config.min_length <= 0 || config.max_length < config.min_length || config.max_length > kMaxBenchmarkLength || static_cast<uint64_t>(config.sequence_count) * static_cast<uint64_t>(config.max_length) > kMaxBenchmarkTokens || config.sequences_per_task <= 0 || config.sequences_per_task > config.sequence_count || config.warmup_iterations < 0 || config.warmup_iterations > 10000 || config.measured_iterations <= 0 || config.measured_iterations > 10000 || config.thermal_sample_period <= 0 || config.thermal_sample_period > 100000) {
         result.json = "{\"completed\":false,\"error\":\"invalid_config\"}";
         return result;
     }
@@ -188,8 +195,12 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
     SchedulerConfig scheduler_config = tuned_android_scheduler_config(topology, 256, config.pin_threads);
     Scheduler scheduler(scheduler_config);
     PackedWorkload workload = make_workload(config);
-    hf_ragged_attention_batch batch{workload.q.data(), workload.k.data(), workload.v.data(), workload.output.data(), workload.offsets.data(), workload.sequence_count, workload.d_model};
-    const bool has_neon = has_cpu_flag("asimd") || has_cpu_flag("neon") || topology.little_cpus.size() + topology.big_cpus.size() > 0;
+    hf_ragged_attention_batch batch{workload.q.data(), workload.q.size(), workload.k.data(), workload.k.size(), workload.v.data(), workload.v.size(), workload.output.data(), workload.output.size(), workload.offsets.data(), workload.offsets.size(), workload.sequence_count, workload.d_model};
+#if defined(__aarch64__)
+    const bool has_neon = has_cpu_flag("asimd") || has_cpu_flag("neon");
+#else
+    const bool has_neon = false;
+#endif
     const bool has_sve = has_cpu_flag(" sve") || has_cpu_flag(" sve2");
     RaggedKernelKind kernel = choose_ragged_kernel(has_sve, has_neon, config.d_model, false, true);
     const uint64_t estimated_work = static_cast<uint64_t>(workload.offsets.back()) * static_cast<uint64_t>(workload.offsets.back()) * static_cast<uint64_t>(config.d_model);
@@ -260,8 +271,9 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
     const bool frequency_drop = std::isfinite(thermal_before.max_current_freq_mhz) && std::isfinite(thermal_after.max_current_freq_mhz) && thermal_after.max_current_freq_mhz < thermal_before.max_current_freq_mhz * 0.90;
     const bool temperature_rise = std::isfinite(thermal_before.max_temp_c) && !temperatures.empty() && *std::max_element(temperatures.begin(), temperatures.end()) > thermal_before.max_temp_c + 5.0;
 
+    result.completed = failures == 0 && !latencies.empty();
     std::ostringstream json;
-    json << "{\"completed\":true";
+    json << "{\"completed\":" << (result.completed ? "true" : "false");
     json << ",\"device_topology_source\":\"" << json_escape(topology.source) << "\"";
     json << ",\"measured_from_sysfs\":" << (topology.measured_from_sysfs ? "true" : "false");
     json << ",\"little_cores\":" << topology.little_cpus.size() << ",\"big_cores\":" << topology.big_cpus.size();
@@ -277,7 +289,6 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
     json << ",\"thermal\":{\"sample_count\":" << temperatures.size() << ",\"max_temp_c\":" << json_double(temperatures.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::max_element(temperatures.begin(), temperatures.end())) << ",\"min_freq_mhz\":" << json_double(frequencies.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::min_element(frequencies.begin(), frequencies.end())) << ",\"frequency_drop_detected\":" << (frequency_drop ? "true" : "false") << ",\"temperature_rise_detected\":" << (temperature_rise ? "true" : "false") << "}";
     json << ",\"last_status\":\"" << last_status << "\"";
     json << ",\"checksum\":" << checksum_bits << "}";
-    result.completed = failures == 0 && !latencies.empty();
     result.json = json.str();
     return result;
 }

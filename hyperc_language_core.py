@@ -73,7 +73,9 @@ class HyperModule:
 
 
 _TENSOR_RE = re.compile(r"Tensor\s*<\s*\[([^]]+)\]\s*,\s*(f32|f16|bf16|int8|int4)(?:\s*,\s*device\s*=\s*([A-Za-z0-9_.-]+))?(?:\s*,\s*layout\s*=\s*([A-Za-z0-9_.-]+))?\s*>")
-_FN_RE = re.compile(r"fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*->\s*([A-Za-z_][A-Za-z0-9_<>,\[\]. =-]*)")
+_MODULE_RE = re.compile(r"module\s+([A-Za-z_][A-Za-z0-9_.]*)")
+_CAPABILITY_RE = re.compile(r"capability\s+([A-Za-z_][A-Za-z0-9_]*)\s*\{\s*")
+_FN_RE = re.compile(r"fn\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(([^)]*)\)\s*->\s*([A-Za-z_][A-Za-z0-9_<>,\[\]. =-]*)\s*\{\s*")
 _BUDGET_RE = re.compile(r"budget\s+([A-Za-z_][A-Za-z0-9_]*)\s*<=\s*([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z]+)")
 _CAP_RE = re.compile(r"(allow|deny)\s+([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z_][A-Za-z0-9_]*)(?:\(\"([^\"]*)\"\))?")
 
@@ -116,23 +118,31 @@ def parse_module(source: str) -> HyperModule:
     policy_name: str | None = None
     current_function: FunctionDecl | None = None
     tensor_values: dict[str, Value] = {}
+    module_seen = False
 
     for line_number, raw_line in enumerate(lines, 1):
         line = raw_line.strip()
         if not line or line.startswith("//"):
             continue
         try:
-            if line.startswith("module "):
-                module_name = line[len("module "):].strip()
+            module_match = _MODULE_RE.fullmatch(line)
+            if module_match:
+                if module_seen:
+                    raise HyperIRError("module declaration may appear only once")
+                module_seen = True
+                module_name = module_match.group(1)
                 module.name = module_name
                 ir.name = module_name
                 continue
-            if line.startswith("capability "):
-                policy_name = line[len("capability "):].split("{", 1)[0].strip()
+            capability_match = _CAPABILITY_RE.fullmatch(line)
+            if capability_match:
+                policy_name = capability_match.group(1)
+                if policy_name in ir.policies:
+                    raise HyperIRError(f"duplicate capability policy: {policy_name}")
                 active_policy = CapabilityPolicy()
                 ir.policies[policy_name] = active_policy
                 continue
-            cap_match = _CAP_RE.search(line)
+            cap_match = _CAP_RE.fullmatch(line)
             if cap_match and active_policy is not None and policy_name is not None:
                 mode, resource, operation, scope = cap_match.groups()
                 requested_scope = _canonical_scope(scope) if scope else "*"
@@ -140,13 +150,17 @@ def parse_module(source: str) -> HyperModule:
                 (active_policy.allow if mode == "allow" else active_policy.deny).append(capability)
                 continue
             if line == "}":
+                if active_policy is None and current_function is None:
+                    raise HyperIRError("unmatched closing brace")
                 active_policy = None
                 policy_name = None
                 current_function = None
                 continue
-            fn_match = _FN_RE.search(line)
+            fn_match = _FN_RE.fullmatch(line)
             if fn_match:
                 name, raw_params, return_type = fn_match.groups()
+                if name in module.functions:
+                    raise HyperIRError(f"duplicate function: {name}")
                 parameters: list[tuple[str, str]] = []
                 if raw_params.strip():
                     chunks: list[str] = []
@@ -178,14 +192,14 @@ def parse_module(source: str) -> HyperModule:
                 current_function = FunctionDecl(name, tuple(parameters), return_type.strip())
                 module.functions[name] = current_function
                 continue
-            budget_match = _BUDGET_RE.search(line)
+            budget_match = _BUDGET_RE.fullmatch(line)
             if budget_match and current_function is not None:
                 resource, limit, unit = budget_match.groups()
                 budget = Budget(resource, float(limit), unit)
                 module.functions[current_function.name] = FunctionDecl(current_function.name, current_function.parameters, current_function.return_type, current_function.effects, current_function.budgets + (budget,))
                 current_function = module.functions[current_function.name]
                 continue
-            tensor_match = re.match(r"(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(Tensor\s*<.*>)", line)
+            tensor_match = re.fullmatch(r"(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(Tensor\s*<.*>)", line)
             if tensor_match:
                 name, tensor_raw = tensor_match.groups()
                 tensor = _parse_tensor(tensor_raw)
@@ -193,7 +207,7 @@ def parse_module(source: str) -> HyperModule:
                 ir.add_value(value)
                 tensor_values[name] = value
                 continue
-            matmul_match = re.match(r"(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*matmul\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", line)
+            matmul_match = re.fullmatch(r"(?:let|var)\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*matmul\s*\(\s*([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*\)", line)
             if matmul_match:
                 output_name, left_name, right_name = matmul_match.groups()
                 if left_name not in tensor_values or right_name not in tensor_values:
@@ -209,9 +223,14 @@ def parse_module(source: str) -> HyperModule:
                 ir.add_output_value(operation, output)
                 tensor_values[output_name] = output
                 continue
+            raise HyperIRError("unrecognized syntax")
         except (HyperIRError, ValueError) as exc:
             module.diagnostics.append(Diagnostic("error", "HYPER" + str(line_number), str(exc), line_number))
 
+    if active_policy is not None or current_function is not None:
+        module.diagnostics.append(Diagnostic("error", "HYPER0002", "unterminated capability or function block"))
+    if not module.functions:
+        module.diagnostics.append(Diagnostic("error", "HYPER0001", "module must declare at least one function"))
     module.name = module_name
     module.ir = ir
     for error in ir.verify():

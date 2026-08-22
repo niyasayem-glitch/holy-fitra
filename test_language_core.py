@@ -21,6 +21,18 @@ fn infer(x: Tensor<[1, 4], f16, device=neon>) -> Tensor<[1, 4], f16> {
         self.assertEqual(result["lowered_plan"][0]["kernel"], "neon.f16_matmul")
         self.assertEqual(result["functions"]["infer"]["budgets"][0]["unit"], "MiB")
 
+    def test_garbage_and_unterminated_input_fail_closed(self):
+        for source in ("garbage syntax", "module x\nnot valid", "fn infer(x: Tensor<[1, 4], f16>) -> Tensor<[1, 4], f16> {\n"):
+            module = parse_module(source)
+            self.assertFalse(module.valid)
+            self.assertTrue(module.diagnostics)
+
+    def test_trailing_unknown_syntax_and_duplicate_functions_fail(self):
+        trailing = parse_module("fn infer(x: Tensor<[1, 4], f16>) -> Tensor<[1, 4], f16> {\n}\ntrailing junk")
+        duplicate = parse_module("fn infer(x: Tensor<[1, 4], f16>) -> Tensor<[1, 4], f16> {\n}\nfn infer(x: Tensor<[1, 4], f16>) -> Tensor<[1, 4], f16> {\n}\n")
+        self.assertFalse(trailing.valid)
+        self.assertFalse(duplicate.valid)
+
     def test_shape_mismatch_is_rejected(self):
         source = '''
 module bad
@@ -62,6 +74,8 @@ module safe
 capability C {
     allow files.read("/data/public/")
     deny files.write
+}
+fn noop() -> void {
 }
 '''
         module = parse_module(source)

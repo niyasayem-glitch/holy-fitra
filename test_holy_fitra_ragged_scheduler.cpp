@@ -16,8 +16,8 @@ int main() {
     const size_t total = static_cast<size_t>(offsets[sequence_count]);
     std::vector<float> q(total * d_model), k(total * d_model), v(total * d_model), expected(total * d_model, 0.0f), output(total * d_model, 0.0f);
     fill(q, 0.1f); fill(k, 0.2f); fill(v, 0.3f);
-    hf_ragged_attention_batch batch{q.data(), k.data(), v.data(), output.data(), offsets, sequence_count, d_model};
-    hf_ragged_attention_batch reference{q.data(), k.data(), v.data(), expected.data(), offsets, sequence_count, d_model};
+    hf_ragged_attention_batch batch{q.data(), q.size(), k.data(), k.size(), v.data(), v.size(), output.data(), output.size(), offsets, sequence_count + 1u, sequence_count, d_model};
+    hf_ragged_attention_batch reference{q.data(), q.size(), k.data(), k.size(), v.data(), v.size(), expected.data(), expected.size(), offsets, sequence_count + 1u, sequence_count, d_model};
     holy_fitra_ragged_attention_scalar(&reference);
 
     holyfitra::SchedulerConfig config;
@@ -26,6 +26,12 @@ int main() {
     config.queue_capacity = 32;
     holyfitra::Scheduler scheduler(config);
     holyfitra::RaggedDispatchPlan plan;
+    auto undersized = batch;
+    undersized.output_elements -= 1;
+    assert(holyfitra::submit_ragged_attention(scheduler, undersized, plan) == nullptr);
+    auto short_offsets = batch;
+    short_offsets.offsets_count = sequence_count;
+    assert(holyfitra::submit_ragged_attention(scheduler, short_offsets, plan) == nullptr);
     plan.kernel = holyfitra::RaggedKernelKind::Neon;
     plan.core_class = holyfitra::CoreClass::BigPreferred;
     plan.priority = holyfitra::Priority::Throughput;

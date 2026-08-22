@@ -37,11 +37,15 @@ int main(void) {
     assert(hf_dyn_i32_get(array, 0) == 40);
     assert(hf_dyn_i32_get(array, 1) == 2);
     hf_dyn_i32_free(array);
+    hf_dyn_i32_free(array);
+    assert(hf_dyn_i32_len(array) == 0);
+    assert(!hf_dyn_i32_push(array, 7));
     assert(hf_file_open("/path/that/does/not/exist") == NULL);
     assert(hf_read_text("/path/that/does/not/exist") == NULL);
     char *canonical = hf_path_canonicalize("/a/./b/../c");
     assert(canonical != NULL);
     assert(strcmp(canonical, "/a/c") == 0);
+    hf_string_free(canonical);
     hf_string_free(canonical);
     canonical = hf_path_canonicalize("a/../b");
     assert(canonical != NULL);
@@ -70,6 +74,8 @@ int main(void) {
     assert(strcmp(finished, "ab") == 0);
     hf_string_free(finished);
     hf_buf_free(buffer);
+    hf_buf_free(buffer);
+    assert(!hf_buf_append_byte(buffer, 1));
 
     void *bytes = hf_buf_new(2);
     assert(bytes != NULL);
@@ -95,6 +101,11 @@ int main(void) {
     assert(!hf_write_text(NULL, "bad"));
     assert(!hf_write_text("/tmp/holyfitra_runtime_atomic.txt", NULL));
     assert(hf_write_text("/tmp/holyfitra_runtime_atomic.txt", "atomic-ok"));
+    void *opened = hf_file_open("/tmp/holyfitra_runtime_atomic.txt");
+    assert(opened != NULL);
+    hf_file_close(opened);
+    hf_file_close(opened);
+    assert(hf_file_read_all(opened) == NULL);
     char *round_trip = (char *)hf_read_text("/tmp/holyfitra_runtime_atomic.txt");
     assert(round_trip != NULL);
     assert(strcmp(round_trip, "atomic-ok") == 0);

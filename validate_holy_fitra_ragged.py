@@ -23,13 +23,33 @@ def build_host() -> Path:
 def run_native(lib_path: Path, batch, symbol: str) -> np.ndarray:
     lib = ctypes.CDLL(str(lib_path))
     class Batch(ctypes.Structure):
-        _fields_ = [("q", ctypes.POINTER(ctypes.c_float)), ("k", ctypes.POINTER(ctypes.c_float)), ("v", ctypes.POINTER(ctypes.c_float)), ("output", ctypes.POINTER(ctypes.c_float)), ("offsets", ctypes.POINTER(ctypes.c_int32)), ("sequence_count", ctypes.c_int32), ("d_model", ctypes.c_int32)]
+        _fields_ = [
+            ("q", ctypes.POINTER(ctypes.c_float)),
+            ("q_elements", ctypes.c_uint64),
+            ("k", ctypes.POINTER(ctypes.c_float)),
+            ("k_elements", ctypes.c_uint64),
+            ("v", ctypes.POINTER(ctypes.c_float)),
+            ("v_elements", ctypes.c_uint64),
+            ("output", ctypes.POINTER(ctypes.c_float)),
+            ("output_elements", ctypes.c_uint64),
+            ("offsets", ctypes.POINTER(ctypes.c_int32)),
+            ("offsets_count", ctypes.c_uint64),
+            ("sequence_count", ctypes.c_int32),
+            ("d_model", ctypes.c_int32),
+        ]
     q = np.ascontiguousarray(batch.q, dtype=np.float32)
     k = np.ascontiguousarray(batch.k, dtype=np.float32)
     v = np.ascontiguousarray(batch.v, dtype=np.float32)
     out = np.zeros_like(q)
     offsets = np.ascontiguousarray(batch.offsets, dtype=np.int32)
-    native_batch = Batch(q.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), k.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), v.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), offsets.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)), batch.sequence_count, batch.d_model)
+    native_batch = Batch(
+        q.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), q.size,
+        k.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), k.size,
+        v.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), v.size,
+        out.ctypes.data_as(ctypes.POINTER(ctypes.c_float)), out.size,
+        offsets.ctypes.data_as(ctypes.POINTER(ctypes.c_int32)), offsets.size,
+        batch.sequence_count, batch.d_model,
+    )
     fn = getattr(lib, symbol)
     fn.argtypes = [ctypes.POINTER(Batch)]
     fn.restype = None

@@ -82,6 +82,14 @@ public:
         return items_.size();
     }
 
+    void drain(std::vector<Task> &out) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        while (!items_.empty()) {
+            out.push_back(std::move(items_.front()));
+            items_.pop_front();
+        }
+    }
+
 private:
     size_t capacity_;
     mutable std::mutex mutex_;
@@ -112,6 +120,7 @@ struct Scheduler::Impl {
     std::atomic<uint64_t> rejected{0};
     std::atomic<uint64_t> stolen{0};
     mutable std::mutex wake_mutex;
+    std::mutex lifecycle_mutex;
     std::condition_variable wake_cv;
 
     explicit Impl(SchedulerConfig scheduler_config) : config(std::move(scheduler_config)) {
@@ -232,14 +241,20 @@ struct Scheduler::Impl {
                 ++worker.stats.executed;
                 completed.fetch_add(1, std::memory_order_relaxed);
             } catch (...) {
-                // The scheduler remains alive. Production code should attach a
-                // typed error sink to the task contract rather than terminate
-                // a worker on user callback exceptions.
+                // A task exception must not strand an owning request. The
+                // callback is deliberately best-effort and cannot kill a worker.
+                if (task.on_failure) {
+                    try {
+                        task.on_failure(context);
+                    } catch (...) {
+                    }
+                }
             }
         }
     }
 
     SubmitStatus submit(Task task) {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex);
         if (stop.load(std::memory_order_acquire)) {
             rejected.fetch_add(1, std::memory_order_relaxed);
             return SubmitStatus::Stopped;
@@ -299,10 +314,28 @@ struct Scheduler::Impl {
     }
 
     void shutdown() {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex);
         bool expected = false;
         if (!stop.compare_exchange_strong(expected, true)) return;
         wake_cv.notify_all();
         for (auto &worker : workers) if (worker->thread.joinable()) worker->thread.join();
+        for (auto &worker : workers) {
+            std::vector<Task> pending;
+            worker->queue.drain(pending);
+            for (Task &task : pending) {
+                ++worker->stats.cancelled;
+                cancelled.fetch_add(1, std::memory_order_relaxed);
+                if (!task.on_cancel) continue;
+                TaskContext context;
+                context.worker_id = worker->id;
+                context.on_big_core = worker->big;
+                context.cancellation = task.cancellation;
+                try {
+                    task.on_cancel(context);
+                } catch (...) {
+                }
+            }
+        }
     }
 };
 

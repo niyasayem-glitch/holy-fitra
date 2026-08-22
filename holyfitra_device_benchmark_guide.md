@@ -22,7 +22,7 @@ The benchmark library is assembled from:
 
 ## Android Build Integration
 
-Copy the benchmark sources into an Android library module. Use `holyfitra_benchmark_build.gradle.kts` as the module build configuration and `CMakeLists_benchmark.txt` as the external CMake graph.
+The benchmark is already part of the checked-in `android-lib` library module. Use `android-lib/build.gradle.kts` for the module configuration and `android-lib/src/main/cpp/CMakeLists.txt` for the native graph; the benchmark target is `holyfitra_benchmark`. Build it with `./gradlew :android-lib:assembleRelease` when the Android SDK/NDK and Gradle wrapper are available. The legacy standalone Gradle fragment is intentionally not retained.
 
 The release configuration intentionally filters to `arm64-v8a`. A future split ABI can add a scalar `armeabi-v7a` fallback, but the current ragged NEON/SVE target is ARM64-first.
 

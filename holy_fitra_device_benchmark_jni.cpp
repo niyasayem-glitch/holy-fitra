@@ -1,5 +1,8 @@
 #include <jni.h>
 
+
+#include <exception>
+
 #include "holy_fitra_device_benchmark.h"
 
 extern "C" JNIEXPORT jstring JNICALL
@@ -27,6 +30,16 @@ Java_com_holyfitra_benchmark_HolyFitraBenchmark_nativeRun(
     config.seed = static_cast<uint64_t>(seed);
     config.pin_threads = pin_threads == JNI_TRUE;
     config.thermal_sample_period = static_cast<int32_t>(thermal_sample_period);
-    const holyfitra::DeviceBenchmarkResult result = holyfitra::run_holy_fitra_device_benchmark(config);
-    return env->NewStringUTF(result.json.c_str());
+    try {
+        const holyfitra::DeviceBenchmarkResult result = holyfitra::run_holy_fitra_device_benchmark(config);
+        return env->NewStringUTF(result.json.c_str());
+    } catch (const std::bad_alloc &) {
+        jclass clazz = env->FindClass("java/lang/OutOfMemoryError");
+        if (clazz) env->ThrowNew(clazz, "Holy Fitra benchmark allocation failed");
+        return nullptr;
+    } catch (const std::exception &error) {
+        jclass clazz = env->FindClass("java/lang/IllegalStateException");
+        if (clazz) env->ThrowNew(clazz, error.what());
+        return nullptr;
+    }
 }

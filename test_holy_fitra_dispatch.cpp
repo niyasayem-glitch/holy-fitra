@@ -68,26 +68,50 @@ int main() {
         Scheduler scheduler(SchedulerConfig{1, 0, 1, false, {}, {}});
         std::mutex mutex;
         std::condition_variable condition;
+        bool started = false;
         bool release = false;
         Task blocking;
         blocking.function = [&](TaskContext &) {
             std::unique_lock<std::mutex> lock(mutex);
+            started = true;
+            condition.notify_all();
             condition.wait(lock, [&] { return release; });
         };
         assert(scheduler.submit(std::move(blocking)) == SubmitStatus::Accepted);
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            assert(condition.wait_for(lock, std::chrono::seconds(1), [&] { return started; }));
+        }
+        std::atomic<int> drained{0};
         Task queued;
         queued.function = [](TaskContext &) {};
+        queued.on_cancel = [&drained](TaskContext &) { drained.fetch_add(1, std::memory_order_relaxed); };
         assert(scheduler.submit(std::move(queued)) == SubmitStatus::Accepted);
         Task overflow;
         overflow.function = [](TaskContext &) {};
         assert(scheduler.submit(std::move(overflow)) == SubmitStatus::Backpressure);
+        std::thread stopper([&scheduler] { scheduler.shutdown(); });
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
         {
             std::lock_guard<std::mutex> lock(mutex);
             release = true;
         }
         condition.notify_all();
+        stopper.join();
+        assert(drained.load(std::memory_order_relaxed) == 1);
+    }
+
+    {
+        Scheduler scheduler(SchedulerConfig{1, 0, 4, false, {}, {}});
+        std::atomic<int> failed{0};
+        std::atomic<bool> started{false};
+        Task throwing;
+        throwing.function = [&started](TaskContext &) { started.store(true, std::memory_order_release); throw 7; };
+        throwing.on_failure = [&failed](TaskContext &) { failed.fetch_add(1, std::memory_order_relaxed); };
+        assert(scheduler.submit(std::move(throwing)) == SubmitStatus::Accepted);
+        while (!started.load(std::memory_order_acquire)) std::this_thread::yield();
         scheduler.shutdown();
+        assert(failed.load(std::memory_order_relaxed) == 1);
     }
 
     return 0;

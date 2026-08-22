@@ -17,12 +17,17 @@ int main() {
     hf_holyfitra_runtime *runtime = hf_runtime_create(&model, 32, 0);
     assert(runtime != nullptr);
     hf_runtime_request *request = nullptr;
+    assert(hf_runtime_submit_matvec(runtime, input.data(), input.size(), output.data(), output.size(), -1, HF_RUNTIME_PRIORITY_INTERACTIVE, 0, &request) == HF_INVALID_ARGUMENT);
+    assert(request == nullptr);
+    assert(hf_runtime_submit_matvec(runtime, input.data(), input.size(), output.data(), output.size(), HF_RUNTIME_CORE_ANY, 99, 0, &request) == HF_INVALID_ARGUMENT);
+    assert(request == nullptr);
     assert(hf_runtime_submit_matvec(runtime, input.data(), input.size(), output.data(), output.size(), HF_RUNTIME_CORE_ANY, HF_RUNTIME_PRIORITY_INTERACTIVE, 0, &request) == HF_OK);
     assert(request != nullptr);
     assert(hf_runtime_wait(request, 1000) == HF_OK);
     for (float value : output) assert(std::fabs(value) < 1e-6f);
     hf_runtime_request_destroy(request);
     hf_runtime_set_thermal(runtime, 3);
+    hf_runtime_set_thermal(runtime, 99);
     hf_runtime_stats stats = hf_runtime_get_stats(runtime);
     assert(stats.completed >= 1);
     assert(stats.abi_version == 1);

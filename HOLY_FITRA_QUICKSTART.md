@@ -168,19 +168,24 @@ Validate the NibbleFlow native path on the host:
 python3 validate_nibbleflow.py
 ```
 
-The Android application links the native runtime using the provided CMake files:
+The Android application links the native runtime through the checked-in `android-lib` Gradle library module. Its authoritative native graph is:
 
 ```text
-CMakeLists.txt
-CMakeLists_benchmark.txt
+android-lib/src/main/cpp/CMakeLists.txt
 ```
 
-The Kotlin-facing APIs are:
+When an Android SDK/NDK and Gradle wrapper are available, build the module with:
+
+```bash
+./gradlew :android-lib:assembleRelease
+```
+
+The Kotlin-facing APIs are under `android-lib/src/main/java/`:
 
 ```text
-NibbleFlow.kt
-HolyFitraRuntime.kt
-HolyFitraBenchmark.kt
+org/holyfitra/NibbleFlow.kt
+org/holyfitra/HolyFitraRuntime.kt
+com/holyfitra/benchmark/HolyFitraBenchmark.kt
 ```
 
 A typical Android flow is:

@@ -35,6 +35,8 @@ class HolyFitraUITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "project"
             init_project(root, "ui_demo")
+            manifest = root / "holyfitra.toml"
+            manifest.write_text(manifest.read_text(encoding="utf-8").replace('frontend = "native"', 'frontend = "hyperir"'), encoding="utf-8")
             source = root / "src" / "tensor.hf"
             source.write_text(
                 'module tensor_ui\n'

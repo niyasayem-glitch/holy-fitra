@@ -24,8 +24,8 @@ The host validation compiled and executed the integrated runtime test, syntax-ch
 | `holy_fitra_runtime.h/.cpp` | C runtime handle, async requests, cancellation, waits, stats |
 | `holy_fitra_jni.cpp` | Java/Kotlin bridge and global-buffer lifecycle |
 | `HolyFitraRuntime.kt` | Typed Kotlin API and resource-safe wrappers |
-| `CMakeLists.txt` | NDK shared-library build graph |
-| `holyfitra_android_build.gradle.kts` | Android arm64-v8a Gradle configuration |
+| `android-lib/src/main/cpp/CMakeLists.txt` | NDK shared-library build graph |
+| `android-lib/build.gradle.kts` | Android arm64-v8a Gradle library configuration |
 
 ## Runtime Lifecycle
 

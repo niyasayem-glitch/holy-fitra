@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
 
 #define HF_MAX_DYNAMIC_I32_CAPACITY ((uint64_t)1u << 20)
 #define HF_MAX_FILE_BYTES ((uint64_t)64u << 20)
@@ -25,6 +26,63 @@ typedef struct {
     char *data;
 } HF_Buffer;
 
+enum {
+    HF_RESOURCE_DYN_I32 = 1,
+    HF_RESOURCE_FILE = 2,
+    HF_RESOURCE_STRING = 3,
+    HF_RESOURCE_BUFFER = 4
+};
+
+typedef struct HF_ResourceNode {
+    void *pointer;
+    uint32_t kind;
+    struct HF_ResourceNode *next;
+} HF_ResourceNode;
+
+static HF_ResourceNode *hf_resources = NULL;
+static pthread_mutex_t hf_resources_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+static int hf_resource_register(void *pointer, uint32_t kind) {
+    if (!pointer) return 0;
+    HF_ResourceNode *node = (HF_ResourceNode *)malloc(sizeof(HF_ResourceNode));
+    if (!node) return 0;
+    node->pointer = pointer;
+    node->kind = kind;
+    pthread_mutex_lock(&hf_resources_mutex);
+    node->next = hf_resources;
+    hf_resources = node;
+    pthread_mutex_unlock(&hf_resources_mutex);
+    return 1;
+}
+
+static int hf_resource_live(void *pointer, uint32_t kind) {
+    int found = 0;
+    pthread_mutex_lock(&hf_resources_mutex);
+    for (HF_ResourceNode *node = hf_resources; node; node = node->next) {
+        if (node->pointer == pointer && node->kind == kind) { found = 1; break; }
+    }
+    pthread_mutex_unlock(&hf_resources_mutex);
+    return found;
+}
+
+static int hf_resource_take(void *pointer, uint32_t kind) {
+    int found = 0;
+    pthread_mutex_lock(&hf_resources_mutex);
+    HF_ResourceNode **cursor = &hf_resources;
+    while (*cursor) {
+        if ((*cursor)->pointer == pointer && (*cursor)->kind == kind) {
+            HF_ResourceNode *removed = *cursor;
+            *cursor = removed->next;
+            free(removed);
+            found = 1;
+            break;
+        }
+        cursor = &(*cursor)->next;
+    }
+    pthread_mutex_unlock(&hf_resources_mutex);
+    return found;
+}
+
 static void hf_abort_invalid(void) {
     abort();
 }
@@ -39,31 +97,36 @@ void *hf_dyn_i32_new(uint64_t capacity) {
         return NULL;
     }
     array->capacity = capacity;
+    if (!hf_resource_register(array, HF_RESOURCE_DYN_I32)) {
+        free(array->data);
+        free(array);
+        return NULL;
+    }
     return array;
 }
 
 _Bool hf_dyn_i32_push(void *opaque, int32_t value) {
     HF_DynI32 *array = (HF_DynI32 *)opaque;
-    if (!array || !array->data || array->size >= array->capacity) return 0;
+    if (!hf_resource_live(array, HF_RESOURCE_DYN_I32) || !array->data || array->size >= array->capacity) return 0;
     array->data[array->size++] = value;
     return 1;
 }
 
 uint64_t hf_dyn_i32_len(void *opaque) {
     HF_DynI32 *array = (HF_DynI32 *)opaque;
-    if (!array || !array->data) return 0;
+    if (!hf_resource_live(array, HF_RESOURCE_DYN_I32) || !array->data) return 0;
     return array->size;
 }
 
 int32_t hf_dyn_i32_get(void *opaque, uint64_t index) {
     HF_DynI32 *array = (HF_DynI32 *)opaque;
-    if (!array || !array->data || index >= array->size) hf_abort_invalid();
+    if (!hf_resource_live(array, HF_RESOURCE_DYN_I32) || !array->data || index >= array->size) hf_abort_invalid();
     return array->data[index];
 }
 
 void hf_dyn_i32_free(void *opaque) {
     HF_DynI32 *array = (HF_DynI32 *)opaque;
-    if (!array) return;
+    if (!hf_resource_take(array, HF_RESOURCE_DYN_I32)) return;
     free(array->data);
     free(array);
 }
@@ -81,7 +144,7 @@ int32_t hf_dyn_i32_get32(void *opaque, int32_t index) {
 
 void hf_dyn_i32_set32(void *opaque, int32_t index, int32_t value) {
     HF_DynI32 *array = (HF_DynI32 *)opaque;
-    if (!array || !array->data || index < 0 || (uint64_t)index >= array->size) hf_abort_invalid();
+    if (!hf_resource_live(array, HF_RESOURCE_DYN_I32) || !array->data || index < 0 || (uint64_t)index >= array->size) hf_abort_invalid();
     array->data[index] = value;
 }
 
@@ -105,17 +168,27 @@ char *hf_string_slice32(const char *text, int32_t start, int32_t length) {
     if (!result) return NULL;
     memcpy(result, text + start, (size_t)length);
     result[length] = '\0';
+    if (!hf_resource_register(result, HF_RESOURCE_STRING)) {
+        free(result);
+        return NULL;
+    }
     return result;
 }
 
 void *hf_file_open(const char *path) {
     if (!path || path[0] == '\0') return NULL;
-    return (void *)fopen(path, "rb");
+    FILE *file = fopen(path, "rb");
+    if (!file) return NULL;
+    if (!hf_resource_register(file, HF_RESOURCE_FILE)) {
+        fclose(file);
+        return NULL;
+    }
+    return (void *)file;
 }
 
 void *hf_file_read_all(void *opaque) {
     FILE *file = (FILE *)opaque;
-    if (!file) return NULL;
+    if (!hf_resource_live(file, HF_RESOURCE_FILE)) return NULL;
     if (fseek(file, 0, SEEK_END) != 0) return NULL;
     long signed_size = ftell(file);
     if (signed_size < 0 || (uint64_t)signed_size > HF_MAX_FILE_BYTES) return NULL;
@@ -129,11 +202,16 @@ void *hf_file_read_all(void *opaque) {
         return NULL;
     }
     buffer[size] = '\0';
+    if (!hf_resource_register(buffer, HF_RESOURCE_STRING)) {
+        free(buffer);
+        return NULL;
+    }
     return buffer;
 }
 
 void hf_file_close(void *opaque) {
-    if (opaque) fclose((FILE *)opaque);
+    FILE *file = (FILE *)opaque;
+    if (hf_resource_take(file, HF_RESOURCE_FILE)) fclose(file);
 }
 
 void *hf_read_text(const char *path) {
@@ -216,11 +294,15 @@ char *hf_path_canonicalize(const char *path) {
     } else {
         result[output_length] = '\0';
     }
+    if (!hf_resource_register(result, HF_RESOURCE_STRING)) {
+        free(result);
+        return NULL;
+    }
     return result;
 }
 
 void hf_string_free(void *opaque) {
-    free(opaque);
+    if (hf_resource_take(opaque, HF_RESOURCE_STRING)) free(opaque);
 }
 
 void *hf_buf_new(uint64_t capacity) {
@@ -233,11 +315,16 @@ void *hf_buf_new(uint64_t capacity) {
         return NULL;
     }
     buffer->capacity = capacity;
+    if (!hf_resource_register(buffer, HF_RESOURCE_BUFFER)) {
+        free(buffer->data);
+        free(buffer);
+        return NULL;
+    }
     return buffer;
 }
 
 static _Bool hf_buf_append_bytes(HF_Buffer *buffer, const char *text, uint64_t length) {
-    if (!buffer || !buffer->data || (!text && length != 0)) return 0;
+    if (!hf_resource_live(buffer, HF_RESOURCE_BUFFER) || !buffer->data || (!text && length != 0)) return 0;
     if (length > buffer->capacity - buffer->size) return 0;
     if (length != 0) memcpy(buffer->data + buffer->size, text, (size_t)length);
     buffer->size += length;
@@ -267,16 +354,20 @@ _Bool hf_buf_append_i32(void *opaque, int32_t value) {
 
 char *hf_buf_finish(void *opaque) {
     HF_Buffer *buffer = (HF_Buffer *)opaque;
-    if (!buffer || !buffer->data || buffer->size > HF_MAX_BUFFER_BYTES) return NULL;
+    if (!hf_resource_live(buffer, HF_RESOURCE_BUFFER) || !buffer->data || buffer->size > HF_MAX_BUFFER_BYTES) return NULL;
     char *result = (char *)malloc((size_t)(buffer->size + 1));
     if (!result) return NULL;
     memcpy(result, buffer->data, (size_t)(buffer->size + 1));
+    if (!hf_resource_register(result, HF_RESOURCE_STRING)) {
+        free(result);
+        return NULL;
+    }
     return result;
 }
 
 void hf_buf_free(void *opaque) {
     HF_Buffer *buffer = (HF_Buffer *)opaque;
-    if (!buffer) return;
+    if (!hf_resource_take(buffer, HF_RESOURCE_BUFFER)) return;
     free(buffer->data);
     free(buffer);
 }

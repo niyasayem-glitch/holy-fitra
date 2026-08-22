@@ -27,6 +27,14 @@ struct hf_holyfitra_runtime {
     std::unique_ptr<Scheduler> scheduler;
 };
 
+static bool valid_core_class(int value) {
+    return value >= HF_RUNTIME_CORE_ANY && value <= HF_RUNTIME_CORE_LITTLE_PREFERRED;
+}
+
+static bool valid_priority(int value) {
+    return value >= HF_RUNTIME_PRIORITY_BACKGROUND && value <= HF_RUNTIME_PRIORITY_INTERACTIVE;
+}
+
 static CoreClass to_core_class(int value) {
     switch (value) {
         case HF_RUNTIME_CORE_BIG_ONLY: return CoreClass::BigOnly;
@@ -46,6 +54,8 @@ static Priority to_priority(int value) {
     }
 }
 
+static bool valid_thermal(int value) { return value >= 0 && value <= 3; }
+
 static ThermalState to_thermal(int value) {
     switch (value) {
         case 1: return ThermalState::Warm;
@@ -61,9 +71,9 @@ extern "C" hf_holyfitra_runtime *hf_runtime_create(const hf_nibbleflow_model *mo
     if (!model || hf_nibbleflow_validate_model(model) != HF_OK) return nullptr;
     auto *runtime = new hf_holyfitra_runtime();
     runtime->model = *model;
-    const auto topology = holyfitra::detect_android_topology();
-    SchedulerConfig config = holyfitra::tuned_android_scheduler_config(topology, queue_capacity == 0 ? 256 : queue_capacity, pin_threads != 0);
     try {
+        const auto topology = holyfitra::detect_android_topology();
+        SchedulerConfig config = holyfitra::tuned_android_scheduler_config(topology, queue_capacity == 0 ? 256 : queue_capacity, pin_threads != 0);
         runtime->scheduler = std::make_unique<Scheduler>(std::move(config));
     } catch (...) {
         delete runtime;
@@ -81,7 +91,7 @@ extern "C" void hf_runtime_destroy(hf_holyfitra_runtime *runtime) {
 extern "C" hf_status hf_runtime_submit_matvec(hf_holyfitra_runtime *runtime, const float *input, size_t input_count, float *output, size_t output_count, int core_class, int priority, uint64_t deadline_ns, hf_runtime_request **request) {
     if (request) *request = nullptr;
     if (!request || !runtime || !runtime->scheduler || !input || !output) return HF_INVALID_ARGUMENT;
-    if (deadline_ns < 0) return HF_INVALID_ARGUMENT;
+    if (!valid_core_class(core_class) || !valid_priority(priority)) return HF_INVALID_ARGUMENT;
     if (input_count < static_cast<size_t>(runtime->model.in_dim) || output_count < static_cast<size_t>(runtime->model.out_dim)) return HF_BUFFER_TOO_SMALL;
     auto *state = new hf_runtime_request();
     Task task;
@@ -126,6 +136,7 @@ extern "C" hf_status hf_runtime_submit_matvec(hf_holyfitra_runtime *runtime, con
 extern "C" hf_status hf_runtime_submit_matvec_batch(hf_holyfitra_runtime *runtime, const float *input, size_t batch_count, size_t input_stride, float *output, size_t output_stride, int core_class, int priority, uint64_t deadline_ns, hf_runtime_request **request) {
     if (request) *request = nullptr;
     if (!request || !runtime || !runtime->scheduler || !input || !output || batch_count == 0) return HF_INVALID_ARGUMENT;
+    if (!valid_core_class(core_class) || !valid_priority(priority)) return HF_INVALID_ARGUMENT;
     if (input_stride < static_cast<size_t>(runtime->model.in_dim) || output_stride < static_cast<size_t>(runtime->model.out_dim)) return HF_BUFFER_TOO_SMALL;
     if (batch_count > SIZE_MAX / input_stride || batch_count > SIZE_MAX / output_stride) return HF_OVERFLOW;
     auto *state = new hf_runtime_request();
@@ -199,7 +210,7 @@ extern "C" void hf_runtime_request_destroy(hf_runtime_request *request) {
 }
 
 extern "C" void hf_runtime_set_thermal(hf_holyfitra_runtime *runtime, int thermal_state) {
-    if (runtime && runtime->scheduler) runtime->scheduler->set_thermal_state(to_thermal(thermal_state));
+    if (runtime && runtime->scheduler && valid_thermal(thermal_state)) runtime->scheduler->set_thermal_state(to_thermal(thermal_state));
 }
 
 extern "C" hf_runtime_stats hf_runtime_get_stats(const hf_holyfitra_runtime *runtime) {

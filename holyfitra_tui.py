@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Iterable
 
 from holyfitra_compiler import HolyFitraError, load_project, parse_native, validate_native
+from holyfitra_safety import Frontend
 
 
 @dataclass
@@ -77,7 +78,8 @@ class Workspace:
             return self.last_result
         source = self.source()
         try:
-            if any(marker in source for marker in ("Tensor", "capability", "budget")):
+            project = load_project(self.root)
+            if project.frontend is Frontend.HYPERIR:
                 from hyperc_language_core import compile_source
                 result = compile_source(source)
                 self.last_result = {

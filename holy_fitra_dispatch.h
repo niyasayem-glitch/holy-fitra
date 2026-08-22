@@ -36,6 +36,7 @@ struct Task {
     TaskFunction function;
     TaskFunction on_cancel;
     TaskFunction on_deadline_missed;
+    TaskFunction on_failure;
     CoreClass core_class = CoreClass::Any;
     Priority priority = Priority::Throughput;
     uint64_t deadline_ns = 0;

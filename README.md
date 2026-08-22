@@ -251,7 +251,7 @@ python3 validate_holy_fitra_ragged.py
 bash termux-build.sh --host-tests
 ```
 
-The Android NDK integration is represented by `CMakeLists.txt`, `CMakeLists_benchmark.txt`, JNI sources, and Kotlin wrappers. Physical ARM64 Android validation is required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
+The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. Build it with `./gradlew :android-lib:assembleRelease` when an Android SDK/NDK and Gradle wrapper are available. Physical ARM64 Android validation is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
 
 ## Package a project
 

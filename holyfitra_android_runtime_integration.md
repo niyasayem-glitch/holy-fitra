@@ -175,7 +175,7 @@ android {
 }
 ```
 
-The complete module example is included in `holyfitra_android_build.gradle.kts`.
+The repository’s authoritative module is `android-lib/`; its complete library configuration is in `android-lib/build.gradle.kts`, with native targets in `android-lib/src/main/cpp/CMakeLists.txt`. When the Android SDK/NDK and Gradle wrapper are available, build it with `./gradlew :android-lib:assembleRelease`. The code block above is a conceptual integration example, not a second build entry point.
 
 ## 8. Model Asset Loading
 

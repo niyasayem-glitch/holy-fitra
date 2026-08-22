@@ -12,18 +12,13 @@ android {
         targetSdk = 35
         versionCode = 1
         versionName = "0.1.0"
-
         ndk {
             abiFilters += listOf("arm64-v8a")
         }
-
         externalNativeBuild {
             cmake {
-                cppFlags += listOf("-std=c++17", "-O3")
-                arguments += listOf(
-                    "-DANDROID_STL=c++_static",
-                    "-DCMAKE_BUILD_TYPE=Release"
-                )
+                cppFlags += listOf("-std=c++17", "-O3", "-fvisibility=hidden")
+                arguments += listOf("-DANDROID_STL=c++_static")
             }
         }
     }
@@ -35,14 +30,7 @@ android {
         }
     }
 
-    packaging {
-        jniLibs {
-            useLegacyPackaging = false
-        }
-        resources {
-            excludes += "/META-INF/{AL2.0,LGPL2.1}"
-        }
-    }
+    sourceSets["main"].java.srcDirs("src/main/java")
 
     buildTypes {
         debug {
@@ -57,6 +45,11 @@ android {
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
+    }
+
+    packaging {
+        jniLibs.useLegacyPackaging = false
+        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
 }
 

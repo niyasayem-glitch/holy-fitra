@@ -326,7 +326,7 @@ fn infer(x: Tensor<[1, 4], f16, device=neon>) -> Tensor<[1, 4], f16> {
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "tensor.hf"
             path.write_text(source, encoding="utf-8")
-            result = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "check", str(path)], capture_output=True, text=True)
+            result = subprocess.run([sys.executable, str(root / "holyfitra_compiler.py"), "check", "--frontend=hyperir", str(path)], capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(json.loads(result.stdout)["valid"])
 

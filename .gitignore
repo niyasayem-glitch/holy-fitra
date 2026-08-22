@@ -21,6 +21,8 @@ venv/
 *.out
 
 # Native and Android build output
+.gradle/
+android-lib/.cxx/
 build/
 cmake-build-*/
 *-build/

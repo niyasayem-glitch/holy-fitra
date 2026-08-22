@@ -13,6 +13,12 @@ static void write_number(const std::filesystem::path &path, int value) {
     stream << value;
 }
 
+static void write_text(const std::filesystem::path &path, const char *value) {
+    std::filesystem::create_directories(path.parent_path());
+    std::ofstream stream(path);
+    stream << value;
+}
+
 int main() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "holyfitra_topology_test";
     std::filesystem::remove_all(root);
@@ -30,6 +36,18 @@ int main() {
     assert(config.little_workers == 3);
     assert(config.big_workers == 2);
     std::filesystem::remove_all(root);
+
+    const std::filesystem::path ranges_root = std::filesystem::temp_directory_path() / "holyfitra_topology_ranges_test";
+    std::filesystem::remove_all(ranges_root);
+    std::filesystem::create_directories(ranges_root);
+    write_text(ranges_root / "online", "0-3,6\n");
+    AndroidTopology ranges = detect_android_topology(ranges_root.string());
+    assert(ranges.little_cpus.size() + ranges.big_cpus.size() == 5);
+    assert(ranges.little_cpus.front() == 0 || ranges.big_cpus.front() == 0);
+    write_text(ranges_root / "online", "malformed-range\n");
+    AndroidTopology fallback = detect_android_topology(ranges_root.string());
+    assert(!fallback.little_cpus.empty() && !fallback.big_cpus.empty());
+    std::filesystem::remove_all(ranges_root);
 
     Scheduler scheduler(config);
     scheduler.set_thermal_state(ThermalState::Critical);

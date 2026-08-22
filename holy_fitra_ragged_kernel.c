@@ -26,8 +26,27 @@ static void hf_zero(float *output, int32_t d_model) {
     for (int32_t d = 0; d < d_model; ++d) output[d] = 0.0f;
 }
 
+int hf_validate_ragged_batch(const hf_ragged_attention_batch *batch) {
+    if (!batch || !batch->q || !batch->k || !batch->v || !batch->output || !batch->offsets || batch->sequence_count <= 0 || batch->d_model <= 0) return 0;
+    const uint64_t sequence_count = (uint64_t)batch->sequence_count;
+    if (batch->offsets_count < sequence_count + 1u) return 0;
+    int32_t previous = batch->offsets[0];
+    if (previous < 0) return 0;
+    for (uint64_t sequence = 0; sequence < sequence_count; ++sequence) {
+        const int32_t start = batch->offsets[sequence];
+        const int32_t end = batch->offsets[sequence + 1u];
+        if (start < 0 || end < start || start != previous) return 0;
+        previous = end;
+    }
+    const uint64_t total_tokens = (uint64_t)previous;
+    const uint64_t width = (uint64_t)batch->d_model;
+    if (width != 0 && total_tokens > UINT64_MAX / width) return 0;
+    const uint64_t required_elements = total_tokens * width;
+    return required_elements <= batch->q_elements && required_elements <= batch->k_elements && required_elements <= batch->v_elements && required_elements <= batch->output_elements;
+}
+
 void holy_fitra_ragged_attention_scalar(const hf_ragged_attention_batch *batch) {
-    if (!batch || !batch->q || !batch->k || !batch->v || !batch->output || !batch->offsets || batch->sequence_count <= 0 || batch->d_model <= 0) return;
+    if (!hf_validate_ragged_batch(batch)) return;
     const float scale = 1.0f / sqrtf((float)batch->d_model);
     for (int32_t sequence = 0; sequence < batch->sequence_count; ++sequence) {
         const int32_t start = batch->offsets[sequence];
@@ -52,7 +71,7 @@ void holy_fitra_ragged_attention_scalar(const hf_ragged_attention_batch *batch) 
                 max_score = new_max;
                 have_max = 1;
             }
-            if (normalizer > 0.0f) for (int32_t d = 0; d < batch->d_model; ++d) out[d] /= normalizer;
+            if (normalizer > 0.0f && normalizer == normalizer) for (int32_t d = 0; d < batch->d_model; ++d) out[d] /= normalizer;
         }
     }
 }
@@ -68,7 +87,7 @@ static float hf_dot_neon(const float *a, const float *b, int32_t d_model) {
 }
 
 void holy_fitra_ragged_attention_neon(const hf_ragged_attention_batch *batch) {
-    if (!batch || batch->d_model <= 0) return;
+    if (!hf_validate_ragged_batch(batch)) return;
     const float scale = 1.0f / sqrtf((float)batch->d_model);
     for (int32_t sequence = 0; sequence < batch->sequence_count; ++sequence) {
         const int32_t start = batch->offsets[sequence];
@@ -100,7 +119,7 @@ void holy_fitra_ragged_attention_neon(const hf_ragged_attention_batch *batch) {
                 max_score = new_max;
                 have_max = 1;
             }
-            if (normalizer > 0.0f) {
+            if (normalizer > 0.0f && normalizer == normalizer) {
                 const float32x4_t inv = vdupq_n_f32(1.0f / normalizer);
                 int32_t d = 0;
                 for (; d + 4 <= batch->d_model; d += 4) vst1q_f32(out + d, vmulq_f32(vld1q_f32(out + d), inv));
@@ -117,7 +136,7 @@ void holy_fitra_ragged_attention_neon(const hf_ragged_attention_batch *batch) {
 
 #if defined(__ARM_FEATURE_SVE)
 void holy_fitra_ragged_attention_sve(const hf_ragged_attention_batch *batch) {
-    if (!batch || batch->d_model <= 0) return;
+    if (!hf_validate_ragged_batch(batch)) return;
     const float scale = 1.0f / sqrtf((float)batch->d_model);
     for (int32_t sequence = 0; sequence < batch->sequence_count; ++sequence) {
         const int32_t start = batch->offsets[sequence];
@@ -159,6 +178,7 @@ void holy_fitra_ragged_attention_sve(const hf_ragged_attention_batch *batch) {
                 max_score = new_max;
                 have_max = 1;
             }
+            if (!(normalizer > 0.0f) || normalizer != normalizer) continue;
             int32_t norm_d = 0;
             while (norm_d < batch->d_model) {
                 svbool_t pg = svwhilelt_b32((uint32_t)norm_d, (uint32_t)batch->d_model);
