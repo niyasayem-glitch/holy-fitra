@@ -14,6 +14,7 @@
 //   clang --target=aarch64-linux-android21 -c input.ll -o input.aarch64.o
 
 #include <cstdint>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <map>
@@ -528,4 +529,80 @@ private:
 
 } // namespace hf0
 
-int main(int argc,char**argv){using namespace hf0;std::string input,source;try{if(argc<2){usage(argv[0]);return 2;}std::string output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a=="--version"){std::cout<<kVersion<<static_cast<char>(10);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}source=readFile(input);Program p=Parser(Lexer(source).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){DiagnosticReporter::render(std::cerr,d,input.empty()?"<command line>":input,source);return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}
+int main(int argc, char** argv) {
+    using namespace hf0;
+    std::string input;
+    std::string source;
+    try {
+        if (argc < 2) {
+            usage(argv[0]);
+            return 2;
+        }
+        std::string output;
+        std::string target;
+        if (const char* configured_target = std::getenv("HOLYFITRA_TARGET"); configured_target && *configured_target) {
+            target = configured_target;
+        } else {
+#if defined(__ANDROID__) && (defined(__aarch64__) || defined(__arm64__))
+            target = "aarch64-linux-android";
+#elif defined(__ANDROID__) && (defined(__arm__) || defined(__ARM_ARCH))
+            target = "armv7a-linux-androideabi";
+#elif defined(__x86_64__) || defined(_M_X64)
+            target = "x86_64-pc-linux-gnu";
+#elif defined(__aarch64__) || defined(__arm64__)
+            target = "aarch64-unknown-linux-gnu";
+#else
+            target = "x86_64-pc-linux-gnu";
+#endif
+        }
+        for (int i = 1; i < argc; ++i) {
+            std::string argument = argv[i];
+            if (argument == "--help" || argument == "-h") {
+                usage(argv[0]);
+                return 0;
+            }
+            if (argument == "--version") {
+                std::cout << kVersion << static_cast<char>(10);
+                return 0;
+            }
+            if (argument.rfind("--target=", 0) == 0) {
+                target = argument.substr(9);
+                continue;
+            }
+            if (argument == "--target") {
+                if (++i >= argc) fail("--target requires a value");
+                target = argv[i];
+                continue;
+            }
+            if (argument == "-o" || argument == "--output") {
+                if (++i >= argc) fail("-o requires a path");
+                output = argv[i];
+                continue;
+            }
+            if (!argument.empty() && argument[0] == '-') fail("unknown option '" + argument + "'");
+            if (!input.empty()) fail("multiple input files are unsupported");
+            input = argument;
+        }
+        if (input.empty()) {
+            usage(argv[0]);
+            return 2;
+        }
+        source = readFile(input);
+        Program program = Parser(Lexer(source).run()).parse();
+        Validator().run(program);
+        std::string llvm = LLVMEmitter(program, target).emit();
+        if (output.empty()) {
+            std::cout << llvm;
+        } else {
+            writeFile(output, llvm);
+            std::cerr << "holyfitra-bootstrap: wrote " << output << "\n";
+        }
+        return 0;
+    } catch (const Diagnostic& diagnostic) {
+        DiagnosticReporter::render(std::cerr, diagnostic, input.empty() ? "<command line>" : input, source);
+        return 1;
+    } catch (const std::exception& error) {
+        std::cerr << "holyfitra-bootstrap: internal error: " << error.what() << "\n";
+        return 1;
+    }
+}

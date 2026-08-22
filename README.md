@@ -9,25 +9,24 @@ The repository now includes a real command-line compiler driver for a native sca
 ```bash
 git clone https://github.com/niyasayem-glitch/holy-fitra.git
 cd holy-fitra
-bash termux-setup.sh --dry-run   # inspect packages without installing
-python3 holyfitra_compiler.py --help
+
+# Inspect the no-sudo Termux package plan first.
+bash termux-setup.sh --dry-run
+
+# Install the Termux toolchain and the user-local CLI.
+bash termux-setup.sh
+source "$HOME/.local/bin/holyfitra-env"
+holyfitra doctor
 ```
 
-On a normal Linux host:
+On a normal Linux host, install into a user-owned prefix when possible:
 
 ```bash
-sudo pip3 install -e .
+python3 -m pip install --user -e .
 holyfitra --help
 ```
 
-On Termux, run:
-
-```bash
-bash termux-setup.sh
-source "$HOME/.local/bin/holyfitra-env" 2>/dev/null || true
-```
-
-The setup script uses Termux `pkg` packages rather than `sudo`, installs Python/Clang/LLVM/CMake tooling, and prefers the Termux NumPy package when available.
+The Termux setup uses `pkg`, never `sudo`, installs Python/Clang/LLVM/CMake/coreutils tooling, avoids writing into Termux’s reserved `$PREFIX`, and creates the CLI under `$HOME/.local/bin`. It automatically enables the native ARM64 test path when running inside Termux. If you need to choose another user prefix, set `HOLYFITRA_PREFIX`, not `PREFIX`.
 
 ## Native v1 release path
 
@@ -43,7 +42,7 @@ The repository also includes a bounded native-first v1 driver. It builds the che
 ./holyfitra-v1.sh package bootstrap/hello.hf -o build/hello.json --version 1.0.0
 ```
 
-The v1 driver is intentionally scoped to the verified scalar compiler subset and uses the host `clang` toolchain. `--target=aarch64-linux-android21` produces an AArch64 artifact only; it does not prove Android execution. Run `./test_holyfitra_v1.sh` to exercise deterministic emission, malformed-source rejection, executable status handling, project tests, and package metadata. Install it without `sudo` with `PREFIX="$HOME/.local" ./install-holyfitra-v1.sh`; the installer places an executable launcher under `$HOME/.local/bin` and keeps the seed compiler under the user prefix. To create a deterministic host-candidate archive, run `./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz`; the archive records `python_required=false`, `android_execution=false`, and `aarch64_status=artifact-only`.
+The v1 driver is intentionally scoped to the verified scalar compiler subset and uses the locally installed `clang` toolchain. On an ARM64 Termux device it automatically selects `aarch64-linux-android` and lets the Termux clang driver use its native Bionic environment; on x86-64 Linux it retains the x86-64 host target. Set `HOLYFITRA_TARGET` to request an explicit target, and set `HOLYFITRA_CC`/`HOLYFITRA_CXX` to select compilers. A foreign `--target` produces an artifact only and does not prove execution on that platform. Run `./test_holyfitra_v1.sh` to exercise deterministic emission, malformed-source rejection, executable status handling, project tests, and package metadata. Install it without `sudo` with `HOLYFITRA_PREFIX="$HOME/.local" ./install-holyfitra-v1.sh`; the installer places an executable launcher under `$HOME/.local/bin` and keeps the seed compiler under the user prefix. To create a deterministic host-candidate archive, run `./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz`; the archive records `python_required=false`, `android_execution=false`, and `aarch64_status=artifact-only`.
 
 ## Terminal development environment
 
@@ -138,7 +137,7 @@ holyfitra emit-llvm arithmetic.hf \
   -o arithmetic.android.ll
 ```
 
-A complete Android executable still requires the Android NDK/sysroot or the Android application’s CMake toolchain. Termux can compile the host-side native runtime and emit target IR, but Termux itself is not a replacement for the NDK when producing APK-linked native libraries.
+A complete APK/AAR still requires the Android NDK/sysroot or the Android application’s CMake toolchain. Termux can compile and execute the scalar CLI and host-side native runtime directly on an ARM64 phone using Bionic, but Termux is not a replacement for the NDK when producing APK-linked native libraries.
 
 ## Live compilation and quantization dashboard
 
@@ -267,7 +266,7 @@ python3 validate_holy_fitra_ragged.py
 bash termux-build.sh --host-tests
 ```
 
-The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. Build it with `./gradlew :android-lib:assembleRelease` when an Android SDK/NDK and Gradle wrapper are available. Physical ARM64 Android validation is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
+The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. Build it with `./gradlew :android-lib:assembleRelease` when an Android SDK/NDK and Gradle wrapper are available. This is separate from the native Termux CLI path. Physical ARM64 Android validation is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
 
 ## Package a project
 

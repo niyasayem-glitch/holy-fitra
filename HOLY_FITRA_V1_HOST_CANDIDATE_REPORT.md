@@ -4,11 +4,11 @@
 
 **Evidence date:** 2026-08-22
 
-**Repository state:** Working tree changes pending publication after the prior P0 remediation commit.
+**Repository state:** Public repository with the validated Termux/ARM64 portability pass applied after the prior P0 remediation commit.
 
 ## Release scope
 
-This candidate is a **native-first host release** for the bounded scalar Holy Fitra subset. It contains a C++17 seed compiler, C11 Stage-0 runtime, a no-Python shell driver, a no-sudo installer, deterministic source packaging, negative source-limit tests, and Termux-compatible host integration.
+This candidate is a **native-first release** for the bounded scalar Holy Fitra subset. It contains a C++17 seed compiler, C11 Stage-0 runtime, a no-Python shell driver, a no-sudo installer, deterministic source packaging, negative source-limit tests, and a Termux-friendly native CLI path that selects the device target on ARM64.
 
 The candidate does not claim a complete fixed-point compiler, general Stage-10 CFG/MIR, complete AI-native lowering, Android package execution, or physical-device performance. Python remains an optional development/oracle environment and is not required by the v1 driver’s check, emit, build, run, test, package, or seed-build path.
 
@@ -20,7 +20,7 @@ The candidate does not claim a complete fixed-point compiler, general Stage-10 C
 | v1 driver | `holyfitra-v1.sh` provides `doctor`, `version`, `build-seed`, `check`, `emit`, `build`, `run`, `test`, and `package`. LLVM is compiled through Clang before linking or acceptance. |
 | Installation | `install-holyfitra-v1.sh` installs into a user-selected prefix without `sudo` and uses an absolute launcher to avoid symlink-root errors. |
 | Release packaging | `make-holyfitra-v1-release.sh` runs the v1 regression, bundles the native release sources and fixtures, and creates a deterministic gzip archive with explicit host/device metadata. |
-| Termux | `termux-build.sh` now includes v1 shell syntax and driver regression checks while preserving the existing `pkg`/no-`sudo` workflow. |
+| Termux | `termux-setup.sh` installs the user-local toolchain without `sudo`, `termux-build.sh` enables native tests on Termux, and the CLI selects `aarch64-linux-android` on ARM64 devices. |
 | Documentation | `HOLY_FITRA_V1_RELEASE_SPEC.md` defines supported commands, safety invariants, acceptance gates, and evidence boundaries. |
 
 ## Validation evidence
@@ -39,7 +39,7 @@ user-prefix installer test             passed
 two archive byte comparison            passed
 ```
 
-The Python suite contains 155 tests at the current post-P0 baseline. Native v1 regression covers deterministic LLVM emission, executable exit status, malformed source rejection, deep expression nesting rejection, oversized source rejection, project-test failure semantics, and package metadata. The isolated no-Python run used a PATH containing native utilities and no Python executable.
+The Python suite contains 220 tests at the current baseline. Native v1 regression covers deterministic LLVM emission, executable exit status, malformed source rejection, deep expression nesting rejection, oversized source rejection, project-test failure semantics, and package metadata. The isolated no-Python run used a PATH containing native utilities and no Python executable.
 
 ## Artifact status
 
@@ -70,4 +70,4 @@ From a clean checkout with Clang available:
 ./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz
 ```
 
-For Termux, install the required packages through the existing `termux-setup.sh`, then run `bash termux-build.sh --host-tests`. No `sudo` command is part of the native v1 path.
+For Termux, run `bash termux-setup.sh`, source `$HOME/.local/bin/holyfitra-env`, then run `bash termux-build.sh --native-tests`. No `sudo` command is part of the native v1 path. Use `HOLYFITRA_PREFIX` for an alternate v1 install prefix because Termux reserves `$PREFIX` for its package environment.

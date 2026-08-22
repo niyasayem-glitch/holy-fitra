@@ -59,8 +59,8 @@ The v1 safety policy is fail-closed: an invalid source, unsupported construct, s
 | Platform/evidence | v1 meaning |
 |---|---|
 | x86-64 Linux | Primary host regression and executable validation. |
-| Termux host | Required compatibility path using `pkg`, no `sudo`, and no Python dependency for bootstrap. |
-| AArch64 target object | Cross-compilation artifact validation only. |
+| Termux host | Required compatibility path using `pkg`, no `sudo`, and no Python dependency for bootstrap. On ARM64 Termux, the native CLI may compile and execute locally through the device’s Bionic environment. |
+| AArch64 target object | Cross-compilation artifact validation only when produced from a different host; it is not physical-device execution evidence. |
 | Android SDK/NDK build | Required before claiming Android package readiness. |
 | Physical arm64 Android device | Required before claiming NEON/SVE, big.LITTLE, thermal, latency, or memory results. |
 | Fixed-point self-hosting | Not a v1 claim until repeated complete compiler rebuilds stabilize. |

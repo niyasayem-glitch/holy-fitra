@@ -47,6 +47,60 @@ _LLVM_CACHE_SCHEMA = 3
 _NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v2"
 
 
+def _termux_prefix() -> str | None:
+    prefix = os.environ.get("PREFIX", "")
+    return prefix if prefix.endswith("com.termux/files/usr") else None
+
+
+def _native_target() -> str:
+    """Return the target that the current compiler environment can execute."""
+    override = os.environ.get("HOLYFITRA_TARGET", "").strip()
+    if override:
+        return override
+    machine = os.uname().machine.lower()
+    if machine in {"aarch64", "arm64"}:
+        return "aarch64-linux-android" if _termux_prefix() else "aarch64-unknown-linux-gnu"
+    if machine in {"armv7l", "armv8l", "arm"}:
+        return "armv7a-linux-androideabi" if _termux_prefix() else "armv7-unknown-linux-gnueabihf"
+    if machine in {"x86_64", "amd64"}:
+        return "x86_64-pc-linux-gnu"
+    if machine in {"i686", "x86"}:
+        return "i686-pc-linux-gnu"
+    return f"{machine}-unknown-linux-gnu"
+
+
+def _native_clang() -> str:
+    compiler = os.environ.get("HOLYFITRA_CC") or os.environ.get("CC")
+    if compiler:
+        resolved = shutil.which(compiler)
+        if resolved:
+            return resolved
+        raise HolyFitraError(f"configured C compiler was not found: {compiler}")
+    resolved = shutil.which("clang")
+    if resolved:
+        return resolved
+    raise HolyFitraError("clang is required; on Termux run: pkg install clang")
+
+
+def _run_timeout() -> float:
+    raw = os.environ.get("HOLYFITRA_RUN_TIMEOUT", "30")
+    try:
+        timeout = float(raw)
+    except ValueError as error:
+        raise HolyFitraError("HOLYFITRA_RUN_TIMEOUT must be a positive number") from error
+    if timeout <= 0:
+        raise HolyFitraError("HOLYFITRA_RUN_TIMEOUT must be a positive number")
+    return timeout
+
+
+def _effective_target(target: str | None) -> str:
+    return _native_target() if not target or target == "host" else target
+
+
+def _is_local_target(target: str) -> bool:
+    return target in {"host", _native_target()}
+
+
 class HolyFitraError(Exception):
     """A user-facing compilation error."""
 
@@ -770,7 +824,7 @@ class LLVMEmitter:
         self.terminated = False
         self.variables: dict[str, str] = {}
         self.types: dict[str, Type] = {}
-        self.target = "x86_64-pc-linux-gnu"
+        self.target = _native_target()
 
     def temp(self) -> str:
         value = f"%t{self.counter}"
@@ -784,7 +838,7 @@ class LLVMEmitter:
 
     def emit(self, target: str | None = None) -> str:
         validate_native(self.program)
-        triple = target or "x86_64-pc-linux-gnu"
+        triple = _effective_target(target)
         self.target = triple
         target_lines = [f"; Holy Fitra target: {triple}"]
         if triple.startswith("aarch64"):
@@ -1066,7 +1120,7 @@ def _sha256_file(path: Path) -> str:
 
 def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
     source = read_source(source_path)
-    effective_target = target or "x86_64-pc-linux-gnu"
+    effective_target = _effective_target(target)
     cache_identity = "\\0".join((source, effective_target, str(_LLVM_CACHE_SCHEMA), _NATIVE_COMPILER_ABI))
     digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
     memory_cached = _MEMORY_COMPILE_CACHE.get(digest)
@@ -1159,9 +1213,12 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
     with tempfile.TemporaryDirectory(prefix="holyfitra-") as temporary:
         llvm_path = Path(temporary) / f"{source_path.stem}.ll"
         llvm_path.write_text(llvm, encoding="utf-8")
-        command = ["clang", "-O2"]
-        if target:
-            command.append(f"--target={target}")
+        effective_target = _effective_target(target)
+        command = [_native_clang(), "-O2"]
+        # Termux's clang driver is already configured for the device ABI. Only
+        # add --target when the caller requests a foreign cross-compilation.
+        if effective_target not in {"host", _native_target()}:
+            command.append(f"--target={effective_target}")
         command += [str(llvm_path), "-o", str(output)]
         completed = subprocess.run(command, text=True, capture_output=True)
         if completed.returncode:
@@ -1227,7 +1284,7 @@ def init_project(root: Path, name: str | None = None) -> int:
     source = source_dir / "main.hf"
     if manifest.exists() or source.exists():
         raise HolyFitraError(f"project already exists: {root}")
-    manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "x86_64-pc-linux-gnu"\nfrontend = "native"\n''', encoding="utf-8")
+    manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "{_native_target()}"\nfrontend = "native"\n''', encoding="utf-8")
     source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
     smoke_test = tests_dir / "smoke.hf"
     smoke_test.write_text(f"module {project_name}_tests\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
@@ -1237,9 +1294,12 @@ def init_project(root: Path, name: str | None = None) -> int:
 
 def test_project(source_path: Path, target: str | None = None) -> int:
     project = load_project(source_path)
-    effective_target = target or project.target or "x86_64-pc-linux-gnu"
-    if not (effective_target == "host" or effective_target.startswith("x86_64")):
-        raise HolyFitraError(f"holyfitra test requires an executable host target, got {effective_target}")
+    effective_target = _effective_target(target or project.target)
+    if not _is_local_target(effective_target):
+        raise HolyFitraError(
+            f"holyfitra test requires an executable host target that is locally runnable; got {effective_target}. "
+            f"Use {_native_target()} on this device or run cross-target tests through the Android toolchain."
+        )
     tests_dir = project.root / "tests"
     test_sources = sorted(tests_dir.glob("*.hf")) if tests_dir.is_dir() else []
     if not test_sources:
@@ -1253,7 +1313,7 @@ def test_project(source_path: Path, target: str | None = None) -> int:
             try:
                 with contextlib.redirect_stdout(io.StringIO()):
                     build(test_source, executable, target or project.target)
-                completed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30)
+                completed = subprocess.run([str(executable)], capture_output=True, text=True, timeout=_run_timeout())
                 results.append({"name": test_source.stem, "source": str(test_source), "status": completed.returncode, "passed": completed.returncode == 0})
             except (HolyFitraError, OSError, subprocess.SubprocessError) as error:
                 results.append({"name": test_source.stem, "source": str(test_source), "status": None, "passed": False, "error": str(error)})
@@ -1266,7 +1326,7 @@ def package_file(source_path: Path, output: Path, version: str, target: str | No
     project = load_project(source_path)
     from hyperc_package import HyperPackageBuilder
     relative_entry = project.entry.relative_to(project.root).as_posix()
-    builder = HyperPackageBuilder(project.name, version, target or project.target or "host")
+    builder = HyperPackageBuilder(project.name, version, target or project.target or _native_target())
     builder.add_file(project.root, relative_entry, "source")
     builder.set_metadata(compiler="holyfitra", frontend=str(project.frontend), entry=relative_entry)
     package = builder.build()
@@ -1319,19 +1379,25 @@ def doctor_report() -> dict[str, object]:
     import importlib.util
     checks: dict[str, object] = {
         "python": sys.version.split()[0],
+        "python_executable": sys.executable,
         "platform": sys.platform,
-        "termux": bool(os.environ.get("PREFIX", "").endswith("com.termux/files/usr")),
+        "architecture": os.uname().machine,
+        "termux": bool(_termux_prefix()),
+        "termux_prefix": _termux_prefix() or False,
+        "native_target": _native_target(),
         "clang": shutil.which("clang") or False,
         "llvm_as": shutil.which("llvm-as") or False,
         "llc": shutil.which("llc") or False,
         "cmake": shutil.which("cmake") or False,
         "numpy": bool(importlib.util.find_spec("numpy")),
         "android_ndk": bool(os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT")),
+        "android_ndk_path": os.environ.get("ANDROID_NDK_HOME") or os.environ.get("ANDROID_NDK_ROOT") or False,
         "curses": bool(importlib.util.find_spec("curses")),
     }
     checks["native_backend_ready"] = bool(checks["clang"] and checks["python"])
     checks["hyperir_backend_ready"] = bool(checks["numpy"])
     checks["android_build_ready"] = bool(checks["android_ndk"] and checks["cmake"])
+    checks["termux_native_ready"] = bool(checks["termux"] and checks["clang"] and checks["native_target"].startswith("aarch64-linux-android"))
     return checks
 
 
@@ -1428,7 +1494,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             with tempfile.TemporaryDirectory(prefix="holyfitra-run-") as temporary:
                 executable = Path(temporary) / "program"
                 build(project.entry, executable, args.target or project.target, args.keep_llvm)
-                completed = subprocess.run([str(executable)])
+                completed = subprocess.run([str(executable)], timeout=_run_timeout())
                 return completed.returncode
     except (HolyFitraError, OSError, subprocess.SubprocessError) as error:
         print(f"holyfitra: error: {error}", file=sys.stderr)

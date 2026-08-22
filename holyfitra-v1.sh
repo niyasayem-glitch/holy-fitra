@@ -4,8 +4,39 @@ set -euo pipefail
 ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BUILD_DIR="${HOLYFITRA_V1_BUILD_DIR:-$ROOT/.holyfitra/v1}"
 SEED="$BUILD_DIR/holyfitra-bootstrap"
-TARGET="x86_64-pc-linux-gnu"
 RUN_TIMEOUT="${HOLYFITRA_V1_TIMEOUT:-30}"
+
+native_target() {
+  if [[ -n "${HOLYFITRA_TARGET:-}" ]]; then
+    printf '%s\n' "$HOLYFITRA_TARGET"
+    return
+  fi
+  local machine
+  machine="$(uname -m)"
+  case "$machine" in
+    aarch64|arm64)
+      if [[ "${PREFIX:-}" == *com.termux/files/usr ]]; then
+        printf '%s\n' 'aarch64-linux-android'
+      else
+        printf '%s\n' 'aarch64-unknown-linux-gnu'
+      fi
+      ;;
+    armv7l|armv8l|arm)
+      if [[ "${PREFIX:-}" == *com.termux/files/usr ]]; then
+        printf '%s\n' 'armv7a-linux-androideabi'
+      else
+        printf '%s\n' 'armv7-unknown-linux-gnueabihf'
+      fi
+      ;;
+    x86_64|amd64) printf '%s\n' 'x86_64-pc-linux-gnu' ;;
+    i686|x86) printf '%s\n' 'i686-pc-linux-gnu' ;;
+    *) printf '%s-unknown-linux-gnu\n' "$machine" ;;
+  esac
+}
+
+TARGET="$(native_target)"
+CC="${HOLYFITRA_CC:-${CC:-clang}}"
+CXX="${HOLYFITRA_CXX:-${CXX:-clang++}}"
 
 usage() {
   cat <<'EOF'
@@ -18,17 +49,43 @@ usage:
   holyfitra-v1.sh run INPUT.hf [--target TRIPLE]
   holyfitra-v1.sh test PROJECT_OR_TESTS_DIR
   holyfitra-v1.sh package INPUT.hf -o OUTPUT.json [--version VERSION] [--target TRIPLE]
+
+Environment:
+  HOLYFITRA_TARGET   Override the native LLVM target triple.
+  HOLYFITRA_CC       C compiler/driver used for native linking.
+  HOLYFITRA_CXX      C++ compiler used to build the seed compiler.
+  HOLYFITRA_V1_TIMEOUT  Execution timeout in seconds; default: 30.
+
+On Termux, install the native toolchain with:
+  pkg install python clang llvm coreutils findutils
 EOF
 }
 
 need_command() {
-  command -v "$1" >/dev/null 2>&1 || { echo "holyfitra-v1: required command not found: $1" >&2; exit 127; }
+  command -v "$1" >/dev/null 2>&1 || {
+    echo "holyfitra-v1: required command not found: $1" >&2
+    if [[ "${PREFIX:-}" == *com.termux/files/usr ]]; then
+      echo "holyfitra-v1: in Termux, install it with: pkg install clang llvm coreutils findutils" >&2
+    fi
+    exit 127
+  }
+}
+
+validate_timeout() {
+  if [[ ! "$RUN_TIMEOUT" =~ ^([1-9][0-9]*([.][0-9]+)?|0[.]([0-9]*[1-9][0-9]*))$ ]]; then
+    echo 'holyfitra-v1: HOLYFITRA_V1_TIMEOUT must be a positive number' >&2
+    exit 2
+  fi
+}
+
+is_native_target() {
+  [[ "$1" == "host" || "$1" == "$(native_target)" ]]
 }
 
 build_seed() {
-  need_command clang++
+  need_command "$CXX"
   mkdir -p "$BUILD_DIR"
-  clang++ -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+  "$CXX" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
     "$ROOT/holyfitra_bootstrap.cpp" -o "$SEED"
   chmod 755 "$SEED"
 }
@@ -42,29 +99,36 @@ ensure_seed() {
 parse_common_options() {
   INPUT=""
   OUTPUT=""
-  TARGET="$TARGET"
+  TARGET="$(native_target)"
   VERSION="1.0.0"
   while (($#)); do
     case "$1" in
       --target=*) TARGET="${1#--target=}"; shift ;;
-      --target) (($# >= 2)) || { echo "holyfitra-v1: --target requires a value" >&2; exit 2; }; TARGET="$2"; shift 2 ;;
-      -o|--output) (($# >= 2)) || { echo "holyfitra-v1: -o requires a value" >&2; exit 2; }; OUTPUT="$2"; shift 2 ;;
-      --version) (($# >= 2)) || { echo "holyfitra-v1: --version requires a value" >&2; exit 2; }; VERSION="$2"; shift 2 ;;
+      --target) (($# >= 2)) || { echo 'holyfitra-v1: --target requires a value' >&2; exit 2; }; TARGET="$2"; shift 2 ;;
+      -o|--output) (($# >= 2)) || { echo 'holyfitra-v1: -o requires a value' >&2; exit 2; }; OUTPUT="$2"; shift 2 ;;
+      --version) (($# >= 2)) || { echo 'holyfitra-v1: --version requires a value' >&2; exit 2; }; VERSION="$2"; shift 2 ;;
       --version=*) VERSION="${1#--version=}"; shift ;;
       -*) echo "holyfitra-v1: unknown option: $1" >&2; exit 2 ;;
-      *) [[ -z "$INPUT" ]] || { echo "holyfitra-v1: multiple inputs are unsupported" >&2; exit 2; }; INPUT="$1"; shift ;;
+      *) [[ -z "$INPUT" ]] || { echo 'holyfitra-v1: multiple inputs are unsupported' >&2; exit 2; }; INPUT="$1"; shift ;;
     esac
   done
-  [[ -n "$INPUT" ]] || { echo "holyfitra-v1: input is required" >&2; exit 2; }
+  [[ -n "$INPUT" ]] || { echo 'holyfitra-v1: input is required' >&2; exit 2; }
+  if [[ "$TARGET" == "host" ]]; then
+    TARGET="$(native_target)"
+  fi
 }
 
 verify_llvm() {
   local llvm_path="$1"
-  need_command clang
+  need_command "$CC"
   local object_path
   object_path="$(mktemp "${TMPDIR:-/tmp}/holyfitra-v1-verify.XXXXXX.o")"
   trap 'rm -f "$object_path"' RETURN
-  clang -x ir -target "$TARGET" -c "$llvm_path" -o "$object_path"
+  if is_native_target "$TARGET"; then
+    "$CC" -x ir -c "$llvm_path" -o "$object_path"
+  else
+    "$CC" -x ir -target "$TARGET" -c "$llvm_path" -o "$object_path"
+  fi
   rm -f "$object_path"
   trap - RETURN
 }
@@ -72,7 +136,7 @@ verify_llvm() {
 emit_file() {
   parse_common_options "$@"
   [[ -f "$INPUT" ]] || { echo "holyfitra-v1: input does not exist: $INPUT" >&2; exit 1; }
-  [[ -n "$OUTPUT" ]] || { echo "holyfitra-v1: emit requires -o OUTPUT.ll" >&2; exit 2; }
+  [[ -n "$OUTPUT" ]] || { echo 'holyfitra-v1: emit requires -o OUTPUT.ll' >&2; exit 2; }
   ensure_seed
   mkdir -p "$(dirname -- "$OUTPUT")"
   local temporary
@@ -89,16 +153,20 @@ emit_file() {
 build_file() {
   parse_common_options "$@"
   [[ -f "$INPUT" ]] || { echo "holyfitra-v1: input does not exist: $INPUT" >&2; exit 1; }
-  [[ -n "$OUTPUT" ]] || { echo "holyfitra-v1: build requires -o OUTPUT" >&2; exit 2; }
+  [[ -n "$OUTPUT" ]] || { echo 'holyfitra-v1: build requires -o OUTPUT' >&2; exit 2; }
   ensure_seed
-  need_command clang
+  need_command "$CC"
   mkdir -p "$(dirname -- "$OUTPUT")"
   local temporary
   temporary="$(mktemp "${TMPDIR:-/tmp}/holyfitra-v1-build.XXXXXX.ll")"
   trap 'rm -f "$temporary"' RETURN
   "$SEED" --target="$TARGET" "$INPUT" -o "$temporary"
   verify_llvm "$temporary"
-  clang -target "$TARGET" -O2 "$temporary" -o "$OUTPUT"
+  if is_native_target "$TARGET"; then
+    "$CC" -O2 "$temporary" -o "$OUTPUT"
+  else
+    "$CC" -target "$TARGET" -O2 "$temporary" -o "$OUTPUT"
+  fi
   chmod 755 "$OUTPUT"
   rm -f "$temporary"
   trap - RETURN
@@ -123,6 +191,7 @@ run_file() {
   parse_common_options "$@"
   [[ -f "$INPUT" ]] || { echo "holyfitra-v1: input does not exist: $INPUT" >&2; exit 1; }
   need_command timeout
+  validate_timeout
   local executable
   executable="$(mktemp "${TMPDIR:-/tmp}/holyfitra-v1-run.XXXXXX")"
   trap 'rm -f "$executable"' RETURN
@@ -138,7 +207,9 @@ run_file() {
 
 test_project() {
   local root="$1"
-  [[ -n "$root" ]] || { echo "holyfitra-v1: test path is required" >&2; exit 2; }
+  [[ -n "$root" ]] || { echo 'holyfitra-v1: test path is required' >&2; exit 2; }
+  need_command timeout
+  validate_timeout
   local tests_dir="$root"
   if [[ -d "$root/tests" ]]; then tests_dir="$root/tests"; fi
   [[ -d "$tests_dir" ]] || { echo "holyfitra-v1: test directory does not exist: $tests_dir" >&2; exit 1; }
@@ -164,7 +235,7 @@ test_project() {
 package_file() {
   parse_common_options "$@"
   [[ -f "$INPUT" ]] || { echo "holyfitra-v1: input does not exist: $INPUT" >&2; exit 1; }
-  [[ -n "$OUTPUT" ]] || { echo "holyfitra-v1: package requires -o OUTPUT.json" >&2; exit 2; }
+  [[ -n "$OUTPUT" ]] || { echo 'holyfitra-v1: package requires -o OUTPUT.json' >&2; exit 2; }
   ensure_seed
   need_command sha256sum
   mkdir -p "$(dirname -- "$OUTPUT")"
@@ -173,21 +244,22 @@ package_file() {
   seed_hash="$(sha256sum "$SEED" | awk '{print $1}')"
   source_file="$(basename "$INPUT")"
   name="$(basename "$INPUT" .hf)"
-  [[ "$source_file" =~ ^[A-Za-z0-9_.-]+\.hf$ ]] || { echo "holyfitra-v1: source filename contains unsupported JSON characters" >&2; exit 1; }
-  [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo "holyfitra-v1: source name contains unsupported JSON characters" >&2; exit 1; }
-  [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]*$ ]] || { echo "holyfitra-v1: version contains unsupported JSON characters" >&2; exit 1; }
-  [[ "$TARGET" =~ ^[A-Za-z0-9_.+:-]+$ ]] || { echo "holyfitra-v1: target contains unsupported JSON characters" >&2; exit 1; }
+  [[ "$source_file" =~ ^[A-Za-z0-9_.-]+\.hf$ ]] || { echo 'holyfitra-v1: source filename contains unsupported JSON characters' >&2; exit 1; }
+  [[ "$name" =~ ^[A-Za-z0-9_.-]+$ ]] || { echo 'holyfitra-v1: source name contains unsupported JSON characters' >&2; exit 1; }
+  [[ "$VERSION" =~ ^[A-Za-z0-9][A-Za-z0-9.+-]*$ ]] || { echo 'holyfitra-v1: version contains unsupported JSON characters' >&2; exit 1; }
+  [[ "$TARGET" =~ ^[A-Za-z0-9_.+:-]+$ ]] || { echo 'holyfitra-v1: target contains unsupported JSON characters' >&2; exit 1; }
   printf '{\n  "schema": "holyfitra.v1.package",\n  "name": "%s",\n  "version": "%s",\n  "source": {"path": "%s", "sha256": "%s"},\n  "compiler": {"seed": "holyfitra-bootstrap", "sha256": "%s", "target": "%s"},\n  "python_required": false,\n  "android_execution": false\n}\n' "$name" "$VERSION" "$source_file" "$source_hash" "$seed_hash" "$TARGET" >"$OUTPUT"
   printf '{"ok":true,"command":"package","manifest":"%s","source_sha256":"%s"}\n' "$OUTPUT" "$source_hash"
 }
 
 doctor() {
   local clang_status=missing clangpp_status=missing timeout_status=missing sha_status=missing
-  command -v clang >/dev/null 2>&1 && clang_status=available || true
-  command -v clang++ >/dev/null 2>&1 && clangpp_status=available || true
+  command -v "$CC" >/dev/null 2>&1 && clang_status=available || true
+  command -v "$CXX" >/dev/null 2>&1 && clangpp_status=available || true
   command -v timeout >/dev/null 2>&1 && timeout_status=available || true
   command -v sha256sum >/dev/null 2>&1 && sha_status=available || true
-  printf '{"v1":true,"python_required":false,"clang":"%s","clang++":"%s","timeout":"%s","sha256sum":"%s","android_execution":"not_available_without_sdk_ndk_device"}\n' "$clang_status" "$clangpp_status" "$timeout_status" "$sha_status"
+  printf '{"v1":true,"termux":%s,"architecture":"%s","native_target":"%s","python_required":false,"clang":"%s","clang++":"%s","timeout":"%s","sha256sum":"%s","android_execution":"not_available_without_sdk_ndk_device"}\n' \
+    "$([[ "${PREFIX:-}" == *com.termux/files/usr ]] && echo true || echo false)" "$(uname -m)" "$TARGET" "$clang_status" "$clangpp_status" "$timeout_status" "$sha_status"
 }
 
 command_name="${1:-}"
@@ -200,7 +272,7 @@ case "$command_name" in
   emit) emit_file "$@" ;;
   build) build_file "$@" ;;
   run) run_file "$@" ;;
-  test) (($# == 1)) || { echo 'usage: holyfitra-v1.sh test PROJECT_OR_TESTS_DIR' >&2; exit 2; }; need_command timeout; test_project "$1" ;;
+  test) (($# == 1)) || { echo 'usage: holyfitra-v1.sh test PROJECT_OR_TESTS_DIR' >&2; exit 2; }; test_project "$1" ;;
   package) package_file "$@" ;;
   -h|--help|help) usage ;;
   *) usage >&2; exit 2 ;;

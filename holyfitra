@@ -1,4 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
+
 SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-exec python3 "$SCRIPT_DIR/holyfitra_compiler.py" "$@"
+PYTHON="${HOLYFITRA_PYTHON:-}"
+
+if [[ -z "$PYTHON" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    PYTHON="$(command -v python3)"
+  elif command -v python >/dev/null 2>&1; then
+    PYTHON="$(command -v python)"
+  else
+    echo "holyfitra: Python 3 is required for this CLI." >&2
+    if [[ "${PREFIX:-}" == *com.termux/files/usr ]]; then
+      echo "holyfitra: install it in Termux with: pkg install python" >&2
+    else
+      echo "holyfitra: install Python 3 and retry." >&2
+    fi
+    exit 127
+  fi
+fi
+
+exec "$PYTHON" "$SCRIPT_DIR/holyfitra_compiler.py" "$@"

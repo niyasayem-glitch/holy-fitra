@@ -11,7 +11,7 @@ command -v tar >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: tar is requ
 command -v gzip >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: gzip is required' >&2; exit 127; }
 command -v sha256sum >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: sha256sum is required' >&2; exit 127; }
 
-bash -n "$ROOT/holyfitra-v1.sh" "$ROOT/install-holyfitra-v1.sh" "$ROOT/test_holyfitra_v1.sh"
+bash -n "$ROOT/holyfitra" "$ROOT/holyfitra-v1.sh" "$ROOT/install-holyfitra-v1.sh" "$ROOT/termux-setup.sh" "$ROOT/termux-build.sh" "$ROOT/test_holyfitra_v1.sh"
 HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/test_holyfitra_v1.sh" >/dev/null 2>&1
 
 STAGE="$WORK/holyfitra-v1"
@@ -31,10 +31,10 @@ cp "$ROOT/stress_million_line.py" "$STAGE/tools/stress_million_line.py"
 cp "$ROOT/measure_million_line.py" "$STAGE/tools/measure_million_line.py"
 cp "$ROOT/README.md" "$STAGE/docs/README.md"
 chmod 755 "$STAGE/holyfitra-v1.sh" "$STAGE/install-holyfitra-v1.sh" "$STAGE/test_holyfitra_v1.sh"
-printf 'Holy Fitra v1\nversion=%s\npython_required=false\nandroid_execution=false\nplatform=x86_64-host-or-Termux-host\nfixed_point_self_hosting=false\naarch64_status=artifact-only\n' "$VERSION" >"$STAGE/RELEASE_METADATA.txt"
+printf 'Holy Fitra v1\nversion=%s\npython_required=false\nandroid_execution=false\nplatform=host-or-Termux-native-cli\ntermux_native_target=aarch64-linux-android\nfixed_point_self_hosting=false\naarch64_status=artifact-only\n' "$VERSION" >"$STAGE/RELEASE_METADATA.txt"
 
 mkdir -p "$(dirname -- "$OUTPUT")"
 ARCHIVE="$WORK/holyfitra-v1.tar"
 tar --sort=name --mtime='UTC 1970-01-01' --owner=0 --group=0 --numeric-owner -cf "$ARCHIVE" -C "$WORK" holyfitra-v1
 gzip -n -c "$ARCHIVE" >"$OUTPUT"
-printf '{"ok":true,"version":"%s","archive":"%s","sha256":"%s","python_required":false,"android_execution":false}\n' "$VERSION" "$OUTPUT" "$(sha256sum "$OUTPUT" | awk '{print $1}')"
+printf '{"ok":true,"version":"%s","archive":"%s","sha256":"%s","python_required":false,"android_execution":false}\n' "$VERSION" "$OUTPUT" "$(sha256sum "$OUTPUT" | cut -d ' ' -f1)"

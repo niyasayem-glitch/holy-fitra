@@ -5,6 +5,8 @@ from __future__ import annotations
 import ctypes
 import json
 import math
+import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -158,7 +160,10 @@ def build_shared_library(source_dir: Path, output: Path) -> dict[str, object]:
     source_dir.mkdir(parents=True, exist_ok=True)
     output.parent.mkdir(parents=True, exist_ok=True)
     source = source_dir / "nibbleflow_kernel.c"
-    command = ["clang", "-O3", "-shared", "-fPIC", "-fno-math-errno", str(source), "-o", str(output)]
+    compiler = os.environ.get("HOLYFITRA_CC") or os.environ.get("CC") or shutil.which("clang")
+    if not compiler:
+        return {"success": False, "command": "", "stderr": "clang is required; on Termux run: pkg install clang", "library": str(output), "bytes": None}
+    command = [compiler, "-O3", "-shared", "-fPIC", "-fno-math-errno", str(source), "-o", str(output)]
     completed = subprocess.run(command, capture_output=True, text=True)
     return {"success": completed.returncode == 0, "command": " ".join(command), "stderr": completed.stderr[-2000:], "library": str(output), "bytes": output.stat().st_size if output.exists() else None}
 
