@@ -1,0 +1,402 @@
+module selfhost_state1
+
+fn is_space(ch: i32) -> bool {
+  return ch == 32 || ch == 9 || ch == 10 || ch == 13
+}
+
+fn is_digit(ch: i32) -> bool {
+  return ch >= 48 && ch <= 57
+}
+
+fn is_ident_start(ch: i32) -> bool {
+  return (ch >= 65 && ch <= 90) || (ch >= 97 && ch <= 122) || ch == 95
+}
+
+fn is_ident_continue(ch: i32) -> bool {
+  return is_ident_start(ch) || is_digit(ch)
+}
+
+fn keyword_kind(source: string, start: i32, length: i32, word: string, kind: i32) -> i32 {
+  let word_length: i32 = hf_string_len32(word)
+  if start + word_length > length {
+    return 100
+  } else {
+    if start + word_length < length && is_ident_continue(hf_string_byte32(source, start + word_length)) {
+      return 100
+    } else {
+      var index: i32 = 0
+      var same: bool = true
+      while index < word_length {
+        if hf_string_byte32(source, start + index) != hf_string_byte32(word, index) {
+          same = false
+        }
+        index = index + 1
+      }
+      if same {
+        return kind
+      } else {
+        return 100
+      }
+    }
+  }
+}
+
+fn keyword_at(source: string, start: i32, length: i32) -> i32 {
+  let k_module: i32 = keyword_kind(source, start, length, "module", 10)
+  if k_module != 100 { return k_module }
+  let k_struct: i32 = keyword_kind(source, start, length, "struct", 11)
+  if k_struct != 100 { return k_struct }
+  let k_fn: i32 = keyword_kind(source, start, length, "fn", 12)
+  if k_fn != 100 { return k_fn }
+  let k_return: i32 = keyword_kind(source, start, length, "return", 13)
+  if k_return != 100 { return k_return }
+  let k_if: i32 = keyword_kind(source, start, length, "if", 14)
+  if k_if != 100 { return k_if }
+  let k_else: i32 = keyword_kind(source, start, length, "else", 15)
+  if k_else != 100 { return k_else }
+  let k_while: i32 = keyword_kind(source, start, length, "while", 16)
+  if k_while != 100 { return k_while }
+  let k_true: i32 = keyword_kind(source, start, length, "true", 17)
+  if k_true != 100 { return k_true }
+  let k_false: i32 = keyword_kind(source, start, length, "false", 18)
+  if k_false != 100 { return k_false }
+  let k_let: i32 = keyword_kind(source, start, length, "let", 19)
+  if k_let != 100 { return k_let }
+  let k_var: i32 = keyword_kind(source, start, length, "var", 20)
+  if k_var != 100 { return k_var }
+  let k_i32: i32 = keyword_kind(source, start, length, "i32", 21)
+  if k_i32 != 100 { return k_i32 }
+  let k_i64: i32 = keyword_kind(source, start, length, "i64", 22)
+  if k_i64 != 100 { return k_i64 }
+  let k_bool: i32 = keyword_kind(source, start, length, "bool", 23)
+  if k_bool != 100 { return k_bool }
+  let k_void: i32 = keyword_kind(source, start, length, "void", 24)
+  if k_void != 100 { return k_void }
+  let k_string: i32 = keyword_kind(source, start, length, "string", 25)
+  if k_string != 100 { return k_string }
+  let k_dyn: i32 = keyword_kind(source, start, length, "dyn", 26)
+  if k_dyn != 100 { return k_dyn }
+  return 100
+}
+
+fn keyword_length(kind: i32) -> i32 {
+  if kind == 10 || kind == 11 { return 6 }
+  if kind == 12 || kind == 14 { return 2 }
+  if kind == 13 || kind == 25 { return 6 }
+  if kind == 15 { return 4 }
+  if kind == 16 { return 5 }
+  if kind == 17 { return 4 }
+  if kind == 18 { return 5 }
+  if kind == 19 || kind == 20 || kind == 21 || kind == 22 || kind == 26 { return 3 }
+  if kind == 23 || kind == 24 { return 4 }
+  return 0
+}
+
+fn single_kind(ch: i32) -> i32 {
+  if ch == 58 { return 40 }
+  if ch == 59 { return 41 }
+  if ch == 40 { return 42 }
+  if ch == 41 { return 43 }
+  if ch == 123 { return 44 }
+  if ch == 125 { return 45 }
+  if ch == 91 { return 46 }
+  if ch == 93 { return 47 }
+  if ch == 44 { return 48 }
+  if ch == 46 { return 49 }
+  if ch == 60 { return 50 }
+  if ch == 62 { return 51 }
+  if ch == 61 { return 60 }
+  if ch == 43 { return 61 }
+  if ch == 45 { return 62 }
+  if ch == 42 { return 63 }
+  if ch == 47 { return 64 }
+  if ch == 33 { return 65 }
+  return -1
+}
+
+fn name_hash(source: string, start: i32, length: i32) -> i32 {
+  var result: i32 = 216613626
+  var index: i32 = 0
+  while index < length {
+    result = result * 16777619 + hf_string_byte32(source, start + index)
+    index = index + 1
+  }
+  if result == 0 { return 1 }
+  return result
+}
+
+fn integer_value(source: string, start: i32, length: i32) -> i32 {
+  var result: i32 = 0
+  var index: i32 = 0
+  while index < length {
+    result = result * 10 + hf_string_byte32(source, start + index) - 48
+    index = index + 1
+  }
+  return result
+}
+
+fn push_token_row(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, lines: dyn<i32>, columns: dyn<i32>, aux: dyn<i32>, kind: i32, start: i32, length: i32, line: i32, column: i32, value: i32) -> bool {
+  let a: bool = hf_dyn_i32_push(kinds, kind)
+  let b: bool = hf_dyn_i32_push(starts, start)
+  let c: bool = hf_dyn_i32_push(lengths, length)
+  let d: bool = hf_dyn_i32_push(lines, line)
+  let e: bool = hf_dyn_i32_push(columns, column)
+  let f: bool = hf_dyn_i32_push(aux, value)
+  return a && b && c && d && e && f
+}
+
+fn lex_state1(source: string, kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, lines: dyn<i32>, columns: dyn<i32>, aux: dyn<i32>) -> bool {
+  let source_length: i32 = hf_string_len32(source)
+  var position: i32 = 0
+  var line: i32 = 1
+  var column: i32 = 1
+  var ok: bool = true
+  while position < source_length {
+    let ch: i32 = hf_string_byte32(source, position)
+    if is_space(ch) {
+      if ch == 10 {
+        line = line + 1
+        column = 1
+      } else {
+        column = column + 1
+      }
+      position = position + 1
+    } else {
+      if ch == 35 {
+        while position < source_length && hf_string_byte32(source, position) != 10 {
+          position = position + 1
+          column = column + 1
+        }
+      } else {
+        let start: i32 = position
+        let start_line: i32 = line
+        let start_column: i32 = column
+        let keyword: i32 = keyword_at(source, position, source_length)
+        if keyword != 100 {
+          ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, keyword, start, keyword_length(keyword), start_line, start_column, 0)
+          position = position + keyword_length(keyword)
+          column = column + keyword_length(keyword)
+        } else {
+          if is_digit(ch) {
+            while position < source_length && is_digit(hf_string_byte32(source, position)) {
+              position = position + 1
+            }
+            let token_length_num: i32 = position - start
+            ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 101, start, token_length_num, start_line, start_column, integer_value(source, start, token_length_num))
+            column = column + token_length_num
+          } else {
+            if is_ident_start(ch) {
+              while position < source_length && is_ident_continue(hf_string_byte32(source, position)) {
+                position = position + 1
+              }
+              let token_length_ident: i32 = position - start
+              ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 100, start, token_length_ident, start_line, start_column, name_hash(source, start, token_length_ident))
+              column = column + token_length_ident
+            } else {
+              if ch == 34 {
+                position = position + 1
+                while position < source_length && hf_string_byte32(source, position) != 34 {
+                  position = position + 1
+                  column = column + 1
+                }
+                if position < source_length {
+                  position = position + 1
+                  column = column + 1
+                }
+                let token_length_str: i32 = position - start
+                ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 102, start, token_length_str, start_line, start_column, token_length_str - 2)
+              } else {
+                if ch == 45 && position + 1 < source_length && hf_string_byte32(source, position + 1) == 62 {
+                  ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 8, start, 2, start_line, start_column, 0)
+                  position = position + 2
+                  column = column + 2
+                } else {
+                  if ch == 61 && position + 1 < source_length && hf_string_byte32(source, position + 1) == 61 {
+                    ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 66, start, 2, start_line, start_column, 0)
+                    position = position + 2
+                    column = column + 2
+                  } else {
+                    let single: i32 = single_kind(ch)
+                    if single >= 0 {
+                      ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, single, start, 1, start_line, start_column, 0)
+                    }
+                    position = position + 1
+                    column = column + 1
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  ok = ok && push_token_row(kinds, starts, lengths, lines, columns, aux, 0, source_length, 0, line, column, 0)
+  return ok
+}
+
+fn token_at(tokens: dyn<i32>, index: i32) -> i32 {
+  if index < 0 || index >= hf_dyn_i32_len32(tokens) { return -1 }
+  return hf_dyn_i32_get32(tokens, index)
+}
+
+fn push_node(node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, kind: i32, first_child: i32, child_count: i32, name_start: i32, name_length: i32, span_start: i32, span_end: i32, symbol_id: i32, type_id: i32) -> bool {
+  let a: bool = hf_dyn_i32_push(node_kinds, kind)
+  let b: bool = hf_dyn_i32_push(first_children, first_child)
+  let c: bool = hf_dyn_i32_push(child_counts, child_count)
+  let d: bool = hf_dyn_i32_push(name_starts, name_start)
+  let e: bool = hf_dyn_i32_push(name_lengths, name_length)
+  let f: bool = hf_dyn_i32_push(span_starts, span_start)
+  let g: bool = hf_dyn_i32_push(span_ends, span_end)
+  let h: bool = hf_dyn_i32_push(symbol_ids, symbol_id)
+  let i: bool = hf_dyn_i32_push(type_ids, type_id)
+  return a && b && c && d && e && f && g && h && i
+}
+
+fn parse_simple_ast(source: string, kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> bool {
+  if token_at(kinds, 0) != 12 || token_at(kinds, 1) != 100 || token_at(kinds, 2) != 42 || token_at(kinds, 3) != 43 || token_at(kinds, 4) != 8 || token_at(kinds, 5) != 21 || token_at(kinds, 6) != 44 || token_at(kinds, 7) != 13 || token_at(kinds, 8) != 101 || token_at(kinds, 9) != 41 || token_at(kinds, 10) != 45 || token_at(kinds, 11) != 0 {
+    return false
+  }
+  let source_length: i32 = hf_string_len32(source)
+  let root_ok: bool = push_node(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 1, 0, 1, 0, 0, 0, source_length, 0, 0)
+  let root_child: bool = hf_dyn_i32_push(children, 1)
+  let function_first: i32 = hf_dyn_i32_len32(children)
+  let fn_ok: bool = push_node(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 2, function_first, 1, hf_dyn_i32_get32(starts, 1), hf_dyn_i32_get32(lengths, 1), hf_dyn_i32_get32(starts, 1), hf_dyn_i32_get32(starts, 10) + hf_dyn_i32_get32(lengths, 10), 0, 0)
+  let fn_child: bool = hf_dyn_i32_push(children, 2)
+  let block_first: i32 = hf_dyn_i32_len32(children)
+  let block_ok: bool = push_node(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 3, block_first, 1, 0, 0, hf_dyn_i32_get32(starts, 6), hf_dyn_i32_get32(starts, 10) + hf_dyn_i32_get32(lengths, 10), 0, 0)
+  let block_child: bool = hf_dyn_i32_push(children, 3)
+  let return_first: i32 = hf_dyn_i32_len32(children)
+  let return_ok: bool = push_node(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 4, return_first, 1, 0, 0, hf_dyn_i32_get32(starts, 7), hf_dyn_i32_get32(starts, 9) + hf_dyn_i32_get32(lengths, 9), 0, 0)
+  let return_child: bool = hf_dyn_i32_push(children, 4)
+  let integer_ok: bool = push_node(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, 5, hf_dyn_i32_len32(children), 0, 0, 0, hf_dyn_i32_get32(starts, 8), hf_dyn_i32_get32(starts, 8) + hf_dyn_i32_get32(lengths, 8), 0, 1)
+  return root_ok && root_child && fn_ok && fn_child && block_ok && block_child && return_ok && return_child && integer_ok
+}
+
+fn string_equal(left: string, right: string) -> bool {
+  let left_length: i32 = hf_string_len32(left)
+  if left_length != hf_string_len32(right) {
+    return false
+  } else {
+    var index: i32 = 0
+    var same: bool = true
+    while index < left_length {
+      if hf_string_byte32(left, index) != hf_string_byte32(right, index) {
+        same = false
+      }
+      index = index + 1
+    }
+    return same
+  }
+}
+
+fn snapshot_tokens(kinds: dyn<i32>, starts: dyn<i32>, lengths: dyn<i32>, lines: dyn<i32>, columns: dyn<i32>, aux: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var index: i32 = 0
+  let count: i32 = hf_dyn_i32_len32(kinds)
+  while index < count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(kinds, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(starts, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(lengths, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(lines, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(columns, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(aux, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn snapshot_ast(node_kinds: dyn<i32>, first_children: dyn<i32>, child_counts: dyn<i32>, name_starts: dyn<i32>, name_lengths: dyn<i32>, span_starts: dyn<i32>, span_ends: dyn<i32>, symbol_ids: dyn<i32>, type_ids: dyn<i32>, children: dyn<i32>) -> string {
+  let buffer: buf = hf_buf_new(4096)
+  var index: i32 = 0
+  let count: i32 = hf_dyn_i32_len32(node_kinds)
+  while index < count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(node_kinds, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(first_children, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(child_counts, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(name_starts, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(name_lengths, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(span_starts, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(span_ends, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(symbol_ids, index))
+    hf_buf_append_str(buffer, ",")
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(type_ids, index))
+    hf_buf_append_str(buffer, ";")
+    index = index + 1
+  }
+  hf_buf_append_str(buffer, "|")
+  index = 0
+  let child_count: i32 = hf_dyn_i32_len32(children)
+  while index < child_count {
+    hf_buf_append_i32(buffer, hf_dyn_i32_get32(children, index))
+    hf_buf_append_str(buffer, ",")
+    index = index + 1
+  }
+  let result: string = hf_buf_finish(buffer)
+  hf_buf_free(buffer)
+  return result
+}
+
+fn main() -> i32 {
+  let source: string = "fn main() -> i32 { return 42; }"
+  let kinds: dyn<i32> = hf_dyn_i32_new(256)
+  let starts: dyn<i32> = hf_dyn_i32_new(256)
+  let lengths: dyn<i32> = hf_dyn_i32_new(256)
+  let lines: dyn<i32> = hf_dyn_i32_new(256)
+  let columns: dyn<i32> = hf_dyn_i32_new(256)
+  let aux: dyn<i32> = hf_dyn_i32_new(256)
+  let lex_ok: bool = lex_state1(source, kinds, starts, lengths, lines, columns, aux)
+  let node_kinds: dyn<i32> = hf_dyn_i32_new(128)
+  let first_children: dyn<i32> = hf_dyn_i32_new(128)
+  let child_counts: dyn<i32> = hf_dyn_i32_new(128)
+  let name_starts: dyn<i32> = hf_dyn_i32_new(128)
+  let name_lengths: dyn<i32> = hf_dyn_i32_new(128)
+  let span_starts: dyn<i32> = hf_dyn_i32_new(128)
+  let span_ends: dyn<i32> = hf_dyn_i32_new(128)
+  let symbol_ids: dyn<i32> = hf_dyn_i32_new(128)
+  let type_ids: dyn<i32> = hf_dyn_i32_new(128)
+  let children: dyn<i32> = hf_dyn_i32_new(256)
+  let ast_ok: bool = parse_simple_ast(source, kinds, starts, lengths, node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+  let token_snapshot: string = snapshot_tokens(kinds, starts, lengths, lines, columns, aux)
+  let ast_snapshot: string = snapshot_ast(node_kinds, first_children, child_counts, name_starts, name_lengths, span_starts, span_ends, symbol_ids, type_ids, children)
+  let token_written: bool = hf_write_text("/tmp/holyfitra_state1_tokens.snapshot", token_snapshot)
+  let ast_written: bool = hf_write_text("/tmp/holyfitra_state1_ast.snapshot", ast_snapshot)
+  let stable: bool = string_equal(token_snapshot, hf_read_text("/tmp/holyfitra_state1_tokens.snapshot")) && string_equal(ast_snapshot, hf_read_text("/tmp/holyfitra_state1_ast.snapshot"))
+  let shape_ok: bool = hf_dyn_i32_len32(kinds) == 12 && hf_dyn_i32_get32(aux, 8) == 42 && hf_dyn_i32_len32(node_kinds) == 5 && hf_dyn_i32_get32(type_ids, 4) == 1 && hf_dyn_i32_get32(child_counts, 0) == 1
+  hf_dyn_i32_free(kinds)
+  hf_dyn_i32_free(starts)
+  hf_dyn_i32_free(lengths)
+  hf_dyn_i32_free(lines)
+  hf_dyn_i32_free(columns)
+  hf_dyn_i32_free(aux)
+  hf_dyn_i32_free(node_kinds)
+  hf_dyn_i32_free(first_children)
+  hf_dyn_i32_free(child_counts)
+  hf_dyn_i32_free(name_starts)
+  hf_dyn_i32_free(name_lengths)
+  hf_dyn_i32_free(span_starts)
+  hf_dyn_i32_free(span_ends)
+  hf_dyn_i32_free(symbol_ids)
+  hf_dyn_i32_free(type_ids)
+  hf_dyn_i32_free(children)
+  if lex_ok && ast_ok && token_written && ast_written && stable && shape_ok {
+    return 0
+  } else {
+    return 1
+  }
+}

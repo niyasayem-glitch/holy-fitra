@@ -108,6 +108,20 @@ test "$emitted_status" -eq 42
 clang --target=aarch64-linux-android21 -c "$WORK/selfhost_emitter.aarch64.ll" -o "$WORK/selfhost_emitter.aarch64.o"
 test -s "$WORK/selfhost_emitter.aarch64.o"
 
+"$BUILD" "$ROOT/bootstrap/selfhost_state1.hf" -o "$WORK/selfhost_state1.ll"
+clang -O2 "$WORK/selfhost_state1.ll" "$ROOT/bootstrap/holyfitra_runtime.c" -o "$WORK/selfhost_state1"
+(cd "$ROOT" && "$WORK/selfhost_state1")
+test -s /tmp/holyfitra_state1_tokens.snapshot
+test -s /tmp/holyfitra_state1_ast.snapshot
+cp /tmp/holyfitra_state1_tokens.snapshot "$WORK/state1_tokens.first"
+cp /tmp/holyfitra_state1_ast.snapshot "$WORK/state1_ast.first"
+(cd "$ROOT" && "$WORK/selfhost_state1")
+cmp -s "$WORK/state1_tokens.first" /tmp/holyfitra_state1_tokens.snapshot
+cmp -s "$WORK/state1_ast.first" /tmp/holyfitra_state1_ast.snapshot
+"$BUILD" --target=aarch64-linux-android21 "$ROOT/bootstrap/selfhost_state1.hf" -o "$WORK/selfhost_state1.aarch64.ll"
+clang --target=aarch64-linux-android21 -c "$WORK/selfhost_state1.aarch64.ll" -o "$WORK/selfhost_state1.aarch64.o"
+test -s "$WORK/selfhost_state1.aarch64.o"
+
 clang -O1 -g -fno-omit-frame-pointer -fsanitize=address,undefined -fno-sanitize-recover=all \
   "$ROOT/bootstrap/holyfitra_runtime.c" "$ROOT/bootstrap/test_holyfitra_runtime.c" \
   -o "$WORK/runtime_san"
@@ -144,4 +158,4 @@ grep -F "unknown value" "$WORK/invalid_name.err" >/dev/null
 # Verify the seed command itself works without Python in PATH or environment.
 env -i PATH="$(dirname "$(command -v clang)"):$(dirname "$(command -v clang++)"):/usr/bin:/bin" HOME="$WORK/home" "$BUILD" --help >/dev/null
 
-printf 'bootstrap_host=passed\nbootstrap_short_circuit=passed\nbootstrap_aggregate=passed\nbootstrap_selfhost_frontend=passed\nbootstrap_io=passed\nbootstrap_buffer=passed\nbootstrap_symtable=passed\nbootstrap_typechecker=passed\nbootstrap_emitter=passed\nbootstrap_runtime_sanitizer=passed\nbootstrap_diagnostics=passed\nbootstrap_invalid=passed\nbootstrap_aarch64_object_bytes=%s\nbootstrap_selfhost_aarch64_object_bytes=%s\nbootstrap_buffer_aarch64_object_bytes=%s\nbootstrap_symtable_aarch64_object_bytes=%s\nbootstrap_typechecker_aarch64_object_bytes=%s\nbootstrap_emitter_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")" "$(stat -c%s "$WORK/selfhost_frontend.aarch64.o")" "$(stat -c%s "$WORK/buffer.aarch64.o")" "$(stat -c%s "$WORK/selfhost_symtable.aarch64.o")" "$(stat -c%s "$WORK/selfhost_typechecker.aarch64.o")" "$(stat -c%s "$WORK/selfhost_emitter.aarch64.o")"
+printf 'bootstrap_host=passed\nbootstrap_short_circuit=passed\nbootstrap_aggregate=passed\nbootstrap_selfhost_frontend=passed\nbootstrap_io=passed\nbootstrap_buffer=passed\nbootstrap_symtable=passed\nbootstrap_typechecker=passed\nbootstrap_emitter=passed\nbootstrap_state1=passed\nbootstrap_runtime_sanitizer=passed\nbootstrap_diagnostics=passed\nbootstrap_invalid=passed\nbootstrap_aarch64_object_bytes=%s\nbootstrap_selfhost_aarch64_object_bytes=%s\nbootstrap_buffer_aarch64_object_bytes=%s\nbootstrap_symtable_aarch64_object_bytes=%s\nbootstrap_typechecker_aarch64_object_bytes=%s\nbootstrap_emitter_aarch64_object_bytes=%s\nbootstrap_state1_aarch64_object_bytes=%s\nbootstrap_python_free_help=passed\n' "$(stat -c%s "$WORK/hello.aarch64.o")" "$(stat -c%s "$WORK/selfhost_frontend.aarch64.o")" "$(stat -c%s "$WORK/buffer.aarch64.o")" "$(stat -c%s "$WORK/selfhost_symtable.aarch64.o")" "$(stat -c%s "$WORK/selfhost_typechecker.aarch64.o")" "$(stat -c%s "$WORK/selfhost_emitter.aarch64.o")" "$(stat -c%s "$WORK/selfhost_state1.aarch64.o")"

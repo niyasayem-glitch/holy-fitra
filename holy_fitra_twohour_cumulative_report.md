@@ -372,3 +372,24 @@ The Stage-0 runtime now includes a bounded atomic `hf_write_text` primitive. It 
 This is intentionally a seed-supported emitter fixture rather than a claim that the entire compiler is already self-hosted. It proves the end-to-end contract needed by the eventual emitter: bounded text construction, deterministic output, atomic publication, LLVM assembly, native execution, and AArch64 artifact lowering. The complete Python suite remained at 153 tests with 0 failures; bootstrap, ASAN/UBSan runtime, AArch64 object, compile, shell, and Termux gates passed.
 
 The remaining fixed-point work is explicit: connect lexer/parser AST records to the semantic type arena, lower general supported functions and control flow from Holy Fitra data structures into LLVM text, add canonical diagnostics output, and then perform Stage-1 self-rebuild comparisons.
+
+## State 1 — canonical compiler data model retained — 2026-08-22
+
+State 1 now has an executable no-Python fixture in `bootstrap/selfhost_state1.hf`. It lexes source into bounded parallel columns for token kind, byte start, byte length, line, column, and auxiliary metadata. Identifier tokens carry deterministic hashes, integer tokens carry parsed values, string tokens carry source-relative lengths, and an explicit EOF row is emitted.
+
+The same fixture constructs a bounded AST arena with node kind, child-list range, child count, name span, source span, symbol ID, and type ID columns. It serializes token and AST snapshots through the bounded buffer ABI, writes them atomically, reads them back, checks structural invariants, and repeats execution to prove byte-identical snapshots. The fixture includes a function, return statement, and integer literal with stable source spans and type ID 1.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-1 native fixture | Passed; x86-64 host |
+| Token snapshot round-trip | Passed |
+| AST snapshot round-trip | Passed |
+| Repeated snapshot comparison | Passed; byte-identical |
+| No-Python bootstrap gate | Passed |
+| Runtime ASAN/UBSan checks | Passed |
+| AArch64 State-1 object | Passed; 22,560 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 1 is a canonical data-model milestone, not yet a connected self-hosted compiler. The next work is to replace the fixture’s hand-authored AST construction with the real self-hosted parser, then connect declaration collection, symbol resolution, and type annotations to these arenas.
