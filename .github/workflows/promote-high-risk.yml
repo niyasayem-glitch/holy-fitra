@@ -18,7 +18,6 @@ on:
 
 permissions:
   contents: write
-  pull-requests: write
 
 concurrency:
   group: high-risk-promotion-master
@@ -60,6 +59,17 @@ jobs:
           bash termux-build.sh test --native-tests
           bash make-holyfitra-v1-release.sh /tmp/holyfitra-high-risk-release.tar.gz
 
+      - name: Run 300-iteration high-risk campaign
+        run: |
+          python holy_fitra_self_improve.py --iterations 300 --output /tmp/holyfitra-high-risk-300.json
+          grep -q '"iterations": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"requested_iterations": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_correctness": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_safety": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"passed_determinism": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"retained_count": 300' /tmp/holyfitra-high-risk-300.json
+          grep -q '"rejected_count": 0' /tmp/holyfitra-high-risk-300.json
+
       - name: Record promotion evidence
         run: |
           {
@@ -76,48 +86,31 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Create or reuse promotion pull request
-        id: pr
+      - name: Check out current master
+        uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Merge validated branch
         env:
-          GH_TOKEN: ${{ github.token }}
           SOURCE_BRANCH: ${{ inputs.source_branch }}
           PROMOTION_REASON: ${{ inputs.reason }}
         run: |
           set -euo pipefail
-          existing="$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$SOURCE_BRANCH" --base master --state open --json number --jq '.[0].number // empty')"
-          if [[ -n "$existing" ]]; then
-            echo "number=$existing" >> "$GITHUB_OUTPUT"
-          else
-            pr_url="$(gh pr create \
-              --repo "$GITHUB_REPOSITORY" \
-              --base master \
-              --head "$SOURCE_BRANCH" \
-              --title "Promote high-risk change: $SOURCE_BRANCH" \
-              --body "Automated promotion after the high-risk validation workflow passed.\n\nReason: $PROMOTION_REASON\n\nThe source branch was validated before this pull request was created.")"
-            number="$(gh pr view "$pr_url" --repo "$GITHUB_REPOSITORY" --json number --jq '.number')"
-            echo "number=$number" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Squash merge validated pull request
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ steps.pr.outputs.number }}
-        run: |
-          set -euo pipefail
-          gh pr merge "$PR_NUMBER" \
-            --repo "$GITHUB_REPOSITORY" \
-            --squash \
-            --delete-branch=false \
-            --subject "promote: validated high-risk change" \
-            --body "Full validation passed on the high-risk branch before promotion."
+          git fetch origin "refs/heads/${SOURCE_BRANCH}:refs/remotes/origin/${SOURCE_BRANCH}"
+          git merge --no-ff --no-edit "origin/${SOURCE_BRANCH}" \
+            -m "promote: validated high-risk change" \
+            -m "Reason: ${PROMOTION_REASON}"
+          git push origin HEAD:master
 
       - name: Write promotion summary
         run: |
           {
             echo "### High-risk promotion complete"
-            echo "Pull request: #${{ steps.pr.outputs.number }}"
             echo "Source branch: `${{ inputs.source_branch }}`"
             echo "Target branch: `master`"
+            echo "Promotion used the validated branch merge after all gates passed."
           } >> "$GITHUB_STEP_SUMMARY"
 
   rejected:
