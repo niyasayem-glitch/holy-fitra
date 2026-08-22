@@ -393,3 +393,24 @@ The same fixture constructs a bounded AST arena with node kind, child-list range
 | Python compileall and shell syntax | Passed |
 
 State 1 is a canonical data-model milestone, not yet a connected self-hosted compiler. The next work is to replace the fixture’s hand-authored AST construction with the real self-hosted parser, then connect declaration collection, symbol resolution, and type annotations to these arenas.
+
+## State 2 — real self-hosted parser to AST arena retained — 2026-08-22
+
+State 2 replaces State 1’s hand-authored AST construction with a real Stage-0-compilable Holy Fitra lexer/parser fixture in `bootstrap/selfhost_state2.hf`. The lexer records token kind, source start, byte length, and EOF metadata. The parser consumes those tokens through a bounded cursor and produces AST arena records for modules, functions, blocks, typed declarations, return statements, integer literals, names, binary expressions, and type nodes. Child relationships are stored as ranges in a bounded child arena; name spans, source spans, symbol IDs, and type IDs are preserved on every node.
+
+The fixture parses `fn main() -> i32 { var y: i32 = 41; return y + 1; }`, verifies its expected token/node structure, serializes the resulting AST, writes and reads it through the atomic buffer ABI, and compares repeated runs byte-for-byte. A malformed `return ;` source is rejected as a bounded parser result rather than causing an out-of-bounds access or process abort.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| State-2 real parser fixture | Passed; x86-64 host |
+| AST snapshot round-trip | Passed |
+| Repeated AST snapshot comparison | Passed; byte-identical |
+| Malformed-source rejection | Passed |
+| No-Python bootstrap gate | Passed |
+| Runtime ASAN/UBSan checks | Passed |
+| AArch64 State-2 object | Passed; 25,032 bytes in the current artifact check |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+State 2 is still a parser-to-arena milestone, not a complete self-hosted compiler. The next step is connecting the parser’s node IDs to declaration collection, deterministic scopes, symbol IDs, canonical type IDs, and structured diagnostics.
