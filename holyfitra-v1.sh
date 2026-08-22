@@ -5,6 +5,7 @@ ROOT="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 BUILD_DIR="${HOLYFITRA_V1_BUILD_DIR:-$ROOT/.holyfitra/v1}"
 SEED="$BUILD_DIR/holyfitra-bootstrap"
 RUN_TIMEOUT="${HOLYFITRA_V1_TIMEOUT:-30}"
+SEED_OPT="${HOLYFITRA_SEED_OPT:-O0}"
 
 native_target() {
   if [[ -n "${HOLYFITRA_TARGET:-}" ]]; then
@@ -55,6 +56,7 @@ Environment:
   HOLYFITRA_CC       C compiler/driver used for native linking.
   HOLYFITRA_CXX      C++ compiler used to build the seed compiler.
   HOLYFITRA_V1_TIMEOUT  Execution timeout in seconds; default: 30.
+  HOLYFITRA_SEED_OPT    Seed compiler optimization level; default: O0.
 
 On Termux, install the native toolchain with:
   pkg install python clang llvm coreutils findutils
@@ -84,8 +86,12 @@ is_native_target() {
 
 build_seed() {
   need_command "$CXX"
+  case "$SEED_OPT" in
+    O0|O1|O2|O3) ;;
+    *) echo 'holyfitra-v1: HOLYFITRA_SEED_OPT must be O0, O1, O2, or O3' >&2; exit 2 ;;
+  esac
   mkdir -p "$BUILD_DIR"
-  "$CXX" -std=c++17 -O2 -Wall -Wextra -Werror -pedantic \
+  "$CXX" -std=c++17 "-$SEED_OPT" -Wall -Wextra -Werror -pedantic \
     "$ROOT/holyfitra_bootstrap.cpp" -o "$SEED"
   chmod 755 "$SEED"
 }
@@ -258,8 +264,8 @@ doctor() {
   command -v "$CXX" >/dev/null 2>&1 && clangpp_status=available || true
   command -v timeout >/dev/null 2>&1 && timeout_status=available || true
   command -v sha256sum >/dev/null 2>&1 && sha_status=available || true
-  printf '{"v1":true,"termux":%s,"architecture":"%s","native_target":"%s","python_required":false,"clang":"%s","clang++":"%s","timeout":"%s","sha256sum":"%s","android_execution":"not_available_without_sdk_ndk_device"}\n' \
-    "$([[ "${PREFIX:-}" == *com.termux/files/usr ]] && echo true || echo false)" "$(uname -m)" "$TARGET" "$clang_status" "$clangpp_status" "$timeout_status" "$sha_status"
+  printf '{"v1":true,"termux":%s,"architecture":"%s","native_target":"%s","seed_optimization":"%s","python_required":false,"clang":"%s","clang++":"%s","timeout":"%s","sha256sum":"%s","android_execution":"not_available_without_sdk_ndk_device"}\n' \
+    "$([[ "${PREFIX:-}" == *com.termux/files/usr ]] && echo true || echo false)" "$(uname -m)" "$TARGET" "$SEED_OPT" "$clang_status" "$clangpp_status" "$timeout_status" "$sha_status"
 }
 
 command_name="${1:-}"
