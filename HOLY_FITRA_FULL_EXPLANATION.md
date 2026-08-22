@@ -278,7 +278,7 @@ The latest full validation after AArch64 parallel-hybrid lowering reported the f
 | Ragged scheduler sanitizer gate | ASAN/UBSAN passed |
 | Existing native coverage | NibbleFlow, AArch64 kernel, ragged attention, scheduler, and CLI checks passed |
 
-The cumulative reports are `holy_fitra_twohour_candidates_model_dev01.md` and `holy_fitra_twohour_cumulative_report.md`. They record retained milestones, rejected experiments, measured host results, and explicit Android-validation boundaries.
+The current evidence is consolidated in `HOLY_FITRA_PERFORMANCE_REPORT_2026-08-22.md`, `HOLY_FITRA_MILLION_LINE_PERFORMANCE_REPORT_2026-08-22.md`, `HOLY_FITRA_STRESS_REPORT_2026-08-22.md`, and `DEVELOPMENT_LANES.md`. These documents record retained milestones, rejected experiments, measured host results, and explicit Android-validation boundaries.
 
 ## 14. What is genuinely implemented versus future work
 
