@@ -29,6 +29,22 @@ source "$HOME/.local/bin/holyfitra-env" 2>/dev/null || true
 
 The setup script uses Termux `pkg` packages rather than `sudo`, installs Python/Clang/LLVM/CMake tooling, and prefers the Termux NumPy package when available.
 
+## Native v1 release path
+
+The repository also includes a bounded native-first v1 driver. It builds the checked-in C++17 seed compiler and does not require Python for its compiler, LLVM, executable, test, or package path:
+
+```bash
+./holyfitra-v1.sh doctor
+./holyfitra-v1.sh build-seed
+./holyfitra-v1.sh check bootstrap/hello.hf
+./holyfitra-v1.sh build bootstrap/hello.hf -o build/hello
+./holyfitra-v1.sh run bootstrap/hello.hf
+./test_holyfitra_v1.sh
+./holyfitra-v1.sh package bootstrap/hello.hf -o build/hello.json --version 1.0.0
+```
+
+The v1 driver is intentionally scoped to the verified scalar compiler subset and uses the host `clang` toolchain. `--target=aarch64-linux-android21` produces an AArch64 artifact only; it does not prove Android execution. Run `./test_holyfitra_v1.sh` to exercise deterministic emission, malformed-source rejection, executable status handling, project tests, and package metadata. Install it without `sudo` with `PREFIX="$HOME/.local" ./install-holyfitra-v1.sh`; the installer places an executable launcher under `$HOME/.local/bin` and keeps the seed compiler under the user prefix. To create a deterministic host-candidate archive, run `./make-holyfitra-v1-release.sh dist/holyfitra-v1.0.0-host.tar.gz`; the archive records `python_required=false`, `android_execution=false`, and `aarch64_status=artifact-only`.
+
 ## Terminal development environment
 
 Holy Fitra now includes a dependency-free terminal UI and REPL designed for Termux as well as Linux terminals. The TUI uses Python's standard `curses` module, so it does not require Textual or Rich.

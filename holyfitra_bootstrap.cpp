@@ -29,6 +29,10 @@
 
 namespace hf0 {
 
+constexpr std::size_t kMaxSourceBytes = 8u * 1024u * 1024u;
+constexpr std::size_t kMaxTokens = 1u << 20;
+constexpr std::size_t kMaxNesting = 512;
+
 struct SourcePosition final {
     int line = 0;
     int column = 0;
@@ -127,6 +131,7 @@ public:
             if (std::string("{}(),:;[].").find(c) != std::string::npos) { advance(); result.push_back({TokenKind::Punctuation, std::string(1, c), line, column}); continue; }
             fail(std::string("unexpected character '") + c + "'" + location(line, column), line, column);
         }
+        if (result.size() > kMaxTokens) fail("source token limit exceeded", line_, column_);
         result.push_back({TokenKind::Eof, "", line_, column_});
         return result;
     }
@@ -333,7 +338,13 @@ private:
         if(accept(TokenKind::Punctuation,"[")) { Token n=expect(TokenKind::Integer,"array length"); expectText(TokenKind::Punctuation,"]"); std::size_t count=static_cast<std::size_t>(std::stoull(n.text)); if(count==0) fail("array length must be positive",n.line,n.column); return Type::array(count,parseType()); }
         Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); if(t.text=="handle")return Type::scalar(TypeKind::Handle); if(t.text=="file")return Type::scalar(TypeKind::File); if(t.text=="buf")return Type::scalar(TypeKind::Buffer); if(t.text=="dyn"){expectText(TokenKind::Operator,"<");Type element=parseType();expectText(TokenKind::Operator,">");return Type::dynamicArray(std::move(element));} return Type::structure(t.text);
     }
-    std::vector<StatementPtr> parseBlock() { expectText(TokenKind::Punctuation,"{"); std::vector<StatementPtr> body; while(!accept(TokenKind::Punctuation,"}")){if(is(TokenKind::Eof))unexpected("'}'");body.push_back(parseStatement());}return body; }
+    std::vector<StatementPtr> parseBlock() {
+        if (++block_depth_ > kMaxNesting) fail("block nesting limit exceeded", current().line, current().column);
+        expectText(TokenKind::Punctuation,"{"); std::vector<StatementPtr> body;
+        while(!accept(TokenKind::Punctuation,"}")){if(is(TokenKind::Eof))unexpected("'}'");body.push_back(parseStatement());}
+        --block_depth_;
+        return body;
+    }
     StatementPtr parseStatement() {
         if(is(TokenKind::Identifier)&&lookahead(1).kind==TokenKind::Operator&&lookahead(1).text=="="){Token name=advance();advance();auto value=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<AssignmentStatement>(name.text,std::move(value),name.line,name.column);}
         if(isText(TokenKind::Identifier,"let")||isText(TokenKind::Identifier,"var")){Token kw=advance(),name=expect(TokenKind::Identifier,"local name");std::optional<Type> type;if(accept(TokenKind::Punctuation,":"))type=parseType();expectText(TokenKind::Operator,"=");auto value=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<LetStatement>(name.text,type,std::move(value),kw.text=="var",name.line,name.column);}
@@ -342,7 +353,12 @@ private:
         if(accept(TokenKind::Identifier,"while")){Token k=tokens_[index_-1];auto c=parseExpression();auto b=parseBlock();return std::make_unique<WhileStatement>(std::move(c),std::move(b),k.line,k.column);}
         Token k=current();auto e=parseExpression();accept(TokenKind::Punctuation,";");return std::make_unique<ExpressionStatement>(std::move(e),k.line,k.column);
     }
-    ExprPtr parseExpression(){return parseLogicalOr();}
+    ExprPtr parseExpression(){
+        if (++expression_depth_ > kMaxNesting) fail("expression nesting limit exceeded", current().line, current().column);
+        ExprPtr result = parseLogicalOr();
+        --expression_depth_;
+        return result;
+    }
     ExprPtr parseLogicalOr(){auto e=parseLogicalAnd();while(isText(TokenKind::Operator,"||")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseLogicalAnd(),o.line,o.column);}return e;}
     ExprPtr parseLogicalAnd(){auto e=parseComparison();while(isText(TokenKind::Operator,"&&")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseComparison(),o.line,o.column);}return e;}
     ExprPtr parseComparison(){auto e=parseAdditive();while(is(TokenKind::Operator)&&(current().text=="=="||current().text=="!="||current().text=="<"||current().text=="<="||current().text==">"||current().text==">=")){Token o=advance();e=std::make_unique<BinaryExpr>(o.text,std::move(e),parseAdditive(),o.line,o.column);}return e;}
@@ -360,7 +376,7 @@ std::vector<ExprPtr> e;if(!accept(TokenKind::Punctuation,"]")){while(true){e.pus
         if(accept(TokenKind::Punctuation,"(")){auto e=parseExpression();expectText(TokenKind::Punctuation,")");return e;}
         unexpected("expression");
     }
-    std::vector<Token> tokens_;std::size_t index_=0;
+    std::vector<Token> tokens_;std::size_t index_=0;std::size_t expression_depth_=0;std::size_t block_depth_=0;
 };
 
 class Validator final {
@@ -445,9 +461,20 @@ private:
     const Program&program_;std::string target_;std::unordered_map<std::string,const Function*>functions_;std::unordered_map<std::string,const StructDecl*>structs_;std::map<std::string,std::size_t>strings_;std::unordered_map<std::string,Local>locals_;int temp_=0,label_=0;
 };
 
-static std::string readFile(const std::string&path){std::ifstream in(path,std::ios::binary);if(!in)fail("cannot open input file '"+path+"'");std::ostringstream s;s<<in.rdbuf();return s.str();}
+static std::string readFile(const std::string&path){
+    std::ifstream in(path,std::ios::binary);
+    if(!in)fail("cannot open input file '"+path+"'");
+    in.seekg(0,std::ios::end);
+    const std::streamoff size=in.tellg();
+    if(size<0 || static_cast<std::uint64_t>(size)>kMaxSourceBytes) fail("source exceeds the 8 MiB limit");
+    in.seekg(0,std::ios::beg);
+    std::string source(static_cast<std::size_t>(size), static_cast<char>(0));
+    if(size>0 && !in.read(source.data(),size)) fail("cannot read input file '"+path+"'");
+    return source;
+}
 static void writeFile(const std::string&path,const std::string&text){std::ofstream out(path,std::ios::binary|std::ios::trunc);if(!out)fail("cannot open output file '"+path+"'");out<<text;}
 static void usage(const char*p){std::cerr<<"usage: "<<p<<" [--target=TRIPLE] INPUT.hf [-o OUTPUT.ll]\n";}
+static constexpr const char *kVersion = "1.0.0-seed";
 
 static std::string diagnosticCode(const Diagnostic& diagnostic) {
     const std::string message = diagnostic.what();
@@ -495,4 +522,4 @@ private:
 
 } // namespace hf0
 
-int main(int argc,char**argv){using namespace hf0;std::string input,source;try{if(argc<2){usage(argv[0]);return 2;}std::string output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}source=readFile(input);Program p=Parser(Lexer(source).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){DiagnosticReporter::render(std::cerr,d,input.empty()?"<command line>":input,source);return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}
+int main(int argc,char**argv){using namespace hf0;std::string input,source;try{if(argc<2){usage(argv[0]);return 2;}std::string output,target="x86_64-pc-linux-gnu";for(int i=1;i<argc;++i){std::string a=argv[i];if(a=="--help"||a=="-h"){usage(argv[0]);return 0;}if(a=="--version"){std::cout<<kVersion<<static_cast<char>(10);return 0;}if(a.rfind("--target=",0)==0){target=a.substr(9);continue;}if(a=="--target"){if(++i>=argc)fail("--target requires a value");target=argv[i];continue;}if(a=="-o"||a=="--output"){if(++i>=argc)fail("-o requires a path");output=argv[i];continue;}if(!a.empty()&&a[0]=='-')fail("unknown option '"+a+"'");if(!input.empty())fail("multiple input files are unsupported");input=a;}if(input.empty()){usage(argv[0]);return 2;}source=readFile(input);Program p=Parser(Lexer(source).run()).parse();Validator().run(p);std::string llvm=LLVMEmitter(p,target).emit();if(output.empty())std::cout<<llvm;else{writeFile(output,llvm);std::cerr<<"holyfitra-bootstrap: wrote "<<output<<"\n";}return 0;}catch(const Diagnostic&d){DiagnosticReporter::render(std::cerr,d,input.empty()?"<command line>":input,source);return 1;}catch(const std::exception&e){std::cerr<<"holyfitra-bootstrap: internal error: "<<e.what()<<"\n";return 1;}}

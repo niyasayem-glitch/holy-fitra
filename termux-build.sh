@@ -53,4 +53,6 @@ trap 'rm -rf "$TERMUX_BENCH_ROOT"' EXIT
 ./holyfitra init "$TERMUX_BENCH_ROOT/project" --name termux_validation >/dev/null
 ./holyfitra bench "$TERMUX_BENCH_ROOT/project" --repeats 1 >/dev/null
 bootstrap/test_bootstrap.sh >/dev/null
+bash -n holyfitra-v1.sh test_holyfitra_v1.sh
+./test_holyfitra_v1.sh >/dev/null
 printf '%s\n' 'Holy Fitra Termux-compatible validation passed.'
