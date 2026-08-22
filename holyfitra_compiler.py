@@ -36,14 +36,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable, Sequence
 
-from holyfitra_safety import Frontend, parse_frontend, read_source
+from holyfitra_safety import Frontend, MAX_AST_DEPTH, parse_frontend, read_source
 
 
 _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
 _MEMORY_COMPILE_CACHE_LIMIT = 32
 _EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, set[str]]]] = OrderedDict()
 _EFFECT_GRAPH_CACHE_LIMIT = 64
-_LLVM_CACHE_SCHEMA = 2
+_LLVM_CACHE_SCHEMA = 3
 _NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v2"
 
 
@@ -217,6 +217,7 @@ class Parser:
     def __init__(self, tokens: Sequence[Token]):
         self.tokens = tokens
         self.index = 0
+        self._expression_depth = 0
 
     @property
     def current(self) -> Token:
@@ -422,7 +423,14 @@ class Parser:
         raise HolyFitraError(f"expected let, var, or return at {token.line}:{token.column}")
 
     def parse_expression(self) -> Expr:
-        return self.parse_additive()
+        if self._expression_depth >= MAX_AST_DEPTH:
+            token = self.current
+            raise HolyFitraError(f"expression nesting exceeds {MAX_AST_DEPTH} at {token.line}:{token.column}")
+        self._expression_depth += 1
+        try:
+            return self.parse_additive()
+        finally:
+            self._expression_depth -= 1
 
     def parse_additive(self) -> Expr:
         expression = self.parse_comparison()
@@ -471,7 +479,10 @@ class Parser:
 
 
 def parse_native(source: str) -> Program:
-    return Parser(lex(source)).parse()
+    try:
+        return Parser(lex(source)).parse()
+    except RecursionError as error:
+        raise HolyFitraError(f"expression nesting exceeds {MAX_AST_DEPTH}") from error
 
 
 def _same_value_type(left: Type, right: Type) -> bool:
@@ -607,6 +618,9 @@ def validate_native(program: Program) -> None:
     direct_calls, effective_effects = _effect_call_graph(program)
     allowed_effects = {"io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"}
     for function in program.functions:
+        parameter_names = [name for name, _ in function.parameters]
+        if len(parameter_names) != len(set(parameter_names)):
+            raise HolyFitraError(f"function {function.name} has duplicate parameters")
         ownership_modes = {type_.mode for _, type_ in function.parameters}
         if not ownership_modes.issubset({"owned", "borrow", "borrow_mut", "shared"}):
             raise HolyFitraError(f"function {function.name} uses an unknown ownership mode")
@@ -690,6 +704,7 @@ def validate_native(program: Program) -> None:
         ) -> bool:
             guaranteed_return = False
             for statement in statements:
+                was_terminated = guaranteed_return
                 if isinstance(statement, LetStmt):
                     if statement.name in declared_names:
                         raise HolyFitraError(f"duplicate declaration {statement.name}")
@@ -733,8 +748,8 @@ def validate_native(program: Program) -> None:
                         raise HolyFitraError("while condition must be bool")
                     validate_block(statement.body, dict(scope), set(mutable_names), set())
                     guaranteed_return = False
-                if guaranteed_return:
-                    break
+                if was_terminated:
+                    guaranteed_return = True
             return guaranteed_return
 
         guaranteed_return = validate_block(function.body, variables, mutable_parameters, set(variables))
@@ -1037,8 +1052,16 @@ def _atomic_write_text(path: Path, text: str) -> None:
                 pass
 
 
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
-    source = source_path.read_text(encoding="utf-8")
+    source = read_source(source_path)
     effective_target = target or "x86_64-pc-linux-gnu"
     cache_identity = "\\0".join((source, effective_target, str(_LLVM_CACHE_SCHEMA), _NATIVE_COMPILER_ABI))
     digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
@@ -1054,9 +1077,17 @@ def compile_native_file(source_path: Path, cache_dir: Path | None = None, target
     if cache_path.exists():
         try:
             cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            if cached.get("schema") != _LLVM_CACHE_SCHEMA or cached.get("digest") != digest or not isinstance(cached.get("llvm"), str):
+            cached_llvm = cached.get("llvm")
+            cached_hash = cached.get("llvm_sha256")
+            if (
+                cached.get("schema") != _LLVM_CACHE_SCHEMA
+                or cached.get("digest") != digest
+                or not isinstance(cached_llvm, str)
+                or not isinstance(cached_hash, str)
+                or hashlib.sha256(cached_llvm.encode("utf-8")).hexdigest() != cached_hash
+            ):
                 raise ValueError("stale or malformed LLVM cache")
-            llvm = cached["llvm"]
+            llvm = cached_llvm
         except (OSError, json.JSONDecodeError, TypeError, ValueError):
             try:
                 cache_path.unlink()
@@ -1065,7 +1096,15 @@ def compile_native_file(source_path: Path, cache_dir: Path | None = None, target
     program = parse_native(source)
     if llvm is None:
         llvm = emit_llvm(program, target)
-        payload = json.dumps({"digest": digest, "llvm": llvm, "schema": _LLVM_CACHE_SCHEMA}, sort_keys=True)
+        payload = json.dumps(
+            {
+                "digest": digest,
+                "llvm": llvm,
+                "llvm_sha256": hashlib.sha256(llvm.encode("utf-8")).hexdigest(),
+                "schema": _LLVM_CACHE_SCHEMA,
+            },
+            sort_keys=True,
+        )
         _atomic_write_text(cache_path, payload)
     _MEMORY_COMPILE_CACHE[digest] = (program, llvm)
     _MEMORY_COMPILE_CACHE.move_to_end(digest)
@@ -1088,7 +1127,15 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
     output.parent.mkdir(parents=True, exist_ok=True)
     cache_dir = source_path.parent / ".holyfitra" / "cache"
     artifact_cache = cache_dir / f"{digest}.native"
-    if artifact_cache.is_file() and artifact_cache.stat().st_size > 0:
+    artifact_hash_path = cache_dir / f"{digest}.native.sha256"
+    artifact_valid = False
+    if artifact_cache.is_file() and artifact_cache.stat().st_size > 0 and artifact_hash_path.is_file():
+        try:
+            expected_hash = artifact_hash_path.read_text(encoding="ascii").strip()
+            artifact_valid = bool(re.fullmatch(r"[0-9a-f]{64}", expected_hash)) and _sha256_file(artifact_cache) == expected_hash
+        except (OSError, UnicodeError):
+            artifact_valid = False
+    if artifact_valid:
         if artifact_cache.resolve() != output.resolve():
             shutil.copy2(artifact_cache, output)
         elapsed_ms = (time.perf_counter_ns() - started_ns) / 1_000_000.0
@@ -1096,6 +1143,12 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
         record_event(source_path.parent, "compile", stage="native", cache_hit=True, digest=digest, elapsed_ms=elapsed_ms, target=target or "host")
         print(json.dumps({"ok": True, "output": str(output), "digest": digest, "target": target or "host", "cache_hit": True, "elapsed_ms": elapsed_ms}, sort_keys=True))
         return 0
+    for stale_path in (artifact_cache, artifact_hash_path):
+        if stale_path.exists() and not artifact_valid:
+            try:
+                stale_path.unlink()
+            except OSError:
+                pass
     main = next((function for function in program.functions if function.name == "main"), None)
     if main is None or main.parameters or main.return_type.name not in {"i32", "i64"}:
         raise HolyFitraError("build/run requires fn main() -> i32 or fn main() -> i64")
@@ -1112,6 +1165,7 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
         cache_dir.mkdir(parents=True, exist_ok=True)
         if artifact_cache.resolve() != output.resolve():
             shutil.copy2(output, artifact_cache)
+        _atomic_write_text(artifact_hash_path, _sha256_file(artifact_cache) + "\n")
         if keep_llvm:
             persistent_llvm = output.with_suffix(output.suffix + ".ll")
             persistent_llvm.write_text(llvm, encoding="utf-8")

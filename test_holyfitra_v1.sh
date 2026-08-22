@@ -40,6 +40,15 @@ for _ in $(seq 1 513); do printf '(' >>"$WORK/deep.hf"; done
 printf '1' >>"$WORK/deep.hf"
 for _ in $(seq 1 513); do printf ')' >>"$WORK/deep.hf"; done
 printf '\n}\n' >>"$WORK/deep.hf"
+cat >"$WORK/huge_array.hf" <<'EOF'
+module v1_huge_array
+fn main(a: [999999999]i32) -> i32 {
+    return 0
+}
+EOF
+printf 'module v1_huge_string\nfn main() -> i32 { return "' >"$WORK/huge_string.hf"
+head -c 1048577 /dev/zero | tr '\0' 'x' >>"$WORK/huge_string.hf"
+printf '" }\n' >>"$WORK/huge_string.hf"
 truncate -s 8388609 "$WORK/oversized.hf"
 
 export HOLYFITRA_V1_BUILD_DIR="$WORK/build"
@@ -64,6 +73,14 @@ if "$DRIVER" check "$WORK/deep.hf" >/dev/null 2>&1; then
 fi
 if "$DRIVER" check "$WORK/oversized.hf" >/dev/null 2>&1; then
     echo 'oversized source unexpectedly accepted' >&2
+    exit 1
+fi
+if "$DRIVER" check "$WORK/huge_array.hf" >/dev/null 2>&1; then
+    echo 'huge array unexpectedly accepted' >&2
+    exit 1
+fi
+if "$DRIVER" check "$WORK/huge_string.hf" >/dev/null 2>&1; then
+    echo 'huge string unexpectedly accepted' >&2
     exit 1
 fi
 mkdir -p "$WORK/project/tests"

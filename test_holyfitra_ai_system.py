@@ -101,6 +101,15 @@ class HolyFitraAISystemTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             Evidence("f", EvidenceKind.FACT, "fact", 0.9, ())
 
+    def test_evidence_and_verifier_reject_nonfinite_numbers(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.assertRaises(ValueError):
+                Evidence("nonfinite", EvidenceKind.PREDICTION, "uncertain", value, ())
+            with self.assertRaises(ValueError):
+                ClaimVerifier(min_confidence=value)
+            with self.assertRaises(ValueError):
+                ClaimVerifier(min_overlap=value)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

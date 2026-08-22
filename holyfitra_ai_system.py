@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
+import math
 import re
 from typing import Any, Callable, Iterable
 
@@ -25,7 +26,13 @@ class Evidence:
     provenance: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if not self.evidence_id or not self.content or not 0.0 <= self.confidence <= 1.0:
+        if (
+            not self.evidence_id
+            or not self.content
+            or type(self.confidence) not in (int, float)
+            or not math.isfinite(float(self.confidence))
+            or not 0.0 <= self.confidence <= 1.0
+        ):
             raise ValueError("invalid evidence record")
         if self.kind != EvidenceKind.PREDICTION and not self.provenance:
             raise ValueError("facts and claims require provenance")
@@ -154,7 +161,14 @@ class ClaimVerifier:
     _NEGATIONS = frozenset({"not", "no", "never", "without", "cannot", "cant", "false", "isnt", "doesnt"})
 
     def __init__(self, *, min_confidence: float = 0.6, min_overlap: float = 0.5):
-        if not 0.0 <= min_confidence <= 1.0 or not 0.0 < min_overlap <= 1.0:
+        if (
+            type(min_confidence) not in (int, float)
+            or type(min_overlap) not in (int, float)
+            or not math.isfinite(float(min_confidence))
+            or not math.isfinite(float(min_overlap))
+            or not 0.0 <= min_confidence <= 1.0
+            or not 0.0 < min_overlap <= 1.0
+        ):
             raise ValueError("invalid claim-verifier thresholds")
         self.min_confidence = float(min_confidence)
         self.min_overlap = float(min_overlap)

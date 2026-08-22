@@ -16,6 +16,15 @@ extern float expf(float);
 #include <arm_sve.h>
 #endif
 
+static int hf_finite(float value) {
+    return value == value && value <= 3.402823466e38F && value >= -3.402823466e38F;
+}
+
+static int hf_finite_buffer(const float *values, uint64_t count) {
+    for (uint64_t index = 0; index < count; ++index) if (!hf_finite(values[index])) return 0;
+    return 1;
+}
+
 static float hf_dot_scalar(const float *a, const float *b, int32_t d_model) {
     float sum = 0.0f;
     for (int32_t d = 0; d < d_model; ++d) sum += a[d] * b[d];
@@ -42,7 +51,8 @@ int hf_validate_ragged_batch(const hf_ragged_attention_batch *batch) {
     const uint64_t width = (uint64_t)batch->d_model;
     if (width != 0 && total_tokens > UINT64_MAX / width) return 0;
     const uint64_t required_elements = total_tokens * width;
-    return required_elements <= batch->q_elements && required_elements <= batch->k_elements && required_elements <= batch->v_elements && required_elements <= batch->output_elements;
+    if (required_elements > batch->q_elements || required_elements > batch->k_elements || required_elements > batch->v_elements || required_elements > batch->output_elements) return 0;
+    return hf_finite_buffer(batch->q, required_elements) && hf_finite_buffer(batch->k, required_elements) && hf_finite_buffer(batch->v, required_elements);
 }
 
 void holy_fitra_ragged_attention_scalar(const hf_ragged_attention_batch *batch) {

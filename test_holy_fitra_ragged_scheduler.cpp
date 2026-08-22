@@ -1,6 +1,7 @@
 #include "holy_fitra_ragged_scheduler.h"
 #include <cassert>
 #include <cmath>
+#include <limits>
 #include <vector>
 
 static void fill(std::vector<float> &values, float offset) {
@@ -32,6 +33,13 @@ int main() {
     auto short_offsets = batch;
     short_offsets.offsets_count = sequence_count;
     assert(holyfitra::submit_ragged_attention(scheduler, short_offsets, plan) == nullptr);
+    auto nonfinite = batch;
+    q[0] = std::numeric_limits<float>::quiet_NaN();
+    assert(holyfitra::submit_ragged_attention(scheduler, nonfinite, plan) == nullptr);
+    q[0] = 0.1f;
+    k[0] = std::numeric_limits<float>::infinity();
+    assert(holyfitra::submit_ragged_attention(scheduler, nonfinite, plan) == nullptr);
+    k[0] = 0.2f;
     plan.kernel = holyfitra::RaggedKernelKind::Neon;
     plan.core_class = holyfitra::CoreClass::BigPreferred;
     plan.priority = holyfitra::Priority::Throughput;

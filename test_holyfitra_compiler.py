@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -247,7 +248,8 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(rebuilt_llvm, expected_llvm)
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["digest"], digest)
-            self.assertEqual(payload["schema"], 2)
+            self.assertEqual(payload["schema"], 3)
+            self.assertEqual(payload["llvm_sha256"], hashlib.sha256(expected_llvm.encode("utf-8")).hexdigest())
 
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
