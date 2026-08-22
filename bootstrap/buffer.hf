@@ -1,0 +1,11 @@
+module buffer
+
+fn main() -> i32 {
+  let buffer: buf = hf_buf_new(32);
+  let ok_text: bool = hf_buf_append_str(buffer, "x=");
+  let ok_number: bool = hf_buf_append_i32(buffer, 42);
+  let text: string = hf_buf_finish(buffer);
+  let length: i32 = hf_string_len32(text);
+  hf_buf_free(buffer);
+  return length;
+}

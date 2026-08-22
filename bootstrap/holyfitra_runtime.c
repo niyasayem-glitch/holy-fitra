@@ -3,18 +3,26 @@
 //   clang generated.ll holyfitra_runtime.c -O2 -o program
 
 #include <stdint.h>
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #define HF_MAX_DYNAMIC_I32_CAPACITY ((uint64_t)1u << 20)
 #define HF_MAX_FILE_BYTES ((uint64_t)64u << 20)
+#define HF_MAX_BUFFER_BYTES ((uint64_t)64u << 20)
 
 typedef struct {
     uint64_t size;
     uint64_t capacity;
     int32_t *data;
 } HF_DynI32;
+
+typedef struct {
+    uint64_t size;
+    uint64_t capacity;
+    char *data;
+} HF_Buffer;
 
 static void hf_abort_invalid(void) {
     abort();
@@ -122,4 +130,56 @@ void *hf_read_text(const char *path) {
     void *text = hf_file_read_all(file);
     hf_file_close(file);
     return text;
+}
+
+void *hf_buf_new(uint64_t capacity) {
+    if (capacity == 0 || capacity > HF_MAX_BUFFER_BYTES || capacity == UINT64_MAX) return NULL;
+    HF_Buffer *buffer = (HF_Buffer *)calloc(1, sizeof(HF_Buffer));
+    if (!buffer) return NULL;
+    buffer->data = (char *)calloc((size_t)(capacity + 1), sizeof(char));
+    if (!buffer->data) {
+        free(buffer);
+        return NULL;
+    }
+    buffer->capacity = capacity;
+    return buffer;
+}
+
+static _Bool hf_buf_append_bytes(HF_Buffer *buffer, const char *text, uint64_t length) {
+    if (!buffer || !buffer->data || (!text && length != 0)) return 0;
+    if (length > buffer->capacity - buffer->size) return 0;
+    if (length != 0) memcpy(buffer->data + buffer->size, text, (size_t)length);
+    buffer->size += length;
+    buffer->data[buffer->size] = '\0';
+    return 1;
+}
+
+_Bool hf_buf_append_str(void *opaque, const char *text) {
+    HF_Buffer *buffer = (HF_Buffer *)opaque;
+    if (!text) return 0;
+    size_t length = strlen(text);
+    return length <= UINT64_MAX ? hf_buf_append_bytes(buffer, text, (uint64_t)length) : 0;
+}
+
+_Bool hf_buf_append_i32(void *opaque, int32_t value) {
+    char text[12];
+    int written = snprintf(text, sizeof(text), "%" PRId32, value);
+    if (written < 0 || (size_t)written >= sizeof(text)) return 0;
+    return hf_buf_append_bytes((HF_Buffer *)opaque, text, (uint64_t)written);
+}
+
+char *hf_buf_finish(void *opaque) {
+    HF_Buffer *buffer = (HF_Buffer *)opaque;
+    if (!buffer || !buffer->data || buffer->size > HF_MAX_BUFFER_BYTES) return NULL;
+    char *result = (char *)malloc((size_t)(buffer->size + 1));
+    if (!result) return NULL;
+    memcpy(result, buffer->data, (size_t)(buffer->size + 1));
+    return result;
+}
+
+void hf_buf_free(void *opaque) {
+    HF_Buffer *buffer = (HF_Buffer *)opaque;
+    if (!buffer) return;
+    free(buffer->data);
+    free(buffer);
 }

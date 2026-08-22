@@ -1,0 +1,101 @@
+module selfhost_symtable
+
+fn table_init() -> dyn<i32> {
+  let table: dyn<i32> = hf_dyn_i32_new(8);
+  var index: i32 = 0;
+  while index < 8 {
+    hf_dyn_i32_push(table, 0);
+    index = index + 1;
+  }
+  return table;
+}
+
+fn table_find(keys: dyn<i32>, types: dyn<i32>, scopes: dyn<i32>, capacity: i32, key: i32, scope: i32) -> i32 {
+  var probe: i32 = 0;
+  var index: i32 = key - (key / capacity) * capacity;
+  while probe < capacity {
+    let stored: i32 = hf_dyn_i32_get32(keys, index);
+    if stored == 0 {
+      return 0;
+    } else {
+      if stored == key {
+        let stored_scope: i32 = hf_dyn_i32_get32(scopes, index);
+        if stored_scope == scope {
+          return hf_dyn_i32_get32(types, index);
+        }
+      }
+      index = index + 1;
+      if index == capacity {
+        index = 0;
+      }
+      probe = probe + 1;
+    }
+  }
+  return 0;
+}
+
+fn table_insert(keys: dyn<i32>, types: dyn<i32>, scopes: dyn<i32>, capacity: i32, key: i32, value_type: i32, scope: i32) -> bool {
+  var probe: i32 = 0;
+  var index: i32 = key - (key / capacity) * capacity;
+  while probe < capacity {
+    let stored: i32 = hf_dyn_i32_get32(keys, index);
+    if stored == 0 {
+      hf_dyn_i32_set32(keys, index, key);
+      hf_dyn_i32_set32(types, index, value_type);
+      hf_dyn_i32_set32(scopes, index, scope);
+      return true;
+    } else {
+      if stored == key {
+        let stored_scope: i32 = hf_dyn_i32_get32(scopes, index);
+        if stored_scope == scope {
+          return false;
+        }
+      }
+      index = index + 1;
+      if index == capacity {
+        index = 0;
+      }
+      probe = probe + 1;
+    }
+  }
+  return false;
+}
+
+fn scope_find(keys: dyn<i32>, types: dyn<i32>, scopes: dyn<i32>, parents: dyn<i32>, capacity: i32, key: i32, scope: i32) -> i32 {
+  var current: i32 = scope;
+  var result: i32 = 0;
+  while current > 0 {
+    result = table_find(keys, types, scopes, capacity, key, current);
+    if result > 0 {
+      return result;
+    }
+    current = hf_dyn_i32_get32(parents, current);
+  }
+  return 0;
+}
+
+fn main() -> i32 {
+  let capacity: i32 = 8;
+  let keys: dyn<i32> = table_init();
+  let types: dyn<i32> = table_init();
+  let scopes: dyn<i32> = table_init();
+  let parents: dyn<i32> = hf_dyn_i32_new(3);
+  hf_dyn_i32_push(parents, 0);
+  hf_dyn_i32_push(parents, 0);
+  hf_dyn_i32_push(parents, 0);
+  hf_dyn_i32_set32(parents, 1, 0);
+  hf_dyn_i32_set32(parents, 2, 1);
+  let inserted: bool = table_insert(keys, types, scopes, capacity, 7, 3, 1);
+  let inserted_collision: bool = table_insert(keys, types, scopes, capacity, 15, 4, 1);
+  let duplicate: bool = table_insert(keys, types, scopes, capacity, 7, 9, 1);
+  let found: i32 = scope_find(keys, types, scopes, parents, capacity, 15, 2);
+  hf_dyn_i32_free(keys);
+  hf_dyn_i32_free(types);
+  hf_dyn_i32_free(scopes);
+  hf_dyn_i32_free(parents);
+  if inserted && inserted_collision && !duplicate && found == 4 {
+    return 3;
+  } else {
+    return 9;
+  }
+}

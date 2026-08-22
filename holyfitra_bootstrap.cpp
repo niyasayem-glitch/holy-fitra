@@ -143,7 +143,7 @@ private:
     int column_ = 1;
 };
 
-enum class TypeKind { I32, I64, Bool, Void, String, Handle, File, Array, DynamicArray, Struct };
+enum class TypeKind { I32, I64, Bool, Void, String, Handle, File, Buffer, Array, DynamicArray, Struct };
 
 struct Type final {
     TypeKind kind = TypeKind::Void;
@@ -174,6 +174,7 @@ struct Type final {
             case TypeKind::String: return "string";
             case TypeKind::Handle: return "handle";
             case TypeKind::File: return "file";
+            case TypeKind::Buffer: return "buf";
             case TypeKind::Array: return "[" + std::to_string(count) + "]" + element->display();
             case TypeKind::DynamicArray: return "dyn<" + element->display() + ">";
             case TypeKind::Struct: return name;
@@ -189,6 +190,7 @@ struct Type final {
             case TypeKind::String: return "ptr";
             case TypeKind::Handle: return "ptr";
             case TypeKind::File: return "ptr";
+            case TypeKind::Buffer: return "ptr";
             case TypeKind::Array: return "[" + std::to_string(count) + " x " + element->llvm() + "]";
             case TypeKind::DynamicArray: return "ptr";
             case TypeKind::Struct: return "%struct." + name;
@@ -273,6 +275,11 @@ static const std::vector<Function>& builtinFunctions() {
         result.emplace_back(Function{"hf_file_read_all", {{"file", Type::scalar(TypeKind::File)}}, Type::scalar(TypeKind::String), {}, 0, true});
         result.emplace_back(Function{"hf_file_close", {{"file", Type::scalar(TypeKind::File)}}, Type::scalar(TypeKind::Void), {}, 0, true});
         result.emplace_back(Function{"hf_read_text", {{"path", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::String), {}, 0, true});
+        result.emplace_back(Function{"hf_buf_new", {{"capacity", Type::scalar(TypeKind::I64)}}, Type::scalar(TypeKind::Buffer), {}, 0, true});
+        result.emplace_back(Function{"hf_buf_append_str", {{"buffer", Type::scalar(TypeKind::Buffer)}, {"text", Type::scalar(TypeKind::String)}}, Type::scalar(TypeKind::Bool), {}, 0, true});
+        result.emplace_back(Function{"hf_buf_append_i32", {{"buffer", Type::scalar(TypeKind::Buffer)}, {"value", Type::scalar(TypeKind::I32)}}, Type::scalar(TypeKind::Bool), {}, 0, true});
+        result.emplace_back(Function{"hf_buf_finish", {{"buffer", Type::scalar(TypeKind::Buffer)}}, Type::scalar(TypeKind::String), {}, 0, true});
+        result.emplace_back(Function{"hf_buf_free", {{"buffer", Type::scalar(TypeKind::Buffer)}}, Type::scalar(TypeKind::Void), {}, 0, true});
         return result;
     }();
     return functions;
@@ -319,7 +326,7 @@ private:
     }
     Type parseType() {
         if(accept(TokenKind::Punctuation,"[")) { Token n=expect(TokenKind::Integer,"array length"); expectText(TokenKind::Punctuation,"]"); std::size_t count=static_cast<std::size_t>(std::stoull(n.text)); if(count==0) fail("array length must be positive",n.line,n.column); return Type::array(count,parseType()); }
-        Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); if(t.text=="handle")return Type::scalar(TypeKind::Handle); if(t.text=="file")return Type::scalar(TypeKind::File); if(t.text=="dyn"){expectText(TokenKind::Operator,"<");Type element=parseType();expectText(TokenKind::Operator,">");return Type::dynamicArray(std::move(element));} return Type::structure(t.text);
+        Token t=expect(TokenKind::Identifier,"type"); if(t.text=="i32")return Type::scalar(TypeKind::I32); if(t.text=="i64")return Type::scalar(TypeKind::I64); if(t.text=="bool")return Type::scalar(TypeKind::Bool); if(t.text=="void")return Type::scalar(TypeKind::Void); if(t.text=="string")return Type::scalar(TypeKind::String); if(t.text=="handle")return Type::scalar(TypeKind::Handle); if(t.text=="file")return Type::scalar(TypeKind::File); if(t.text=="buf")return Type::scalar(TypeKind::Buffer); if(t.text=="dyn"){expectText(TokenKind::Operator,"<");Type element=parseType();expectText(TokenKind::Operator,">");return Type::dynamicArray(std::move(element));} return Type::structure(t.text);
     }
     std::vector<StatementPtr> parseBlock() { expectText(TokenKind::Punctuation,"{"); std::vector<StatementPtr> body; while(!accept(TokenKind::Punctuation,"}")){if(is(TokenKind::Eof))unexpected("'}'");body.push_back(parseStatement());}return body; }
     StatementPtr parseStatement() {

@@ -325,3 +325,22 @@ Speculative decoding now validates finite logits, probability-distribution integ
 | Audit document append and diff check | Passed |
 
 This milestone is retained because all repairs passed focused and complete regression gates without weakening safety, quality, or quantization proofs. The validation host is x86-64; no physical Android execution, thermal measurement, or device-performance claim is made. The next major self-hosting milestones remain the byte-buffer/string-builder ABI, Holy Fitra symbol table and type checker, self-hosted LLVM emitter, compiler entry point, and Stage-1 fixed-point rebuild.
+
+## Self-hosting ABI and symbol-table foundation retained — 2026-08-22
+
+The no-Python Stage-0 path now includes a bounded byte-buffer/string-builder ABI in `bootstrap/holyfitra_runtime.c`: `hf_buf_new`, `hf_buf_append_str`, `hf_buf_append_i32`, `hf_buf_finish`, and `hf_buf_free`. The buffer has a 64 MiB hard cap, overflow-safe append checks that leave state unchanged on failure, signed i32 formatting, owned finish copies, and explicit release. `buf` is a distinct source type that lowers to an opaque LLVM pointer and is exposed as typed builtins by the C++ seed compiler.
+
+`bootstrap/selfhost_symtable.hf` is the first semantic-core component written in Holy Fitra. It uses bounded `dyn<i32>` parallel arrays, deterministic linear probing, collision handling, duplicate binding rejection, and parent-scope chaining. The fixture validates a deliberate hash collision and a lookup through a child scope into its parent; it compiles and runs under Stage-0 without Python.
+
+| Validation | Result |
+|---|---:|
+| Complete Python regression suite | **153 tests, 0 failures** |
+| Bootstrap buffer fixture | Passed; host exit 4 (`x=42` length) |
+| Symbol-table fixture | Passed; host exit 3 after collision and duplicate checks |
+| Runtime adversarial C tests | Passed under ASAN/UBSan with leak detection |
+| Buffer and symbol-table AArch64 objects | Passed; non-empty artifacts |
+| No-Python bootstrap gate | Passed |
+| Termux-compatible host gate | Passed |
+| Python compileall and shell syntax | Passed |
+
+No physical Android execution is claimed. The next self-hosting milestone is the Holy Fitra type-checker core, followed by a self-hosted LLVM emitter and Stage-1 fixed-point rebuild.
