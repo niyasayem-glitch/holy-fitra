@@ -78,7 +78,8 @@ jobs:
           gradle --no-daemon --stacktrace \
             -Pandroid.injected.invoked.from.ide=false \
             :android-lib:assembleRelease \
-            :android-app:assembleRelease
+            :android-app:assembleRelease \
+            :android-app:assembleDebug
 
       - name: Verify AArch64 ELF and 16 KB native alignment
         shell: bash
@@ -96,27 +97,38 @@ jobs:
         run: |
           set -euo pipefail
           AAR=$(find android-lib/build/outputs -type f -name '*.aar' -print -quit)
-          APK=$(find android-app/build/outputs/apk/release -type f -name '*.apk' -print -quit)
-          test -n "$AAR" && test -n "$APK"
-          rm -rf /tmp/holyfitra-aar /tmp/holyfitra-apk
-          mkdir -p /tmp/holyfitra-aar /tmp/holyfitra-apk
+          RELEASE_APK=$(find android-app/build/outputs/apk/release -type f -name '*.apk' -print -quit)
+          DEBUG_APK=$(find android-app/build/outputs/apk/debug -type f -name '*.apk' -print -quit)
+          test -n "$AAR" && test -n "$RELEASE_APK" && test -n "$DEBUG_APK"
+          rm -rf /tmp/holyfitra-aar /tmp/holyfitra-apk /tmp/holyfitra-debug-apk
+          mkdir -p /tmp/holyfitra-aar /tmp/holyfitra-apk /tmp/holyfitra-debug-apk
           unzip -q "$AAR" -d /tmp/holyfitra-aar
-          unzip -q "$APK" -d /tmp/holyfitra-apk
+          unzip -q "$RELEASE_APK" -d /tmp/holyfitra-apk
+          unzip -q "$DEBUG_APK" -d /tmp/holyfitra-debug-apk
           test -f "/tmp/holyfitra-aar/jni/${ANDROID_ABI}/libc++_shared.so"
           test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libc++_shared.so"
           test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_runtime.so"
           test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_nibbleflow.so"
           test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_benchmark.so"
+          test -f "/tmp/holyfitra-debug-apk/lib/${ANDROID_ABI}/libc++_shared.so"
+          test -f "/tmp/holyfitra-debug-apk/lib/${ANDROID_ABI}/libholyfitra_runtime.so"
+          test -f "/tmp/holyfitra-debug-apk/lib/${ANDROID_ABI}/libholyfitra_nibbleflow.so"
+          test -f "/tmp/holyfitra-debug-apk/lib/${ANDROID_ABI}/libholyfitra_benchmark.so"
           ZIPALIGN="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS/zipalign"
-          "$ZIPALIGN" -c -P 16 -v 4 "$APK"
+          "$ZIPALIGN" -c -P 16 -v 4 "$RELEASE_APK"
+          "$ZIPALIGN" -c -P 16 -v 4 "$DEBUG_APK"
+          APKSIGNER="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS/apksigner"
+          "$APKSIGNER" verify --verbose "$DEBUG_APK"
           {
             echo '### Android APK verification'
-            echo "APK: $APK"
+            echo "Release APK: $RELEASE_APK (unsigned; production signing remains deployment-owned)"
+            echo "Debug APK: $DEBUG_APK (debug-signed and installable for device testing)"
             echo "AAR: $AAR"
             echo "ABI: ${ANDROID_ABI}"
             echo "NDK: ${ANDROID_NDK_VERSION}"
             echo 'The release APK contains the Holy Fitra native libraries and libc++_shared.so.'
-            echo 'APK zipalign 16 KB verification passed.'
+            echo 'Release and debug APK zipalign 16 KB verification passed.'
+            echo 'Debug APK signature verification passed.'
             echo 'Physical-device execution was not performed by CI.'
           } >> "$GITHUB_STEP_SUMMARY"
 
