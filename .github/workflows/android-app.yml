@@ -4,6 +4,12 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+    inputs:
+      build_installable_apk:
+        description: "Build and publish the debug-signed APK for direct installation"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -132,16 +138,24 @@ jobs:
             echo 'Physical-device execution was not performed by CI.'
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Android release artifacts
+      - name: Upload installable debug APK
+        if: success() && (github.event_name != 'workflow_dispatch' || inputs.build_installable_apk)
+        uses: actions/upload-artifact@v4
+        with:
+          name: holyfitra-installable-debug-apk-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: android-app/build/outputs/apk/debug/android-app-debug.apk
+
+      - name: Upload Android supporting artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: holyfitra-android-${{ github.sha }}
+          name: holyfitra-android-support-${{ github.sha }}
           if-no-files-found: warn
           retention-days: 14
           path: |
             android-app/build/outputs/apk/release/**/*.apk
-            android-app/build/outputs/apk/debug/**/*.apk
             android-lib/build/outputs/aar/**/*.aar
             android-app/build/intermediates/**/*.so
             android-lib/build/intermediates/**/*.so
