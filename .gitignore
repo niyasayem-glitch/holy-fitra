@@ -74,3 +74,5 @@ htmlcov/
 
 device-campaign-*/
 holyfitra-*-release/
+dist/
+*.sha256
