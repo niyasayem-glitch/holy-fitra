@@ -18,7 +18,7 @@ The benchmark library is assembled from:
 | `holy_fitra_ragged_scheduler.cpp` | Sequence-chunk scheduler bridge |
 | `holy_fitra_device_benchmark.cpp` | Workload generation, measurement, thermal sampling, and JSON |
 | `holy_fitra_device_benchmark_jni.cpp` | JNI entry point |
-| `HolyFitraBenchmark.kt` | Coroutine-safe Android API |
+| `android-lib/src/main/java/com/holyfitra/benchmark/HolyFitraBenchmark.kt` | Coroutine-safe Android API |
 
 ## Android Build Integration
 

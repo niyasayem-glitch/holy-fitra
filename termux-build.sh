@@ -223,15 +223,9 @@ run_tests() {
   local python
   python="$(python_command)"
   cd "$ROOT"
-  "$python" -m unittest -q \
-    test_holyfitra_compiler.py test_holyfitra_contracts.py test_holyfitra_quant_tuning.py \
-    test_holyfitra_dashboard.py test_holyfitra_ui.py test_holyfitra_data.py \
-    test_holyfitra_qat_deploy.py test_holyfitra_hybrid.py test_language_core.py \
-    test_hyperir.py test_package.py test_holy_fitra_runtime.py \
-    test_holy_fitra_execution_plan.py test_holy_fitra_ragged.py \
-    test_holy_fitra_dynamic_prefill.py \
-    test_smooth_runtime.py test_holyfitra_ai_api.py test_holyfitra_agent.py \
-    test_holyfitra_campaign.py
+  # Discover every tracked test module so new tests cannot silently bypass
+  # the canonical Termux-compatible regression gate.
+  "$python" -m unittest -q
   "$python" validate_nibbleflow.py
   "$python" validate_holy_fitra_ragged.py
   if (( native_tests )); then

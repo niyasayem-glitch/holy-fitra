@@ -57,3 +57,20 @@ validate_*.log
 .DS_Store
 .vscode/
 .idea/
+
+# Additional Android external-build and local metadata
+*/.cxx/
+.externalNativeBuild/
+local.properties
+captures/
+
+# Coverage and local release archives
+.coverage
+coverage.xml
+htmlcov/
+*.tar.gz
+*.zip
+*.csv
+
+device-campaign-*/
+holyfitra-*-release/

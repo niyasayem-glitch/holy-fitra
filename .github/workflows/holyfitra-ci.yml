@@ -41,8 +41,9 @@ jobs:
       - name: Install Python package
         run: python -m pip install --upgrade pip && python -m pip install -e .
 
-      - name: Validate shell and Python syntax
+      - name: Validate patch, shell, and Python syntax
         run: |
+          git diff --check
           bash -n holyfitra holyfitra-v1.sh termux-build.sh make-holyfitra-v1-release.sh
           python -m py_compile holyfitra_*.py hyperc_*.py test_*.py
 

@@ -183,9 +183,9 @@ When an Android SDK/NDK and Gradle wrapper are available, build the module with:
 The Kotlin-facing APIs are under `android-lib/src/main/java/`:
 
 ```text
-org/holyfitra/NibbleFlow.kt
-org/holyfitra/HolyFitraRuntime.kt
-com/holyfitra/benchmark/HolyFitraBenchmark.kt
+android-lib/src/main/java/org/holyfitra/NibbleFlow.kt
+android-lib/src/main/java/org/holyfitra/HolyFitraRuntime.kt
+android-lib/src/main/java/com/holyfitra/benchmark/HolyFitraBenchmark.kt
 ```
 
 A typical Android flow is:
