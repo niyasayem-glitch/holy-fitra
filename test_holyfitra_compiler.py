@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, compile_native_file, emit_llvm, init_project, load_project, parse_native, test_project, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, load_project, parse_native, test_project, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -284,6 +284,22 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(project.entry.name, "main.hf")
             self.assertEqual(project.target, "x86_64-pc-linux-gnu")
             self.assertTrue((root / "tests" / "smoke.hf").is_file())
+
+    def test_ai_project_template_is_explicit_and_runnable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "ai_project"
+            init_project(root, "ai_project", "ai")
+            source = (root / "src" / "main.hf").read_text(encoding="utf-8")
+            self.assertIn("effects [model, memory]", source)
+            self.assertTrue((root / "ai" / "README.md").is_file())
+            self.assertEqual(test_project(root), 0)
+
+    def test_capabilities_report_has_explicit_evidence_boundaries(self):
+        report = capabilities_report()
+        self.assertEqual(report["schema"], "holyfitra.capabilities/v1")
+        self.assertEqual(report["android"]["supported_abi"], "arm64-v8a")
+        self.assertTrue(report["evidence_boundaries"]["host_regression"])
+        self.assertFalse(report["evidence_boundaries"]["thermal_throttling_device_run"])
 
     def test_call_arity_rejection_is_user_facing(self):
         source = "fn add(a: i32, b: i32) -> i32 { return a + b } fn main() -> i32 { return add(1) }"

@@ -17,7 +17,11 @@ bash termux-build.sh setup --dry-run
 bash termux-build.sh setup
 source "$HOME/.local/bin/holyfitra-env"
 holyfitra doctor
+holyfitra capabilities
+holyfitra init my-ai-project --template ai
 ```
+
+For the detailed capability matrix and evidence boundaries, read [`HOLY_FITRA_CAPABILITIES.md`](HOLY_FITRA_CAPABILITIES.md). For Linux, Termux, source, and Android installation instructions, read [`DOWNLOAD.md`](DOWNLOAD.md).
 
 On a normal Linux host, install into a user-owned prefix when possible:
 

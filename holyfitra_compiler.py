@@ -1275,7 +1275,9 @@ def load_project(path: Path) -> Project:
     return Project(root_resolved, str(name), entry, build_config.get("target"), frontend)
 
 
-def init_project(root: Path, name: str | None = None) -> int:
+def init_project(root: Path, name: str | None = None, template: str = "basic") -> int:
+    if template not in {"basic", "ai"}:
+        raise HolyFitraError(f"unknown project template: {template}")
     root.mkdir(parents=True, exist_ok=True)
     project_name = name or root.name
     source_dir = root / "src"
@@ -1287,10 +1289,36 @@ def init_project(root: Path, name: str | None = None) -> int:
     if manifest.exists() or source.exists():
         raise HolyFitraError(f"project already exists: {root}")
     manifest.write_text(f'''[project]\nname = "{project_name}"\nentry = "src/main.hf"\n\n[build]\ntarget = "{_native_target()}"\nfrontend = "native"\n''', encoding="utf-8")
-    source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
+    if template == "ai":
+        source.write_text(
+            f"module {project_name}\n"
+            "fn classify(score: i32) -> i32 effects [model, memory] task [supervised, capacity=1] {\n"
+            "    if score >= 80 {\n"
+            "        return 1\n"
+            "    } else {\n"
+            "        return 0\n"
+            "    }\n"
+            "}\n"
+            "fn main() -> i32 effects [model, memory] {\n"
+            "    return classify(90)\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        ai_dir = root / "ai"
+        ai_dir.mkdir(exist_ok=True)
+        (ai_dir / "README.md").write_text(
+            "# AI workspace\n\n"
+            "This project starts with explicit model and memory effects, a bounded supervised task, "
+            "and a deterministic scalar example. Use `holyfitra ai providers` to inspect configured "
+            "providers without exposing credentials. Remote generation and agent application remain "
+            "explicit opt-ins; generated changes must pass `holyfitra check` and project tests.\n",
+            encoding="utf-8",
+        )
+    else:
+        source.write_text(f"module {project_name}\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
     smoke_test = tests_dir / "smoke.hf"
     smoke_test.write_text(f"module {project_name}_tests\nfn main() -> i32 {{\n    return 0\n}}\n", encoding="utf-8")
-    print(json.dumps({"ok": True, "project": str(root), "entry": str(source), "tests": str(tests_dir)}, sort_keys=True))
+    print(json.dumps({"ok": True, "project": str(root), "entry": str(source), "tests": str(tests_dir), "template": template}, sort_keys=True))
     return 0
 
 
@@ -1455,13 +1483,74 @@ def doctor() -> int:
     return 0
 
 
+def capabilities_report() -> dict[str, object]:
+    return {
+        "schema": "holyfitra.capabilities/v1",
+        "project": "Holy Fitra",
+        "source_repository": "https://github.com/niyasayem-glitch/holy-fitra",
+        "language": {
+            "native_scalar_frontend": "implemented_and_host_validated",
+            "hyperir_tensor_effect_frontend": "implemented_and_contract_validated",
+            "self_hosted_bootstrap_states": "states_1_to_9_validated",
+            "ownership_modes": ["owned", "borrow", "borrow_mut", "shared"],
+            "effects": ["io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"],
+            "structured_tasks": "bounded_metadata_and_runtime_contracts",
+            "hybrid_functions": "implemented_with_typed_reducer_metadata",
+        },
+        "ai": {
+            "provider_neutral_api": "implemented",
+            "chat_and_embeddings": "implemented",
+            "validated_fitra_generation": "implemented_with_explicit_provider_opt_in",
+            "supervised_coding_agent": "implemented_plan_first_apply_opt_in",
+            "multi_ai_campaigns": "implemented_high_risk_branch_gate",
+            "learning_and_replay": "implemented_python_runtime_components",
+            "qat_and_int4": "implemented_with_numerical_validation_surfaces",
+            "transformer_and_speculative_components": "implemented_experimental_runtime_surfaces",
+        },
+        "compiler_and_runtime": {
+            "llvm_scalar_backend": "implemented",
+            "native_build_and_run": "implemented",
+            "incremental_compile_cache": "implemented",
+            "tui_and_repl": "implemented",
+            "deterministic_package_manifests": "implemented",
+            "native_nibbleflow_and_ragged_kernels": "implemented_with_host_and_object_gates",
+            "android_jni_library": "implemented",
+        },
+        "android": {
+            "installable_workbench_apk": "remote_build_validated",
+            "supported_abi": "arm64-v8a",
+            "ndk": "28.0.13004108",
+            "page_alignment": "16KB_verified_in_remote_ci",
+            "physical_device_execution": "not_yet_measured",
+        },
+        "evidence_boundaries": {
+            "host_regression": True,
+            "termux_native_gate": True,
+            "bootstrap_state_1_to_9": True,
+            "remote_android_sdk_ndk_build": True,
+            "remote_elf_and_package_alignment": True,
+            "art_jni_lifecycle_device_run": False,
+            "neon_throughput_device_run": False,
+            "thermal_throttling_device_run": False,
+        },
+        "environment": doctor_report(),
+    }
+
+
+def capabilities() -> int:
+    print(json.dumps(capabilities_report(), indent=2, sort_keys=True, default=str))
+    return 0
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="holyfitra", description="Holy Fitra compiler and runtime driver")
     subparsers = parser.add_subparsers(dest="command", required=True)
     init_parser = subparsers.add_parser("init", help="create a new Holy Fitra project")
     init_parser.add_argument("directory", type=Path)
     init_parser.add_argument("--name")
+    init_parser.add_argument("--template", choices=["basic", "ai"], default="basic", help="project starter template")
     doctor_parser = subparsers.add_parser("doctor", help="inspect compiler, Termux, LLVM, NumPy, and Android readiness")
+    subparsers.add_parser("capabilities", help="report implemented language, AI, compiler, Android, and evidence surfaces")
     agent_parser = subparsers.add_parser("agent", help="plan or apply supervised AI changes inside a project workspace")
     agent_parser.add_argument("root", type=Path)
     agent_parser.add_argument("goal")
@@ -1532,9 +1621,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            return init_project(args.directory, args.name)
+            return init_project(args.directory, args.name, args.template)
         if args.command == "doctor":
             return doctor()
+        if args.command == "capabilities":
+            return capabilities()
         if args.command == "agent":
             return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
         if args.command == "campaign":

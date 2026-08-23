@@ -1,0 +1,46 @@
+# Holy Fitra capability map
+
+Holy Fitra is currently a **multi-layer AI-oriented language and runtime project**, not one monolithic compiler feature. The repository contains a native scalar compiler, a HyperIR/tensor-oriented frontend, a self-hosted bootstrap path, provider-neutral AI interfaces, a supervised coding agent, learning and quantization components, native kernels, Android JNI packaging, and a local Android Workbench.
+
+The authoritative machine-readable inventory is available locally with:
+
+```bash
+holyfitra capabilities
+```
+
+## Implemented capability layers
+
+| Layer | Current capability | Evidence status |
+|---|---|---|
+| Language frontend | Modules, functions, scalar types, booleans, comparisons, logical operators, structured control flow, path-sensitive returns, constant folding, ownership modes, effects, task metadata, and hybrid functions | Host regression and compiler tests |
+| HyperIR/tensor frontend | Tensor-oriented source parsing, execution-plan lowering, quantization metadata, ragged/dynamic prefill surfaces, and structured contracts | Python contract and numerical test surfaces; not equivalent to full native tensor-language lowering |
+| Compiler | LLVM IR emission, native build/run, cache telemetry, deterministic diagnostics, package manifests, project tests, TUI, and REPL | Host and Termux-compatible gates |
+| Self-hosting | C++17 seed compiler with lexer, parser, diagnostics, module/type-checking states, and AArch64 object emission | Bootstrap State 1–9 gate |
+| AI integration | Provider-neutral chat, embeddings, validated Holy Fitra generation, model selection, request boundaries, and credential-safe provider status | Unit tests and explicit provider configuration; real provider execution requires credentials |
+| Coding automation | Plan-first supervised agent, workspace confinement, allowlisted commands, transactional writes, rollback, improvement rounds, and high-risk branch restrictions | Unit tests and campaign dry-run gates |
+| Learning | Deterministic batching, streaming datasets, replay, supervised training, threshold policy learning, checkpoints, calibration-aware quantization, and deployment manifests | Python tests and numerical checks; not a claim of production-scale training |
+| Native AI runtime | NibbleFlow int4 kernels, ragged kernels, scheduler/work-stealing components, JNI wrappers, and benchmark schemas | Host/native object gates and remote Android build; device performance remains unmeasured |
+| Android | arm64-v8a library, 16 KB ELF alignment, `c++_shared` packaging, installable Workbench debug APK, release APK, and AAR | Remote SDK/NDK CI; no physical-device execution in this environment |
+
+## AI-first language direction
+
+The highest-potential architecture is to keep the language deterministic at its core and make AI behavior explicit in the type, effect, ownership, task, and evidence systems. A future production language should add tensor shapes and dtypes to the canonical type checker, capability-secure model and tool handles, structured uncertainty with provenance, asynchronous cancellation and deadlines in the runtime, package-level dependency locking, incremental compilation across modules, and a stable native ABI for CPU, GPU, and accelerator backends.
+
+The project should not treat a large campaign count or a generated source file as proof of production quality. Every AI-generated change must pass parsing, semantic validation, safety policy, deterministic replay, tests, and the relevant native or device gate before promotion.
+
+## Explicit evidence boundaries
+
+> Remote AArch64 compilation and 16 KB packaging verification do not prove ART/JNI lifecycle correctness, NEON throughput, big.LITTLE scheduling, thermal throttling behavior, or physical-device stability.
+
+The remaining high-value proof gates are a physical ARM64 Android campaign, an Android instrumentation app that exercises library loading and JNI error paths, repeated cold/warm runs across device states, thermal and frequency capture, and comparison against a declared baseline. These are separate from the language/compiler implementation and should not be silently inferred from host results.
+
+## Maximum-potential roadmap
+
+| Stage | Upgrade | Acceptance gate |
+|---|---|---|
+| A | Stable language specification, versioned AST/IR schemas, richer type checker, module imports, and canonical diagnostics | Golden parser/type-checker suite and compatibility fixtures |
+| B | First-class tensor shapes, dtype/layout constraints, ownership of model/KV buffers, and safe async model tasks | Compile-time rejection tests plus deterministic lowering snapshots |
+| C | Provider/tool/model capabilities as explicit handles with consent, budgets, provenance, and fallbacks | Policy matrix, malformed-input tests, and replayable traces |
+| D | Incremental self-hosted compiler core and native AArch64 lowering | Fixed-point bootstrap and object-level equivalence checks |
+| E | Optimized CPU kernels, quantization calibration, scheduler policies, and device instrumentation | Native numerical checks plus physical-device benchmark evidence |
+| F | Package registry, lockfiles, reproducible builds, signed artifacts, IDE/LSP support, and release channels | Clean-room install and verified artifact reproduction |
