@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import ctypes
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -12,7 +13,13 @@ from nibbleflow import NibbleFlowLayout, build_shared_library, load_native, quan
 
 
 def compile_object(source: Path, output: Path) -> dict[str, object]:
-    command = ["clang", "--target=aarch64-linux-android21", "-O3", "-ffreestanding", "-nostdinc", "-isystem", "/usr/lib/llvm-18/lib/clang/18/include", "-c", str(source), "-o", str(output)]
+    clang = shutil.which("clang") or "clang"
+    resource_result = subprocess.run([clang, "-print-resource-dir"], capture_output=True, text=True, check=False)
+    resource_dir = resource_result.stdout.strip()
+    command = [clang, "--target=aarch64-linux-android21", "-O3", "-ffreestanding", "-nostdinc"]
+    if resource_dir:
+        command.extend(["-isystem", str(Path(resource_dir) / "include")])
+    command.extend(["-c", str(source), "-o", str(output)])
     result = subprocess.run(command, capture_output=True, text=True)
     return {"success": result.returncode == 0, "command": " ".join(command), "stderr": result.stderr[-1000:], "bytes": output.stat().st_size if output.exists() else None}
 
