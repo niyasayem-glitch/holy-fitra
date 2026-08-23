@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import os
 import struct
@@ -19,6 +20,14 @@ from holyfitra_qat import QuantizationQualityGate, QuantizationSpec, QuantizedAr
 _MAGIC = b"HOLYFITRA\x01"
 _PREFIX = struct.Struct("<Q")
 _ARRAY_ORDER = ("hidden.weight", "hidden.bias", "output.weight", "output.bias")
+_AUTH_TRAILER = b"HFAUTH\x01"
+_AUTH_TAG_BYTES = hashlib.sha256().digest_size
+_MIN_SIGNING_KEY_BYTES = 16
+MAX_DEPLOYMENT_BYTES = 64 * 1024 * 1024
+MAX_DEPLOYMENT_DIMENSION = 8_192
+MAX_DEPLOYMENT_PARAMETERS = 32_000_000
+MAX_INFERENCE_BATCH_ROWS = 65_536
+MAX_INFERENCE_INPUT_BYTES = 64 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -38,13 +47,22 @@ class DeploymentBundle:
     def predict(self, inputs: np.ndarray) -> np.ndarray:
         x = np.asarray(inputs, dtype=np.float32)
         dimensions = self.manifest["model"]["dimensions"]
-        if x.ndim != 2 or x.shape[1] != dimensions["input_dim"]:
+        if x.ndim != 2 or x.shape[0] <= 0 or x.shape[0] > MAX_INFERENCE_BATCH_ROWS or x.shape[1] != dimensions["input_dim"]:
             raise ValueError("inputs must have shape [batch, input_dim]")
-        hidden = np.maximum(x @ self.arrays["hidden.weight"] + self.arrays["hidden.bias"], 0.0)
-        return np.ascontiguousarray(hidden @ self.arrays["output.weight"] + self.arrays["output.bias"], dtype=np.float32)
+        if x.nbytes > MAX_INFERENCE_INPUT_BYTES or not np.all(np.isfinite(x)):
+            raise ValueError("deployment inputs must be finite and within the configured byte budget")
+        with np.errstate(over="raise", invalid="raise"):
+            try:
+                hidden = np.maximum(x @ self.arrays["hidden.weight"] + self.arrays["hidden.bias"], 0.0)
+                output = np.ascontiguousarray(hidden @ self.arrays["output.weight"] + self.arrays["output.bias"], dtype=np.float32)
+            except FloatingPointError as error:
+                raise ValueError("deployment inference produced a non-finite intermediate") from error
+        if not np.all(np.isfinite(output)):
+            raise ValueError("deployment inference produced non-finite output")
+        return output
 
 
-def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: QuantizationSpec, quality_gate: QuantizationQualityGate, metadata: dict[str, Any] | None = None) -> DeploymentArtifact:
+def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: QuantizationSpec, quality_gate: QuantizationQualityGate, signing_key: bytes, metadata: dict[str, Any] | None = None) -> DeploymentArtifact:
     """Export a TrainableMLP or QuantizationAwareMLP as a canonical artifact."""
     base = getattr(model, "base_model", model)
     for name in ("hidden", "output", "input_dim", "hidden_dim", "output_dim"):
@@ -52,6 +70,7 @@ def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: Quantiz
             raise TypeError("model is not a supported Holy Fitra MLP")
     if not isinstance(weight_spec, QuantizationSpec) or not isinstance(quality_gate, QuantizationQualityGate):
         raise TypeError("weight_spec and quality_gate are required typed contracts")
+    key = _validated_signing_key(signing_key)
     if metadata is not None:
         _ensure_json_value(metadata)
     quantized: dict[str, QuantizedArray] = {}
@@ -81,13 +100,15 @@ def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: Quantiz
             array_manifest.append({"name": name, "dtype": np.dtype(array.dtype).str, "shape": list(array.shape), "bytes": int(array.nbytes), "quantization": None})
     manifest = {
         "format": "holyfitra.deployment",
-        "version": 1,
+        "version": 2,
         "model": {"type": "mlp", "dimensions": {"input_dim": int(base.input_dim), "hidden_dim": int(base.hidden_dim), "output_dim": int(base.output_dim)}},
         "quantization": {"bits": weight_spec.bits, "axis": weight_spec.axis, "symmetric": weight_spec.symmetric, "quality_gate": {"max_mse": quality_gate.max_mse, "max_abs_error": quality_gate.max_abs_error}},
         "arrays": array_manifest,
         "metadata": metadata or {},
     }
-    payload = _encode(manifest, arrays)
+    payload = _encode(manifest, arrays, key)
+    if len(payload) > MAX_DEPLOYMENT_BYTES:
+        raise ValueError("deployment artifact exceeds the configured byte budget")
     destination = Path(path)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(prefix=destination.name + ".", suffix=".tmp", dir=destination.parent, delete=False) as handle:
@@ -99,13 +120,20 @@ def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: Quantiz
     return DeploymentArtifact(str(destination), hashlib.sha256(payload).hexdigest(), manifest, len(payload))
 
 
-def load_deployment(path: str | os.PathLike[str]) -> DeploymentBundle:
-    payload = Path(path).read_bytes()
-    manifest, arrays = _decode(payload)
+def load_deployment(path: str | os.PathLike[str], *, signing_key: bytes) -> DeploymentBundle:
+    key = _validated_signing_key(signing_key)
+    source = Path(path)
+    try:
+        if source.stat().st_size > MAX_DEPLOYMENT_BYTES:
+            raise ValueError("deployment artifact exceeds the configured byte budget")
+        payload = source.read_bytes()
+    except OSError as error:
+        raise ValueError("deployment artifact cannot be read") from error
+    manifest, arrays = _decode(payload, key)
     return DeploymentBundle(manifest, arrays, hashlib.sha256(payload).hexdigest())
 
 
-def _encode(manifest: dict[str, Any], arrays: dict[str, np.ndarray]) -> bytes:
+def _encode(manifest: dict[str, Any], arrays: dict[str, np.ndarray], signing_key: bytes) -> bytes:
     header = json.dumps(manifest, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
     body = bytearray()
     body.extend(_MAGIC)
@@ -113,10 +141,21 @@ def _encode(manifest: dict[str, Any], arrays: dict[str, np.ndarray]) -> bytes:
     body.extend(header)
     for name in _ARRAY_ORDER:
         body.extend(np.ascontiguousarray(arrays[name]).tobytes(order="C"))
-    return bytes(body)
+    unsigned = bytes(body)
+    tag = hmac.new(signing_key, unsigned, hashlib.sha256).digest()
+    return unsigned + _AUTH_TRAILER + tag
 
 
-def _decode(payload: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+def _decode(payload: bytes, signing_key: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
+    minimum_size = len(_MAGIC) + _PREFIX.size + len(_AUTH_TRAILER) + _AUTH_TAG_BYTES
+    if len(payload) < minimum_size or payload[-(_AUTH_TAG_BYTES + len(_AUTH_TRAILER)) : -_AUTH_TAG_BYTES] != _AUTH_TRAILER:
+        raise ValueError("deployment authentication trailer is missing")
+    unsigned = payload[: -(_AUTH_TAG_BYTES + len(_AUTH_TRAILER))]
+    supplied_tag = payload[-_AUTH_TAG_BYTES:]
+    expected_tag = hmac.new(signing_key, unsigned, hashlib.sha256).digest()
+    if not hmac.compare_digest(supplied_tag, expected_tag):
+        raise ValueError("deployment authentication tag does not match")
+    payload = unsigned
     if len(payload) < len(_MAGIC) + _PREFIX.size or payload[: len(_MAGIC)] != _MAGIC:
         raise ValueError("invalid Holy Fitra deployment magic")
     cursor = len(_MAGIC)
@@ -154,6 +193,8 @@ def _decode(payload: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
             arrays[item["name"]] = np.ascontiguousarray(unpacked.reshape(shape).astype(np.float32) * scales, dtype=np.float32)
         else:
             arrays[item["name"]] = np.ascontiguousarray(raw.reshape(shape), dtype=np.float32)
+        if not np.all(np.isfinite(arrays[item["name"]])):
+            raise ValueError("deployment contains non-finite model parameters")
         cursor = end
     if cursor != len(payload):
         raise ValueError("unexpected trailing deployment bytes")
@@ -161,7 +202,7 @@ def _decode(payload: bytes) -> tuple[dict[str, Any], dict[str, np.ndarray]]:
 
 
 def _validate_manifest(manifest: dict[str, Any]) -> None:
-    if not isinstance(manifest, dict) or manifest.get("format") != "holyfitra.deployment" or manifest.get("version") != 1:
+    if not isinstance(manifest, dict) or manifest.get("format") != "holyfitra.deployment" or manifest.get("version") != 2:
         raise ValueError("unsupported deployment format")
     model = manifest.get("model")
     if not isinstance(model, dict) or model.get("type") != "mlp":
@@ -173,7 +214,8 @@ def _validate_manifest(manifest: dict[str, Any]) -> None:
         input_dim, hidden_dim, output_dim = (int(dimensions[key]) for key in ("input_dim", "hidden_dim", "output_dim"))
     except (KeyError, TypeError, ValueError) as error:
         raise ValueError("invalid deployment dimensions") from error
-    if min(input_dim, hidden_dim, output_dim) <= 0:
+    parameter_count = input_dim * hidden_dim + hidden_dim + hidden_dim * output_dim + output_dim
+    if min(input_dim, hidden_dim, output_dim) <= 0 or max(input_dim, hidden_dim, output_dim) > MAX_DEPLOYMENT_DIMENSION or parameter_count > MAX_DEPLOYMENT_PARAMETERS:
         raise ValueError("invalid deployment dimensions")
     arrays = manifest.get("arrays")
     if not isinstance(arrays, list) or len(arrays) != len(_ARRAY_ORDER):
@@ -226,4 +268,13 @@ def _ensure_json_value(value: Any) -> None:
         raise ValueError("deployment metadata must be JSON-serializable") from error
 
 
-__all__ = ["DeploymentArtifact", "DeploymentBundle", "export_mlp", "load_deployment"]
+def _validated_signing_key(signing_key: bytes) -> bytes:
+    if not isinstance(signing_key, (bytes, bytearray)):
+        raise TypeError("deployment signing_key must be bytes")
+    key = bytes(signing_key)
+    if len(key) < _MIN_SIGNING_KEY_BYTES:
+        raise ValueError("deployment signing_key must contain at least 16 bytes")
+    return key
+
+
+__all__ = ["DeploymentArtifact", "DeploymentBundle", "MAX_DEPLOYMENT_BYTES", "MAX_INFERENCE_BATCH_ROWS", "export_mlp", "load_deployment"]

@@ -31,6 +31,7 @@ py-modules = [
   "holyfitra_hybrid",
   "holyfitra_telemetry",
   "holyfitra_tiny_ai",
+  "holyfitra_multiagent_stress",
   "holyfitra_safety",
   "hyperc_language_core",
   "hyperc_hyperir",

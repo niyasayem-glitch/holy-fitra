@@ -12,6 +12,7 @@ from holyfitra_learning import TrainableMLP
 from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
 from holyfitra_data import StreamingDataset
 
+TEST_SIGNING_KEY = b"holyfitra-pipeline-test-key-v2"
 
 class HolyFitraAIPipelineTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -48,6 +49,7 @@ class HolyFitraAIPipelineTests(unittest.TestCase):
             result = self._pipeline().export_verified(
                 self.model,
                 str(Path(temporary) / "model.hfbin"),
+                signing_key=TEST_SIGNING_KEY,
                 weight_spec=QuantizationSpec(bits=8, axis=0),
                 quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0),
                 candidates=[self._candidate()],
@@ -67,6 +69,7 @@ class HolyFitraAIPipelineTests(unittest.TestCase):
     def test_repeated_export_has_stable_pipeline_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             kwargs = dict(
+                signing_key=TEST_SIGNING_KEY,
                 weight_spec=QuantizationSpec(bits=8, axis=0),
                 quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0),
                 candidates=[self._candidate()],
@@ -88,6 +91,7 @@ class HolyFitraAIPipelineTests(unittest.TestCase):
                 self._pipeline().export_verified(
                     self.model,
                     str(Path(temporary) / "model.hfbin"),
+                    signing_key=TEST_SIGNING_KEY,
                     weight_spec=QuantizationSpec(bits=8, axis=0),
                     quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0),
                     candidates=[KernelCandidate("missing-proof", Precision.INT8, 1, 0.0, 1.0, 4096, 1.0, proof_hash="")],

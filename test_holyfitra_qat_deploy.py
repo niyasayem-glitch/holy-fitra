@@ -10,6 +10,7 @@ from holyfitra_deploy import _validate_manifest, export_mlp, load_deployment
 from holyfitra_learning import TrainableMLP, TrainingConfig, train_supervised
 from holyfitra_qat import QuantizationAwareMLP, QuantizationQualityError, QuantizationQualityGate, QuantizationSpec, fake_quantize_tensor, quantize_array
 
+TEST_SIGNING_KEY = b"holyfitra-deployment-test-key-v2"
 
 class HolyFitraQATDeploymentTests(unittest.TestCase):
     def test_int4_round_trip_and_quality_metadata(self):
@@ -45,11 +46,11 @@ class HolyFitraQATDeploymentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path_a = Path(directory) / "model_a.hfbin"
             path_b = Path(directory) / "model_b.hfbin"
-            artifact_a = export_mlp(model, path_a, weight_spec=model.weight_spec, quality_gate=gate, metadata={"purpose": "test", "seed": 8})
-            artifact_b = export_mlp(model, path_b, weight_spec=model.weight_spec, quality_gate=gate, metadata={"purpose": "test", "seed": 8})
+            artifact_a = export_mlp(model, path_a, weight_spec=model.weight_spec, quality_gate=gate, signing_key=TEST_SIGNING_KEY, metadata={"purpose": "test", "seed": 8})
+            artifact_b = export_mlp(model, path_b, weight_spec=model.weight_spec, quality_gate=gate, signing_key=TEST_SIGNING_KEY, metadata={"purpose": "test", "seed": 8})
             self.assertEqual(path_a.read_bytes(), path_b.read_bytes())
             self.assertEqual(artifact_a.digest, artifact_b.digest)
-            bundle = load_deployment(path_a)
+            bundle = load_deployment(path_a, signing_key=TEST_SIGNING_KEY)
             np.testing.assert_allclose(bundle.predict(inputs), model.predict(inputs), atol=1e-6)
             self.assertEqual(bundle.digest, artifact_a.digest)
             self.assertEqual(bundle.manifest["format"], "holyfitra.deployment")
@@ -57,7 +58,7 @@ class HolyFitraQATDeploymentTests(unittest.TestCase):
     def test_manifest_validation_rejects_corrupt_quantization_metadata(self):
         model = TrainableMLP(3, 5, 2, seed=8)
         with tempfile.TemporaryDirectory() as directory:
-            artifact = export_mlp(model, Path(directory) / "valid.hfbin", weight_spec=QuantizationSpec(bits=8, axis=0), quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0))
+            artifact = export_mlp(model, Path(directory) / "valid.hfbin", weight_spec=QuantizationSpec(bits=8, axis=0), quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0), signing_key=TEST_SIGNING_KEY)
             manifest = json.loads(json.dumps(artifact.manifest))
             manifest["arrays"][0]["bytes"] -= 1
             with self.assertRaises(ValueError):
@@ -89,7 +90,26 @@ class HolyFitraQATDeploymentTests(unittest.TestCase):
         model = TrainableMLP(3, 5, 2, seed=8)
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaises(QuantizationQualityError):
-                export_mlp(model, Path(directory) / "rejected.hfbin", weight_spec=QuantizationSpec(bits=4, axis=0), quality_gate=QuantizationQualityGate(max_mse=0.0, max_abs_error=0.0))
+                export_mlp(model, Path(directory) / "rejected.hfbin", weight_spec=QuantizationSpec(bits=4, axis=0), quality_gate=QuantizationQualityGate(max_mse=0.0, max_abs_error=0.0), signing_key=TEST_SIGNING_KEY)
+
+    def test_authenticated_deployment_rejects_tampering_wrong_key_and_unsafe_inputs(self):
+        model = TrainableMLP(3, 5, 2, seed=8)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "valid.hfbin"
+            export_mlp(model, path, weight_spec=QuantizationSpec(bits=8, axis=0), quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0), signing_key=TEST_SIGNING_KEY)
+            with self.assertRaises(ValueError):
+                load_deployment(path, signing_key=b"wrong-deployment-test-key")
+            payload = bytearray(path.read_bytes())
+            payload[-1] ^= 1
+            path.write_bytes(payload)
+            with self.assertRaises(ValueError):
+                load_deployment(path, signing_key=TEST_SIGNING_KEY)
+            export_mlp(model, path, weight_spec=QuantizationSpec(bits=8, axis=0), quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0), signing_key=TEST_SIGNING_KEY)
+            bundle = load_deployment(path, signing_key=TEST_SIGNING_KEY)
+            with self.assertRaises(ValueError):
+                bundle.predict(np.asarray([[np.nan, 0.0, 1.0]], dtype=np.float32))
+            with self.assertRaises(ValueError):
+                bundle.predict(np.zeros((0, 3), dtype=np.float32))
 
 
 if __name__ == "__main__":

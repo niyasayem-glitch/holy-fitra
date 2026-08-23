@@ -242,6 +242,7 @@ class VerifiedAIPipeline:
         model: Any,
         path: str,
         *,
+        signing_key: bytes,
         weight_spec: QuantizationSpec,
         quality_gate: QuantizationQualityGate,
         candidates: Iterable[KernelCandidate],
@@ -270,8 +271,8 @@ class VerifiedAIPipeline:
         }
         _ensure_json(export_metadata)
         try:
-            artifact = export_mlp(model, path, weight_spec=weight_spec, quality_gate=quality_gate, metadata=export_metadata)
-            bundle = load_deployment(path)
+            artifact = export_mlp(model, path, weight_spec=weight_spec, quality_gate=quality_gate, signing_key=signing_key, metadata=export_metadata)
+            bundle = load_deployment(path, signing_key=signing_key)
             self._verify_deployment_predictions(model, bundle, report, batch_size)
         except AIPipelineError:
             raise

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -81,7 +82,7 @@ def train_xor_classifier(*, seed: int = 17, epochs: int = 900) -> tuple[Quantiza
     return model, float(initial_mse), float(final_mse), accuracy
 
 
-def build_xor_deployment(destination: str | Path, *, seed: int = 17, epochs: int = 900) -> TinyAiReport:
+def build_xor_deployment(destination: str | Path, *, signing_key: bytes, seed: int = 17, epochs: int = 900) -> TinyAiReport:
     """Train, export, reload, and verify the small XOR classifier."""
     model, initial_mse, final_mse, float_accuracy = train_xor_classifier(seed=seed, epochs=epochs)
     quality_gate = model.quality_gate
@@ -90,10 +91,11 @@ def build_xor_deployment(destination: str | Path, *, seed: int = 17, epochs: int
         destination,
         weight_spec=model.weight_spec,
         quality_gate=quality_gate,
+        signing_key=signing_key,
         metadata={"example": "tiny_xor", "seed": seed, "epochs": epochs, "training": "holyfitra_tensor_adam_qat"},
     )
     inputs, targets = xor_dataset()
-    deployment_accuracy = binary_accuracy(load_deployment(destination).predict(inputs), targets)
+    deployment_accuracy = binary_accuracy(load_deployment(destination, signing_key=signing_key).predict(inputs), targets)
     if deployment_accuracy < 1.0:
         raise RuntimeError("quantized deployment did not preserve XOR accuracy")
     parameter_count = sum(int(parameter.data.size) for parameter in model.parameters)
@@ -115,8 +117,12 @@ def main() -> int:
     parser.add_argument("--output", default="build/tiny_xor.hfbin", help="deployment artifact path")
     parser.add_argument("--seed", type=int, default=17, help="deterministic model seed")
     parser.add_argument("--epochs", type=int, default=900, help="positive training epoch count")
+    parser.add_argument("--signing-key-env", default="HOLY_FITRA_DEPLOYMENT_KEY", help="environment variable containing the deployment signing key")
     arguments = parser.parse_args()
-    report = build_xor_deployment(arguments.output, seed=arguments.seed, epochs=arguments.epochs)
+    value = os.environ.get(arguments.signing_key_env)
+    if value is None:
+        raise SystemExit(f"missing deployment signing key environment variable: {arguments.signing_key_env}")
+    report = build_xor_deployment(arguments.output, signing_key=value.encode("utf-8"), seed=arguments.seed, epochs=arguments.epochs)
     print(json.dumps(report.as_dict(), indent=2, sort_keys=True))
     return 0
 

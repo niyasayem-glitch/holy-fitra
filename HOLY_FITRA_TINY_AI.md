@@ -7,9 +7,11 @@
 This is a real, bounded learning example. It is **not** a language model, a general-purpose assistant, or native Holy Fitra tensor execution.
 
 ```bash
-python3 holyfitra_tiny_ai.py --output build/tiny_xor.hfbin --seed 17 --epochs 900
+HOLY_FITRA_DEPLOYMENT_KEY="$YOUR_DEPLOYMENT_KEY" python3 holyfitra_tiny_ai.py --output build/tiny_xor.hfbin --seed 17 --epochs 900
 python3 -m unittest -v test_holyfitra_tiny_ai.py
 ```
+
+The deployment key is required and is never written into the artifact, source tree, or report. Store a high-entropy key in the platform's secret manager rather than in a command history or committed configuration file.
 
 The fixed test run used seed `17` and produced the following outcome:
 
@@ -41,13 +43,15 @@ The table records every issue encountered in this scoped build, together with th
 | Quantization | The proven path uses symmetric int8 quantization with an explicit quality gate. Current quantization support is bounded to symmetric int4/int8 contracts; broader formats and hardware-specific calibration remain outside this example. | Current feature limit |
 | Native acceleration | The classifier does not use the ARM64 NibbleFlow/ragged kernels. No inference latency, memory, NEON/SVE, big.LITTLE, or thermal claim is made. | Unresolved integration and measurement gap |
 | Android delivery | The generated `.hfbin` is not yet wired through the Android JNI/Kotlin Workbench or the Expo companion. | Unresolved product integration gap |
-| Checkpoint interoperability | Training checkpoints and deployment artifacts use distinct formats. The language-level module system has no unified model registry, version migration, signing policy, or package-to-runtime loader for them. | Unresolved platform gap |
+| Artifact integrity | Deployment format v2 now authenticates the manifest and every weight byte with an HMAC-SHA-256 tag. A wrong key, missing tag, or any payload mutation fails before decoding. | Implemented; managed key rotation and public-key distribution remain open |
+| Deployment input validation | Deployment inference now rejects non-finite inputs, empty or over-limit batches, oversized input byte payloads, and non-finite outputs. | Implemented for the reference API |
+| Checkpoint interoperability | Training checkpoints and deployment artifacts use distinct formats. The language-level module system has no unified model registry, version migration, signing-key rotation policy, or package-to-runtime loader for them. | Unresolved platform gap |
 | Scaling | The example has no batching benchmark, streaming data loader exercise, distributed training, mixed precision strategy, memory allocator integration, or optimizer-kernel lowering. | Unresolved scaling gap |
 | Safety and operations | The model artifact is deterministic and validated structurally, but this example does not add evaluation governance, data consent workflow, model-card generation, red-team testing, online monitoring, or rollback policy. | Unresolved operational gap |
 
 ## What passed
 
-The focused validation ran the new tiny-AI tests alongside the existing learning and QAT/deployment suites: **16 tests passed**. The checks cover deterministic repeated training/export bytes, finite output, exact XOR predictions, deployment reload, malformed quantization rejection, failed quality gates, checkpoint restoration, and non-finite optimizer-update rejection.
+The current full regression suite runs **248 tests**. It includes deterministic repeated authenticated exports, HMAC failure on tampered payloads or wrong keys, finite/bounded deployment inference, exact XOR predictions, malformed quantization rejection, failed quality gates, checkpoint restoration, and non-finite optimizer-update rejection.
 
 ## Next implementation milestones
 

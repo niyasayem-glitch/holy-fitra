@@ -9,14 +9,15 @@ import numpy as np
 from holyfitra_tiny_ai import binary_accuracy, build_xor_deployment, train_xor_classifier, xor_dataset
 from hyperc_language_core import compile_source
 
+TEST_SIGNING_KEY = b"holyfitra-tiny-ai-test-key-v2"
 
 class HolyFitraTinyAiTests(unittest.TestCase):
     def test_train_export_reload_and_repeat_are_deterministic(self):
         with tempfile.TemporaryDirectory() as directory:
             first_path = Path(directory) / "first.hfbin"
             second_path = Path(directory) / "second.hfbin"
-            first = build_xor_deployment(first_path)
-            second = build_xor_deployment(second_path)
+            first = build_xor_deployment(first_path, signing_key=TEST_SIGNING_KEY)
+            second = build_xor_deployment(second_path, signing_key=TEST_SIGNING_KEY)
             self.assertLess(first.final_mse, first.initial_mse)
             self.assertEqual(first.float_accuracy, 1.0)
             self.assertEqual(first.deployment_accuracy, 1.0)
