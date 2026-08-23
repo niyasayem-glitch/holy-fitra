@@ -878,7 +878,8 @@ class LLVMEmitter:
             if expression.name not in self.variables:
                 raise HolyFitraError(f"unknown value {expression.name}")
             result = self.temp()
-            self.current_lines.append(f"  {result} = load {self.types[expression.name].llvm}, ptr {self.variables[expression.name]}")
+            value_type = self.types[expression.name].llvm
+            self.current_lines.append(f"  {result} = load {value_type}, {value_type}* {self.variables[expression.name]}")
             return result, self.types[expression.name]
         if isinstance(expression, BinaryExpr):
             if isinstance(expression.left, (IntLiteral, BoolLiteral)) and isinstance(expression.right, (IntLiteral, BoolLiteral)):
@@ -976,7 +977,7 @@ class LLVMEmitter:
         self.current_lines = lines
         for name, type_ in function.parameters:
             lines.append(f"  %{name}.addr = alloca {type_.llvm}")
-            lines.append(f"  store {type_.llvm} %{name}, ptr %{name}.addr")
+            lines.append(f"  store {type_.llvm} %{name}, {type_.llvm}* %{name}.addr")
         entry_alloca_index = len(lines)
         if function.hybrid is not None:
             current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
@@ -1012,7 +1013,7 @@ class LLVMEmitter:
                 address = f"%{statement.name}.addr.{self.local_counter}"
                 self.local_counter += 1
                 self.alloca_lines.append(f"  {address} = alloca {local_type.llvm}")
-                self.current_lines.append(f"  store {local_type.llvm} {value}, ptr {address}")
+                self.current_lines.append(f"  store {local_type.llvm} {value}, {local_type.llvm}* {address}")
                 self.variables[statement.name] = address
                 self.types[statement.name] = local_type
             elif isinstance(statement, AssignStmt):
@@ -1022,7 +1023,7 @@ class LLVMEmitter:
                 expected = self.types[statement.name]
                 if not _same_value_type(value_type, expected):
                     raise HolyFitraError(f"assignment to {statement.name} requires {expected.name}, got {value_type.name}")
-                self.current_lines.append(f"  store {expected.llvm} {value}, ptr {self.variables[statement.name]}")
+                self.current_lines.append(f"  store {expected.llvm} {value}, {expected.llvm}* {self.variables[statement.name]}")
             elif isinstance(statement, ReturnStmt):
                 if statement.value is None:
                     self.current_lines.append("  ret void")
