@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+
+import numpy as np
+
+from holy_fitra_execution_plan import CorePolicy, KernelCandidate, PlanConstraints, Precision
+from holyfitra_ai_pipeline import VerifiedAIPipeline
+from holyfitra_data import StreamingDataset
+from holyfitra_deploy import load_deployment
+from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
+from holyfitra_learning import TrainableMLP
+from holyfitra_model_capsule import CapsuleError, export_pipeline_capsule, open_model_capsule
+from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
+from holyfitra_tensor_contracts import TensorContract, TensorResourceContract
+
+DEPLOYMENT_KEY = b"holyfitra-capsule-deployment-test-key-v1"
+CAPSULE_KEY = b"holyfitra-capsule-index-test-key-v1"
+
+
+class ModelCapsuleTests(unittest.TestCase):
+    def _pipeline_result(self, directory: str):
+        inputs = np.arange(512, dtype=np.float32).reshape(8, 64) / 64.0
+        targets = inputs[:, :8] * 0.5
+        dataset = StreamingDataset.from_arrays(inputs, targets, seed=4, name="capsule.validation")
+        pipeline = VerifiedAIPipeline(dataset)
+        model = TrainableMLP(64, 128, 8, seed=8)
+        candidate = KernelCandidate("capsule.int8.reference", Precision.INT8, 1, 0.0, 1.0, 32_768, 1.0, (CorePolicy.ANY,), "proof:capsule")
+        return pipeline.export_verified(
+            model,
+            str(Path(directory) / "model.hfbin"),
+            signing_key=DEPLOYMENT_KEY,
+            weight_spec=QuantizationSpec(bits=8, axis=0),
+            quality_gate=QuantizationQualityGate(max_mse=1.0, max_abs_error=1.0),
+            candidates=(candidate,),
+            constraints=PlanConstraints(max_mse=1.0, memory_budget_bytes=65_536, energy_budget=2.0),
+            max_mse=10.0,
+            max_mae=10.0,
+            max_abs_allowed=10.0,
+        )
+
+    def test_capsule_loads_chunks_lazily_and_reconstructs_verified_deployment(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            contract = TensorResourceContract((TensorContract("input", (1, 64), "f32", device="neon"), TensorContract("output", (1, 8), "f32", device="neon")), memory_budget_bytes=65_536, max_energy=2.0)
+            digest = "c" * 64
+            agent_receipt = AgentPlanReceipt(("model.predict.local",), AgentBudget(1, 6, 4, 1000), (AgentEvidence("scorer", digest), AgentEvidence("proposals", digest)), (AgentApproval("verifier", 1), AgentApproval("governor", 1)), digest)
+            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt)
+            capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=2)
+            self.assertEqual(capsule.cached_chunk_count, 0)
+            deployment_chunks = tuple(name for name in capsule.chunk_names if name.startswith("deployment/"))
+            self.assertGreater(len(deployment_chunks), 1)
+            self.assertEqual(b"".join(capsule.iter_deployment_chunks()), Path(result.artifact.path).read_bytes())
+            self.assertLessEqual(capsule.cached_chunk_count, 2)
+            plan = capsule.execution_plan_json()
+            self.assertEqual(plan["plan_id"], result.plan.plan_id)
+            self.assertLessEqual(capsule.cached_chunk_count, 2)
+            bundle = capsule.load_deployment(signing_key=DEPLOYMENT_KEY)
+            inputs = np.zeros((1, 64), dtype=np.float32)
+            expected = load_deployment(result.artifact.path, signing_key=DEPLOYMENT_KEY).predict(inputs)
+            np.testing.assert_allclose(bundle.predict(inputs), expected)
+            self.assertEqual(capsule.manifest["deployment_hash"], result.artifact.digest)
+            self.assertEqual(capsule.resource_contract_json()["required_kernel_abi"], 1)
+            self.assertEqual(capsule.agent_receipt_json()["schema"], "holyfitra.agent-plan-receipt/v1")
+            self.assertGreater(artifact.bytes_written, result.artifact.bytes_written)
+
+    def test_capsule_rejects_wrong_key_and_lazy_chunk_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024)
+            with self.assertRaises(CapsuleError):
+                open_model_capsule(capsule_path, signing_key=b"wrong-capsule-signing-key")
+            capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY)
+            first_chunk = next(name for name in capsule.chunk_names if name.startswith("deployment/"))
+            offset = capsule._chunks[first_chunk].offset
+            raw = bytearray(capsule_path.read_bytes())
+            raw[offset] ^= 1
+            capsule_path.write_bytes(raw)
+            with self.assertRaises(CapsuleError):
+                capsule.read_chunk(first_chunk)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

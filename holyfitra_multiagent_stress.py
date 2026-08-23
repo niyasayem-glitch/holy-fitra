@@ -22,6 +22,7 @@ from typing import Iterable
 import numpy as np
 
 from holyfitra_deploy import DeploymentBundle, export_mlp, load_deployment
+from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
 from holyfitra_learning import TrainingConfig, TrainableMLP, train_supervised
 from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
 
@@ -72,6 +73,7 @@ class MultiAgentStressReport:
     proposals_per_second: float
     scorer_digest: str
     report_digest: str
+    receipt_id: str
     side_effects: tuple[str, ...]
 
     def as_dict(self) -> dict[str, object]:
@@ -169,6 +171,13 @@ class LocalNeuralMultiAgentStress:
                 approved += 1
         canonical = [{"task_id": item.task_id, "role": item.role, "decision": item.decision, "neural_score": round(item.neural_score, 8), "evidence_digest": item.evidence_digest} for item in proposals]
         report_digest = hashlib.sha256(json.dumps(canonical, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+        receipt = AgentPlanReceipt(
+            capabilities=("model.predict.local",),
+            budget=AgentBudget(self.config.task_count, self.config.task_count * len(ROLE_NAMES), self.config.work_iterations, int(self.config.max_elapsed_seconds * 1000)),
+            evidence=(AgentEvidence("scorer", self._scorer_digest), AgentEvidence("proposals", report_digest)),
+            approvals=(AgentApproval("verifier", approved), AgentApproval("governor", approved)),
+            proposal_digest=report_digest,
+        )
         return MultiAgentStressReport(
             task_count=len(prepared),
             proposal_count=len(proposals),
@@ -178,6 +187,7 @@ class LocalNeuralMultiAgentStress:
             proposals_per_second=len(proposals) / elapsed,
             scorer_digest=self._scorer_digest,
             report_digest=report_digest,
+            receipt_id=receipt.digest(),
             side_effects=(),
         )
 

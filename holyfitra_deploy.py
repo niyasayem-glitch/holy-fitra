@@ -121,7 +121,6 @@ def export_mlp(model: Any, path: str | os.PathLike[str], *, weight_spec: Quantiz
 
 
 def load_deployment(path: str | os.PathLike[str], *, signing_key: bytes) -> DeploymentBundle:
-    key = _validated_signing_key(signing_key)
     source = Path(path)
     try:
         if source.stat().st_size > MAX_DEPLOYMENT_BYTES:
@@ -129,6 +128,15 @@ def load_deployment(path: str | os.PathLike[str], *, signing_key: bytes) -> Depl
         payload = source.read_bytes()
     except OSError as error:
         raise ValueError("deployment artifact cannot be read") from error
+    return load_deployment_bytes(payload, signing_key=signing_key)
+
+
+def load_deployment_bytes(payload: bytes | bytearray, *, signing_key: bytes) -> DeploymentBundle:
+    """Verify and decode a bounded deployment payload already held in memory."""
+    key = _validated_signing_key(signing_key)
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) > MAX_DEPLOYMENT_BYTES:
+        raise ValueError("deployment artifact exceeds the configured byte budget")
+    payload = bytes(payload)
     manifest, arrays = _decode(payload, key)
     return DeploymentBundle(manifest, arrays, hashlib.sha256(payload).hexdigest())
 
@@ -277,4 +285,4 @@ def _validated_signing_key(signing_key: bytes) -> bytes:
     return key
 
 
-__all__ = ["DeploymentArtifact", "DeploymentBundle", "MAX_DEPLOYMENT_BYTES", "MAX_INFERENCE_BATCH_ROWS", "export_mlp", "load_deployment"]
+__all__ = ["DeploymentArtifact", "DeploymentBundle", "MAX_DEPLOYMENT_BYTES", "MAX_INFERENCE_BATCH_ROWS", "export_mlp", "load_deployment", "load_deployment_bytes"]

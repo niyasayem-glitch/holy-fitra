@@ -14,6 +14,7 @@ class LocalNeuralMultiAgentStressTests(unittest.TestCase):
         second = LocalNeuralMultiAgentStress(TEST_SIGNING_KEY, config).run(stress_tasks(12))
         self.assertEqual(first.proposal_count, 12 * 6)
         self.assertEqual(first.report_digest, second.report_digest)
+        self.assertEqual(first.receipt_id, second.receipt_id)
         self.assertEqual(first.scorer_digest, second.scorer_digest)
         self.assertEqual(first.side_effects, ())
 
