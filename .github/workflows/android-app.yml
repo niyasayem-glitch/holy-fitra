@@ -141,6 +141,7 @@ jobs:
           retention-days: 14
           path: |
             android-app/build/outputs/apk/release/**/*.apk
+            android-app/build/outputs/apk/debug/**/*.apk
             android-lib/build/outputs/aar/**/*.aar
             android-app/build/intermediates/**/*.so
             android-lib/build/intermediates/**/*.so
