@@ -189,6 +189,11 @@ EOF
   "$driver" emit "$work/good.hf" -o "$work/two.ll" >/dev/null
   cmp "$work/one.ll" "$work/two.ll"
   "$driver" build "$work/good.hf" -o "$work/good" >/dev/null
+  "$driver" build "$work/good.hf" -o "$work/good.repeat" >/dev/null
+  cmp -s "$work/good" "$work/good.repeat" || {
+    echo 'termux-build v1-test: identical source produced non-deterministic executables' >&2
+    return 1
+  }
   set +e
   "$work/good" >/dev/null
   local status=$?

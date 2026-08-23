@@ -168,10 +168,11 @@ build_file() {
   trap 'rm -f "$temporary"' RETURN
   "$SEED" --target="$TARGET" "$INPUT" -o "$temporary"
   verify_llvm "$temporary"
+  local link_flags=(-O2 -Wl,--build-id=sha1 -Wl,--strip-all)
   if is_native_target "$TARGET"; then
-    "$CC" -O2 "$temporary" -o "$OUTPUT"
+    "$CC" "${link_flags[@]}" "$temporary" -o "$OUTPUT"
   else
-    "$CC" -target "$TARGET" -O2 "$temporary" -o "$OUTPUT"
+    "$CC" -target "$TARGET" "${link_flags[@]}" "$temporary" -o "$OUTPUT"
   fi
   chmod 755 "$OUTPUT"
   rm -f "$temporary"
