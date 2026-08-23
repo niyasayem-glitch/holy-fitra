@@ -1,0 +1,134 @@
+name: Holy Fitra Android APK
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: holyfitra-android-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANDROID_COMPILE_SDK: '35'
+  ANDROID_BUILD_TOOLS: '35.0.0'
+  ANDROID_CMAKE_VERSION: '3.22.1'
+  ANDROID_NDK_VERSION: '28.0.13004108'
+  ANDROID_ABI: 'arm64-v8a'
+  GRADLE_VERSION: '8.7'
+
+jobs:
+  android-apk:
+    name: Build Holy Fitra arm64-v8a APK
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install pinned Android SDK, CMake, and NDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager --install \
+            "platform-tools" \
+            "platforms;android-${ANDROID_COMPILE_SDK}" \
+            "build-tools;${ANDROID_BUILD_TOOLS}" \
+            "cmake;${ANDROID_CMAKE_VERSION}" \
+            "ndk;${ANDROID_NDK_VERSION}"
+          test -d "$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+          test -d "$ANDROID_SDK_ROOT/cmake/$ANDROID_CMAKE_VERSION"
+
+      - name: Set up pinned Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+          cache-read-only: ${{ github.event_name == 'pull_request' }}
+
+      - name: Validate Gradle and Android contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          bash -n holyfitra holyfitra-v1.sh termux-build.sh make-holyfitra-v1-release.sh
+          python3 -m py_compile ci/check_android_alignment.py
+          echo "gradle=$(gradle --version | grep '^Gradle ' | head -1)"
+          echo "ndk=$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION"
+          echo "abi=$ANDROID_ABI compile_sdk=$ANDROID_COMPILE_SDK"
+
+      - name: Build release AAR and installable APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace \
+            -Pandroid.injected.invoked.from.ide=false \
+            :android-lib:assembleRelease \
+            :android-app:assembleRelease
+
+      - name: Verify AArch64 ELF and 16 KB native alignment
+        shell: bash
+        run: |
+          set -euo pipefail
+          NDK_LLVM="$ANDROID_SDK_ROOT/ndk/$ANDROID_NDK_VERSION/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          READELF="$NDK_LLVM/llvm-readelf"
+          test -x "$READELF"
+          mapfile -t LIBRARIES < <(find android-lib/build android-app/build -type f -name '*.so' -print | sort -u)
+          test "${#LIBRARIES[@]}" -gt 0
+          python3 ci/check_android_alignment.py --readelf "$READELF" "${LIBRARIES[@]}"
+
+      - name: Verify AAR and APK packaging
+        shell: bash
+        run: |
+          set -euo pipefail
+          AAR=$(find android-lib/build/outputs -type f -name '*.aar' -print -quit)
+          APK=$(find android-app/build/outputs/apk/release -type f -name '*.apk' -print -quit)
+          test -n "$AAR" && test -n "$APK"
+          rm -rf /tmp/holyfitra-aar /tmp/holyfitra-apk
+          mkdir -p /tmp/holyfitra-aar /tmp/holyfitra-apk
+          unzip -q "$AAR" -d /tmp/holyfitra-aar
+          unzip -q "$APK" -d /tmp/holyfitra-apk
+          test -f "/tmp/holyfitra-aar/jni/${ANDROID_ABI}/libc++_shared.so"
+          test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libc++_shared.so"
+          test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_runtime.so"
+          test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_nibbleflow.so"
+          test -f "/tmp/holyfitra-apk/lib/${ANDROID_ABI}/libholyfitra_benchmark.so"
+          ZIPALIGN="$ANDROID_SDK_ROOT/build-tools/$ANDROID_BUILD_TOOLS/zipalign"
+          "$ZIPALIGN" -c -P 16 -v 4 "$APK"
+          {
+            echo '### Android APK verification'
+            echo "APK: $APK"
+            echo "AAR: $AAR"
+            echo "ABI: ${ANDROID_ABI}"
+            echo "NDK: ${ANDROID_NDK_VERSION}"
+            echo 'The release APK contains the Holy Fitra native libraries and libc++_shared.so.'
+            echo 'APK zipalign 16 KB verification passed.'
+            echo 'Physical-device execution was not performed by CI.'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload Android release artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: holyfitra-android-${{ github.sha }}
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            android-app/build/outputs/apk/release/**/*.apk
+            android-lib/build/outputs/aar/**/*.aar
+            android-app/build/intermediates/**/*.so
+            android-lib/build/intermediates/**/*.so

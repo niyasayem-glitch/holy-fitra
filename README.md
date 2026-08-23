@@ -289,7 +289,14 @@ python3 validate_holy_fitra_ragged.py
 bash termux-build.sh test --native-tests
 ```
 
-The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. Build it with `./gradlew :android-lib:assembleRelease` when an Android SDK/NDK and Gradle wrapper are available. This is separate from the native Termux CLI path. Physical ARM64 Android validation is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
+The Android NDK integration is provided by the `android-lib` Gradle library module, its `android-lib/src/main/cpp/CMakeLists.txt` graph, JNI sources, and Kotlin wrappers. The installable `android-app` module wraps that library in the local-first Holy Fitra Workbench. GitHub Actions builds the release APK with the pinned Android SDK/NDK and uploads it as the `holyfitra-android-<commit>` artifact. With a local Android SDK/NDK and Gradle installation, build it with:
+
+```bash
+gradle --no-daemon :android-app:assembleRelease
+adb install -r android-app/build/outputs/apk/release/android-app-release.apk
+```
+
+The APK is restricted to `arm64-v8a`, requires no runtime permissions, runs native work off the UI thread, stores only the last report in app-private storage, and shares a report only after the user presses Export. The Android workflow verifies AArch64 ELF files, 16 KB PT_LOAD alignment, AAR/APK native-library packaging, `libc++_shared.so`, and APK zip alignment. Physical ARM64 execution is still required for real NEON/SVE, big.LITTLE, frequency, and thermal claims.
 
 ## Package a project
 

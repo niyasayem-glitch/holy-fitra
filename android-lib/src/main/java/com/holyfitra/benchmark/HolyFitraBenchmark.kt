@@ -30,13 +30,16 @@ class HolyFitraBenchmark {
         }
     }
 
-    suspend fun run(config: Config = Config()): Result {
+    /** Blocking entry point for a dedicated worker thread or instrumentation harness. */
+    fun runSync(config: Config = Config()): Result {
         config.validate()
         val json = nativeRun(config.dModel, config.sequenceCount, config.minLength, config.maxLength,
             config.sequencesPerTask, config.warmupIterations, config.measuredIterations,
             config.seed, config.pinThreads, config.thermalSamplePeriod)
         return Result(json)
     }
+
+    suspend fun run(config: Config = Config()): Result = runSync(config)
 
     class Result(private val rawJson: String) {
         val json: JSONObject get() = JSONObject(rawJson)

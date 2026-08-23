@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Holy Fitra Workbench</string>
+    <string name="app_description">Local ARM64 native workbench and benchmark viewer</string>
+    <string name="run_quick_check">Run quick check</string>
+    <string name="run_sustained_check">Run sustained check</string>
+    <string name="export_report">Export report</string>
+</resources>

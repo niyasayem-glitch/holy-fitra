@@ -7,6 +7,11 @@ android {
     namespace = "org.holyfitra"
     compileSdk = 35
 
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
     // Pin the exact NDK used for reproducible Bionic builds. Override this
     // deliberately in a downstream project only after rerunning the complete
     // Android validation matrix.

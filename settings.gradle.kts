@@ -16,3 +16,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "holyfitra-android"
 include(":android-lib")
+include(":android-app")
