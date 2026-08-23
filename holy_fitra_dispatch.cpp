@@ -191,7 +191,14 @@ struct Scheduler::Impl {
         cpu_set_t set;
         CPU_ZERO(&set);
         CPU_SET(cpus[static_cast<size_t>(worker.id) % cpus.size()], &set);
-        pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#if defined(__ANDROID__)
+        // Bionic does not expose pthread_setaffinity_np in the API-level
+        // headers used by this library. Pin the calling worker thread through
+        // sched_setaffinity(0, ...), which Android supports for this purpose.
+        (void)sched_setaffinity(0, sizeof(set), &set);
+#else
+        (void)pthread_setaffinity_np(pthread_self(), sizeof(set), &set);
+#endif
 #else
         (void)worker;
 #endif
