@@ -259,9 +259,12 @@ python3 hyperc_hybrid_quant.py --tokens 32 --calibration-samples 64
 python3 hyperc_adaptive_speculative.py
 python3 holy_fitra_runtime.py
 python3 holy_fitra_execution_plan.py
+python3 holyfitra_tiny_ai.py --output build/tiny_xor.hfbin
 ```
 
 The AI stack includes dense layers and autodiff, transformer attention and KV caching, int4/int8/f16 selection with calibration gates, adaptive speculative decoding, privacy-flow and consent contracts, reversible receipts, and deterministic execution plans.
+
+For a complete, deterministic from-scratch training and deployment example, run `holyfitra_tiny_ai.py`. It learns the XOR truth table using the repository's Tensor/autodiff, Adam, QAT, and deployment layers, then verifies the reloaded int8 artifact. The verified result and all current language/runtime limits are documented in [`HOLY_FITRA_TINY_AI.md`](HOLY_FITRA_TINY_AI.md).
 
 ## AI development system
 

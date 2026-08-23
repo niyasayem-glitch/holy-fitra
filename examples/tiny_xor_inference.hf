@@ -1,0 +1,9 @@
+module tiny_xor_inference
+
+fn infer(x: Tensor<[1, 2], f16, device=neon>) -> Tensor<[1, 1], f16> {
+    budget memory <= 1 MiB
+    let w1: Tensor<[2, 8], int4, device=neon>
+    let hidden = matmul(x, w1)
+    let w2: Tensor<[8, 1], int4, device=neon>
+    let result = matmul(hidden, w2)
+}
