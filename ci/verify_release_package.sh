@@ -9,7 +9,7 @@ trap 'rm -rf "$EXTRACT"' EXIT
 mkdir -p "$(dirname -- "$OUTPUT")"
 rm -f "$OUTPUT"
 
-bash "$ROOT/make-holyfitra-v1-release.sh" "$OUTPUT"
+HOLYFITRA_RELEASE_VERBOSE=1 bash "$ROOT/make-holyfitra-v1-release.sh" "$OUTPUT"
 test -s "$OUTPUT"
 
 ARCHIVE_SHA256="$(sha256sum "$OUTPUT" | awk '{print $1}')"

@@ -12,7 +12,11 @@ command -v gzip >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: gzip is re
 command -v sha256sum >/dev/null 2>&1 || { echo 'make-holyfitra-v1-release: sha256sum is required' >&2; exit 127; }
 
 bash -n "$ROOT/holyfitra" "$ROOT/holyfitra-v1.sh" "$ROOT/termux-build.sh"
-HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/termux-build.sh" test --native-tests >/dev/null 2>&1
+if [[ "${HOLYFITRA_RELEASE_VERBOSE:-0}" == "1" ]]; then
+  HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/termux-build.sh" test --native-tests
+else
+  HOLYFITRA_V1_BUILD_DIR="$WORK/build" "$ROOT/termux-build.sh" test --native-tests >/dev/null 2>&1
+fi
 
 STAGE="$WORK/holyfitra-v1"
 mkdir -p "$STAGE/bootstrap" "$STAGE/docs" "$STAGE/tools"
