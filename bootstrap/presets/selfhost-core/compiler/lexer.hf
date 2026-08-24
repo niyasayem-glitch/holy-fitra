@@ -1,0 +1,7 @@
+// A standalone compiler-core source unit for a future linked Stage-1 build.
+// Stage-0 currently validates individual compilation units; it does not yet
+// link imports or claim a fixed-point self-hosted compiler.
+
+fn is_space(ch: i32) -> bool {
+    return ch == 32 || ch == 9 || ch == 10 || ch == 13
+}

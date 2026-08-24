@@ -1,0 +1,5 @@
+// A standalone compiler-core source unit for a future linked Stage-1 build.
+
+fn symbol_hash(seed: i32, value: i32) -> i32 {
+    return seed * 16777619 + value
+}

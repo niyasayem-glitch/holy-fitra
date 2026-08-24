@@ -1,0 +1,7 @@
+[project]
+name = "@PROJECT_NAME@"
+entry = "src/main.hf"
+
+[build]
+frontend = "stage0"
+target = "host"

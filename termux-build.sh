@@ -211,6 +211,23 @@ EOF
   "$driver" package "$work/good.hf" -o "$work/good.json" >/dev/null
   grep -q '"python_required": false' "$work/good.json"
   grep -q '"android_execution": false' "$work/good.json"
+  grep -q '"source_tree"' "$work/good.json"
+  "$driver" presets > "$work/presets.json"
+  grep -q 'selfhost-core' "$work/presets.json"
+  "$driver" init "$work/selfhost" --template selfhost-core --name selfhost_core >/dev/null
+  "$driver" check "$work/selfhost" >/dev/null
+  "$driver" test "$work/selfhost" >/dev/null
+  "$driver" package "$work/selfhost" -o "$work/selfhost.json" >/dev/null
+  grep -q '"fixed_point_self_hosting": false' "$work/selfhost.json"
+  "$driver" bundle "$work/selfhost" -o "$work/selfhost.tar.gz" >/dev/null
+  "$driver" bundle "$work/selfhost" -o "$work/selfhost.repeat.tar.gz" >/dev/null
+  cmp -s "$work/selfhost.tar.gz" "$work/selfhost.repeat.tar.gz" || {
+    echo 'termux-build v1-test: identical source produced non-deterministic source bundles' >&2
+    return 1
+  }
+  tar -tzf "$work/selfhost.tar.gz" > "$work/selfhost.tar.list"
+  grep -q '/PACKAGE.json$' "$work/selfhost.tar.list"
+  grep -q '/project/src/main.hf$' "$work/selfhost.tar.list"
   printf '%s\n' 'holyfitra_v1_driver=passed'
   rm -rf "$work"
 }

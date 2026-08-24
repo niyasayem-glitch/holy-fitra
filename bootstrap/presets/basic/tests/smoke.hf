@@ -1,0 +1,5 @@
+module @PROJECT_NAME@_tests
+
+fn main() -> i32 {
+    return 0
+}
