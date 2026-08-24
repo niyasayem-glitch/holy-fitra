@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import tempfile
@@ -10,6 +11,7 @@ import numpy as np
 
 from holy_fitra_execution_plan import CorePolicy, KernelCandidate, PlanConstraints, Precision
 from holyfitra_ai_pipeline import VerifiedAIPipeline
+from holyfitra_adapter_residency import AdapterArtifact, AdapterMode, AdapterResidencyPolicy
 from holyfitra_data import StreamingDataset
 from holyfitra_deploy import load_deployment
 from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
@@ -53,7 +55,10 @@ class ModelCapsuleTests(unittest.TestCase):
             digest = "c" * 64
             agent_receipt = AgentPlanReceipt(("model.predict.local",), AgentBudget(1, 6, 4, 1000), (AgentEvidence("scorer", digest), AgentEvidence("proposals", digest)), (AgentApproval("verifier", 1), AgentApproval("governor", 1)), digest)
             kv_policy = KVResidencyPolicy(4_096, 8, 16, (KVPrecision.FP16, KVPrecision.INT8, KVPrecision.INT4), 0.80, 0.10)
-            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt, kv_residency_policy=kv_policy, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
+            adapter_payload = b"capsule-adapter-payload-v1"
+            adapter_policy = AdapterResidencyPolicy(result.artifact.digest, 4_096, 2, 1, 16, (AdapterMode.LOW_RANK,))
+            adapter_artifact = AdapterArtifact("adapter.capsule", result.artifact.digest, hashlib.sha256(adapter_payload).hexdigest(), len(adapter_payload), 64, 128, 2, 4.0, AdapterMode.LOW_RANK)
+            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt, kv_residency_policy=kv_policy, adapter_residency_policy=adapter_policy, adapter_artifacts=(adapter_artifact,), adapter_payloads={"adapter.capsule": adapter_payload}, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
             capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=2)
             self.assertEqual(capsule.cached_chunk_count, 0)
             deployment_chunks = tuple(name for name in capsule.chunk_names if name.startswith("deployment/"))
@@ -72,6 +77,9 @@ class ModelCapsuleTests(unittest.TestCase):
             self.assertEqual(capsule.agent_receipt_json()["schema"], "holyfitra.agent-plan-receipt/v1")
             self.assertEqual(capsule.kv_residency_policy(), kv_policy)
             self.assertEqual(capsule.kv_residency_policy_json()["schema"], "holyfitra.kv-residency-policy/v1")
+            self.assertEqual(capsule.adapter_residency_policy(), adapter_policy)
+            self.assertEqual(capsule.adapter_catalog().adapters, (adapter_artifact,))
+            self.assertEqual(capsule.read_adapter_payload("adapter.capsule"), adapter_payload)
             streamed = capsule.open_streamed_mlp()
             capsule.deployment_bytes = lambda: self.fail("streamed inference must not reassemble deployment bytes")
             np.testing.assert_allclose(streamed.predict(inputs), expected, rtol=1e-6, atol=1e-6)
@@ -95,6 +103,23 @@ class ModelCapsuleTests(unittest.TestCase):
             capsule_path.write_bytes(raw)
             with self.assertRaises(CapsuleError):
                 capsule.read_chunk(first_chunk)
+
+    def test_capsule_rejects_incomplete_or_tampered_adapter_residency_data(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            adapter_payload = b"tamper-resistant-adapter"
+            policy = AdapterResidencyPolicy(result.artifact.digest, 4_096, 2, 1, 16, (AdapterMode.LOW_RANK,))
+            adapter = AdapterArtifact("adapter.tamper", result.artifact.digest, hashlib.sha256(adapter_payload).hexdigest(), len(adapter_payload), 64, 128, 2, 4.0, AdapterMode.LOW_RANK)
+            with self.assertRaises(CapsuleError):
+                export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, adapter_residency_policy=policy)
+            export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, adapter_residency_policy=policy, adapter_artifacts=(adapter,), adapter_payloads={adapter.adapter_id: adapter_payload})
+            capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY)
+            raw = bytearray(capsule_path.read_bytes())
+            raw[capsule._chunks["adapter/adapter.tamper/payload.bin"].offset] ^= 1
+            capsule_path.write_bytes(raw)
+            with self.assertRaises(CapsuleError):
+                capsule.read_adapter_payload("adapter.tamper")
 
     def test_streamed_layer_inference_rejects_lazy_block_tampering(self):
         with tempfile.TemporaryDirectory() as directory:

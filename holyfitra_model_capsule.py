@@ -17,6 +17,7 @@ import numpy as np
 
 from holyfitra_ai_pipeline import PipelineResult
 from holyfitra_agent_receipt import AgentPlanReceipt
+from holyfitra_adapter_residency import AdapterArtifact, AdapterCatalog, AdapterResidencyPolicy
 from holyfitra_deploy import DeploymentBundle, MAX_DEPLOYMENT_BYTES, MAX_INFERENCE_BATCH_ROWS, MAX_INFERENCE_INPUT_BYTES, load_deployment_bytes
 from holyfitra_kv_residency import KVResidencyPolicy
 from holyfitra_tensor_contracts import TensorResourceContract
@@ -213,6 +214,51 @@ class ModelCapsule:
         payload = self.kv_residency_policy_json()
         return KVResidencyPolicy.from_body(payload) if payload is not None else None
 
+    def adapter_residency_policy_json(self) -> dict[str, Any] | None:
+        return _json_chunk(self.read_chunk("adapter_residency_policy.json")) if "adapter_residency_policy.json" in self._chunks else None
+
+    def adapter_residency_policy(self) -> AdapterResidencyPolicy | None:
+        payload = self.adapter_residency_policy_json()
+        if payload is None:
+            return None
+        policy = AdapterResidencyPolicy.from_body(payload)
+        if policy.base_deployment_digest != self.manifest["deployment_hash"]:
+            raise CapsuleError("adapter residency policy is not bound to this capsule deployment identity")
+        return policy
+
+    def adapter_catalog_json(self) -> dict[str, Any] | None:
+        return _json_chunk(self.read_chunk("adapter_catalog.json")) if "adapter_catalog.json" in self._chunks else None
+
+    def adapter_catalog(self) -> AdapterCatalog | None:
+        payload = self.adapter_catalog_json()
+        if payload is None:
+            return None
+        policy = self.adapter_residency_policy()
+        if policy is None:
+            raise CapsuleError("adapter catalog has no residency policy")
+        catalog = AdapterCatalog.from_body(payload)
+        if catalog.policy_id != policy.policy_id or catalog.base_deployment_digest != self.manifest["deployment_hash"]:
+            raise CapsuleError("adapter catalog is not bound to this capsule residency policy")
+        expected = {f"adapter/{artifact.adapter_id}/payload.bin" for artifact in catalog.adapters}
+        actual = {name for name in self._chunks if name.startswith("adapter/")}
+        if actual != expected:
+            raise CapsuleError("adapter catalog payload index is incomplete")
+        return catalog
+
+    def read_adapter_payload(self, adapter_id: str) -> bytes:
+        catalog = self.adapter_catalog()
+        if catalog is None:
+            raise CapsuleError("capsule has no adapter catalog")
+        artifact = next((item for item in catalog.adapters if item.adapter_id == adapter_id), None)
+        if artifact is None:
+            raise CapsuleError("requested adapter is absent")
+        payload = self.read_chunk(f"adapter/{adapter_id}/payload.bin")
+        try:
+            artifact.verify_payload(payload)
+        except Exception as error:
+            raise CapsuleError("adapter payload does not match authenticated catalog") from error
+        return payload
+
     def open_streamed_mlp(self, native_kernel: Any | None = None) -> StreamedMLPInference:
         manifest = self.layer_stream_manifest_json()
         if manifest is None:
@@ -220,7 +266,7 @@ class ModelCapsule:
         return StreamedMLPInference(self, manifest, native_kernel=native_kernel)
 
 
-def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLike[str], *, signing_key: bytes, chunk_bytes: int = 65_536, metadata: dict[str, Any] | None = None, resource_contract: TensorResourceContract | None = None, agent_receipt: AgentPlanReceipt | None = None, kv_residency_policy: KVResidencyPolicy | None = None, deployment_signing_key: bytes | None = None, stream_block_columns: int | None = None) -> CapsuleArtifact:
+def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLike[str], *, signing_key: bytes, chunk_bytes: int = 65_536, metadata: dict[str, Any] | None = None, resource_contract: TensorResourceContract | None = None, agent_receipt: AgentPlanReceipt | None = None, kv_residency_policy: KVResidencyPolicy | None = None, adapter_residency_policy: AdapterResidencyPolicy | None = None, adapter_artifacts: tuple[AdapterArtifact, ...] | None = None, adapter_payloads: dict[str, bytes] | None = None, deployment_signing_key: bytes | None = None, stream_block_columns: int | None = None) -> CapsuleArtifact:
     """Package an already-verified pipeline result into a lazily readable capsule."""
     result.verify()
     if resource_contract is not None:
@@ -237,6 +283,34 @@ def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLi
     receipt_payload = result.canonical().encode("utf-8")
     if (deployment_signing_key is None) != (stream_block_columns is None):
         raise CapsuleError("deployment_signing_key and stream_block_columns must be supplied together")
+    adapter_residency_policy_payload = None
+    adapter_catalog_payload = None
+    adapter_chunk_payloads: tuple[tuple[str, bytes], ...] = ()
+    adapter_values = (adapter_residency_policy, adapter_artifacts, adapter_payloads)
+    if any(value is not None for value in adapter_values) and any(value is None for value in adapter_values):
+        raise CapsuleError("adapter residency policy, artifacts, and payloads must be supplied together")
+    if adapter_residency_policy is not None and adapter_artifacts is not None and adapter_payloads is not None:
+        adapter_residency_policy.verify()
+        if adapter_residency_policy.base_deployment_digest != result.artifact.digest:
+            raise CapsuleError("adapter residency policy is not bound to the verified deployment identity")
+        if not isinstance(adapter_artifacts, tuple) or not isinstance(adapter_payloads, dict):
+            raise CapsuleError("adapter artifacts and payloads have invalid types")
+        artifacts = tuple(sorted(adapter_artifacts, key=lambda artifact: artifact.adapter_id))
+        catalog = AdapterCatalog(adapter_residency_policy.policy_id, result.artifact.digest, artifacts)
+        catalog.verify()
+        if set(adapter_payloads) != {artifact.adapter_id for artifact in artifacts}:
+            raise CapsuleError("adapter payload IDs do not match the catalog")
+        payloads: list[tuple[str, bytes]] = []
+        for artifact in artifacts:
+            payload = adapter_payloads[artifact.adapter_id]
+            try:
+                artifact.verify_payload(payload)
+            except Exception as error:
+                raise CapsuleError("adapter payload does not match the supplied artifact") from error
+            payloads.append((f"adapter/{artifact.adapter_id}/payload.bin", payload))
+        adapter_residency_policy_payload = adapter_residency_policy.canonical().encode("utf-8")
+        adapter_catalog_payload = catalog.canonical().encode("utf-8")
+        adapter_chunk_payloads = tuple(payloads)
     layer_stream_payload = None
     stream_payloads: tuple[tuple[str, bytes], ...] = ()
     if deployment_signing_key is not None and stream_block_columns is not None:
@@ -254,6 +328,9 @@ def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLi
         resource_contract_payload=json.dumps(resource_contract.body(), sort_keys=True, separators=(",", ":")).encode("utf-8") if resource_contract is not None else None,
         agent_receipt_payload=json.dumps(agent_receipt.body(), sort_keys=True, separators=(",", ":")).encode("utf-8") if agent_receipt is not None else None,
         kv_residency_policy_payload=kv_residency_policy.canonical().encode("utf-8") if kv_residency_policy is not None else None,
+        adapter_residency_policy_payload=adapter_residency_policy_payload,
+        adapter_catalog_payload=adapter_catalog_payload,
+        adapter_chunk_payloads=adapter_chunk_payloads,
         layer_stream_payload=layer_stream_payload,
         stream_payloads=stream_payloads,
     )
@@ -290,7 +367,7 @@ def open_model_capsule(path: str | os.PathLike[str], *, signing_key: bytes, cach
     return ModelCapsule(source, manifest, chunks, cache_chunks=cache_chunks)
 
 
-def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, deployment_hash: str, plan_payload: bytes, receipt_payload: bytes, signing_key: bytes, chunk_bytes: int, metadata: dict[str, Any], resource_contract_payload: bytes | None, agent_receipt_payload: bytes | None, kv_residency_policy_payload: bytes | None, layer_stream_payload: bytes | None, stream_payloads: tuple[tuple[str, bytes], ...]) -> CapsuleArtifact:
+def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, deployment_hash: str, plan_payload: bytes, receipt_payload: bytes, signing_key: bytes, chunk_bytes: int, metadata: dict[str, Any], resource_contract_payload: bytes | None, agent_receipt_payload: bytes | None, kv_residency_policy_payload: bytes | None, adapter_residency_policy_payload: bytes | None, adapter_catalog_payload: bytes | None, adapter_chunk_payloads: tuple[tuple[str, bytes], ...], layer_stream_payload: bytes | None, stream_payloads: tuple[tuple[str, bytes], ...]) -> CapsuleArtifact:
     key = _validated_key(signing_key)
     if not isinstance(chunk_bytes, int) or not MIN_CHUNK_BYTES <= chunk_bytes <= MAX_CHUNK_BYTES:
         raise CapsuleError("capsule chunk size is outside the configured range")
@@ -309,6 +386,9 @@ def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, de
         chunks_payload.append(("agent_receipt.json", agent_receipt_payload))
     if kv_residency_policy_payload is not None:
         chunks_payload.append(("kv_residency_policy.json", kv_residency_policy_payload))
+    if adapter_residency_policy_payload is not None and adapter_catalog_payload is not None:
+        chunks_payload.extend((("adapter_residency_policy.json", adapter_residency_policy_payload), ("adapter_catalog.json", adapter_catalog_payload)))
+        chunks_payload.extend(adapter_chunk_payloads)
     if layer_stream_payload is not None:
         chunks_payload.append(("layer_stream_manifest.json", layer_stream_payload))
         chunks_payload.extend(stream_payloads)
@@ -359,7 +439,7 @@ def _validate_manifest(manifest: dict[str, Any], payload_start: int, total_size:
             raise CapsuleError("capsule chunk ordering or identity is invalid")
         if name.startswith("deployment/"):
             seen_deployment += 1
-        elif name not in {"execution_plan.json", "pipeline_receipt.json", "resource_contract.json", "agent_receipt.json", "kv_residency_policy.json", "layer_stream_manifest.json"} and not name.startswith("stream/"):
+        elif name not in {"execution_plan.json", "pipeline_receipt.json", "resource_contract.json", "agent_receipt.json", "kv_residency_policy.json", "adapter_residency_policy.json", "adapter_catalog.json", "layer_stream_manifest.json"} and not name.startswith("stream/") and not name.startswith("adapter/"):
             raise CapsuleError("capsule contains an unsupported chunk name")
         result[name] = CapsuleChunk(name, payload_start + offset, size, digest)
         expected_offset += size
