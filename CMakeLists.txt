@@ -8,6 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 add_library(holyfitra_runtime SHARED
     nibbleflow_kernel.c
+    holy_fitra_streamed_neon.c
     nibbleflow_android.cpp
     holy_fitra_dispatch.cpp
     holy_fitra_android_topology.cpp

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,6 +15,7 @@ from holyfitra_deploy import load_deployment
 from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
 from holyfitra_learning import TrainableMLP
 from holyfitra_model_capsule import CapsuleError, StreamedInferenceError, export_pipeline_capsule, open_model_capsule
+from holyfitra_streamed_native import StreamedNativeKernel
 from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
 from holyfitra_tensor_contracts import TensorContract, TensorResourceContract
 
@@ -114,6 +117,27 @@ class ModelCapsuleTests(unittest.TestCase):
                 stream.predict(np.full((1, 64), np.nan, dtype=np.float32))
             with self.assertRaises(StreamedInferenceError):
                 stream.predict(np.zeros((1, 63), dtype=np.float32))
+
+    @unittest.skipUnless(shutil.which("clang"), "clang is required for the native streamed-kernel bridge test")
+    def test_streamed_layer_inference_matches_optional_native_scalar_backend(self):
+        source_root = Path(__file__).resolve().parent
+        with tempfile.TemporaryDirectory() as directory:
+            library_path = Path(directory) / "libholyfitra_streamed_native.so"
+            subprocess.run(
+                ["clang", "-shared", "-fPIC", "-O2", "-I", str(source_root), str(source_root / "holy_fitra_streamed_neon.c"), "-lm", "-o", str(library_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
+            inputs = np.arange(128, dtype=np.float32).reshape(2, 64) / 64.0
+            reference = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=1).open_streamed_mlp()
+            native = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=1).open_streamed_mlp(StreamedNativeKernel(library_path))
+            np.testing.assert_allclose(native.predict(inputs), reference.predict(inputs), rtol=1e-6, atol=1e-6)
+            self.assertEqual(native.backend_name, "native-scalar")
+            self.assertEqual(reference.backend_name, "numpy-reference")
 
 
 if __name__ == "__main__":

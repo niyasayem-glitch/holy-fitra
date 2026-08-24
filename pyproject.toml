@@ -32,6 +32,7 @@ py-modules = [
   "holyfitra_telemetry",
   "holyfitra_tiny_ai",
   "holyfitra_model_capsule",
+  "holyfitra_streamed_native",
   "holyfitra_multiagent_stress",
   "holyfitra_agent_receipt",
   "holyfitra_tensor_contracts",

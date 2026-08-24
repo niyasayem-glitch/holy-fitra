@@ -59,16 +59,25 @@ class StreamedInferenceError(ValueError):
 class StreamedMLPInference:
     """Bounded-memory MLP evaluation over verified layer blocks in a capsule."""
 
-    def __init__(self, capsule: "ModelCapsule", manifest: dict[str, Any]):
+    def __init__(self, capsule: "ModelCapsule", manifest: dict[str, Any], native_kernel: Any | None = None):
         self._capsule = capsule
         self._manifest = _validate_layer_stream_manifest(manifest, capsule._chunks)
         if self._manifest["deployment_digest"] != capsule.manifest["deployment_hash"]:
             raise StreamedInferenceError("layer stream is not bound to this capsule deployment identity")
+        if native_kernel is not None and not callable(getattr(native_kernel, "matmul", None)):
+            raise StreamedInferenceError("native streamed kernel must expose matmul(inputs, weights)")
+        self._native_kernel = native_kernel
         self.loaded_block_count = 0
 
     @property
     def uses_full_reassembly(self) -> bool:
         return False
+
+    @property
+    def backend_name(self) -> str:
+        if self._native_kernel is None:
+            return "numpy-reference"
+        return "native-neon" if bool(getattr(self._native_kernel, "has_neon", False)) else "native-scalar"
 
     def predict(self, inputs: np.ndarray) -> np.ndarray:
         x = np.asarray(inputs, dtype=np.float32)
@@ -98,7 +107,16 @@ class StreamedMLPInference:
             weights = np.frombuffer(payload, dtype="<f4").reshape(expected_shape)
             if not np.all(np.isfinite(weights)):
                 raise StreamedInferenceError("layer block contains non-finite weights")
-            output[:, block["output_start"] : block["output_end"]] = inputs @ weights
+            if self._native_kernel is None:
+                output[:, block["output_start"] : block["output_end"]] = inputs @ weights
+            else:
+                try:
+                    native_output = self._native_kernel.matmul(inputs, weights)
+                except Exception as error:
+                    raise StreamedInferenceError("native streamed kernel rejected a verified block") from error
+                if native_output.shape != (inputs.shape[0], expected_shape[1]) or not np.all(np.isfinite(native_output)):
+                    raise StreamedInferenceError("native streamed kernel returned an invalid block output")
+                output[:, block["output_start"] : block["output_end"]] = native_output
             self.loaded_block_count += 1
         bias_payload = self._capsule.read_chunk(layer["bias_chunk"])
         if len(bias_payload) != layer["output_dim"] * 4:
@@ -187,11 +205,11 @@ class ModelCapsule:
     def layer_stream_manifest_json(self) -> dict[str, Any] | None:
         return _json_chunk(self.read_chunk("layer_stream_manifest.json")) if "layer_stream_manifest.json" in self._chunks else None
 
-    def open_streamed_mlp(self) -> StreamedMLPInference:
+    def open_streamed_mlp(self, native_kernel: Any | None = None) -> StreamedMLPInference:
         manifest = self.layer_stream_manifest_json()
         if manifest is None:
             raise CapsuleError("capsule has no layer-indexed streamed inference payload")
-        return StreamedMLPInference(self, manifest)
+        return StreamedMLPInference(self, manifest, native_kernel=native_kernel)
 
 
 def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLike[str], *, signing_key: bytes, chunk_bytes: int = 65_536, metadata: dict[str, Any] | None = None, resource_contract: TensorResourceContract | None = None, agent_receipt: AgentPlanReceipt | None = None, deployment_signing_key: bytes | None = None, stream_block_columns: int | None = None) -> CapsuleArtifact:

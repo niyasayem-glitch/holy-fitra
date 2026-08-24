@@ -40,7 +40,16 @@ stream = capsule.open_streamed_mlp()
 output = stream.predict(inputs)  # hidden blocks → ReLU → output blocks
 ```
 
-The streamed evaluator uses the host NumPy matrix backend for its block math. It is real out-of-core layer evaluation for the compact MLP format, but it is not yet a Holy Fitra compiler-lowered ARM64 kernel or a general transformer runtime.
+The streamed evaluator defaults to the host NumPy reference backend for its block math. A caller may explicitly provide `holyfitra_streamed_native.StreamedNativeKernel` to `open_streamed_mlp(native_kernel=...)`; this bridge invokes a bounded C ABI once for each authenticated float32 weight block and keeps loading, digest verification, cache bounds, and bias/activation processing in the capsule layer. `backend_name` reports `numpy-reference`, `native-scalar`, or `native-neon` according to the library actually loaded on the executing host.
+
+| Native ABI property | Contract |
+|---|---|
+| Entry point | `hf_streamed_f32_block_matvec` accepts one contiguous float32 input row and one row-major `[rows, columns]` weight block. |
+| Bounds | It rejects null buffers, wrong ABI versions, short buffers, non-finite values, `rows > 8192`, and `columns > 512`. |
+| Portable behavior | Non-AArch64 builds use a scalar reference loop with the same ABI and status codes. |
+| ARM64 behavior | The guarded AArch64 path accumulates four output columns with NEON loads and fused multiply-add instructions, then handles remaining columns scalarly. |
+
+The source is part of the Android CMake runtime and the canonical native gate builds its host C regression, runs address/undefined-behavior sanitizer checks during development validation, and cross-compiles an Android ARM64 object. The current evidence is host numerical equivalence plus an AArch64 object/assembly inspection that shows the emitted NEON instructions. It is **not** a measurement of device latency, throughput, thermal behavior, JNI integration, or correctness on a physical ARM64 device.
 
 ## Export example
 
@@ -69,4 +78,4 @@ This is a compiler-facing semantic foundation. It is not a claim that the curren
 
 ## Validation
 
-The regression suite verifies deterministic capsule output, lazy cache bounds, streamed chunk order, wrong-key rejection, lazy tamper rejection, deployment round trip, execution-plan identity, agent receipt identity, and resource-plan compatibility.
+The regression suite verifies deterministic capsule output, lazy cache bounds, streamed chunk order, wrong-key rejection, lazy tamper rejection, deployment round trip, execution-plan identity, agent receipt identity, resource-plan compatibility, optional native-scalar/NumPy streamed-output equivalence, and native rejection of invalid input/buffer/shape conditions.

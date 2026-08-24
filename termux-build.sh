@@ -233,12 +233,17 @@ run_tests() {
   "$python" -m unittest -q
   "$python" validate_nibbleflow.py
   "$python" validate_holy_fitra_ragged.py
+  "$python" validate_holy_fitra_streamed_neon.py
   if (( native_tests )); then
     command -v clang >/dev/null 2>&1 || { echo 'termux-build test: clang is required; run: pkg install clang' >&2; exit 127; }
     command -v clang++ >/dev/null 2>&1 || { echo 'termux-build test: clang++ is required; run: pkg install clang' >&2; exit 127; }
     clang -O2 -c holy_fitra_ragged_kernel.c -o "${TMPDIR:-/tmp}/holy_fitra_ragged_termux.o"
     clang++ -O2 -std=c++17 -pthread -I. "${TMPDIR:-/tmp}/holy_fitra_ragged_termux.o" holy_fitra_dispatch.cpp holy_fitra_ragged_scheduler.cpp test_holy_fitra_ragged_scheduler.cpp -o "${TMPDIR:-/tmp}/holy_fitra_ragged_scheduler_termux_test"
     "${TMPDIR:-/tmp}/holy_fitra_ragged_scheduler_termux_test"
+    clang -O2 -I. holy_fitra_streamed_neon.c test_holy_fitra_streamed_neon.c -lm -o "${TMPDIR:-/tmp}/holy_fitra_streamed_neon_termux_test"
+    "${TMPDIR:-/tmp}/holy_fitra_streamed_neon_termux_test"
+    clang --target=aarch64-linux-android21 -ffreestanding -DHOLY_FITRA_FREESTANDING=1 -O2 -I. -c holy_fitra_streamed_neon.c -o "${TMPDIR:-/tmp}/holy_fitra_streamed_neon.android-arm64.o"
+    readelf -h "${TMPDIR:-/tmp}/holy_fitra_streamed_neon.android-arm64.o" | grep -q 'AArch64'
   fi
   ./holyfitra --help >/dev/null
   ./holyfitra doctor >/dev/null
