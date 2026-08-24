@@ -33,10 +33,62 @@ typedef struct hf_nibbleflow_model {
     uint32_t abi_version;
 } hf_nibbleflow_model;
 
+/*
+ * An execution plan is intentionally separate from hf_nibbleflow_model so the
+ * original model ABI stays stable. Callers that do not need a plan continue to
+ * use hf_nibbleflow_matvec with the v1 model layout.
+ */
+#define HF_NIBBLEFLOW_EXECUTION_ABI 1u
+#define HF_NIBBLEFLOW_ADAPTER_ABI 1u
+#define HF_NIBBLEFLOW_CALIBRATION_ABI 1u
+#define HF_NIBBLEFLOW_MAX_ADAPTER_RANK 256
+
+typedef enum hf_nibbleflow_activation_mode {
+    HF_NIBBLEFLOW_ACTIVATION_F32 = 0,
+    HF_NIBBLEFLOW_ACTIVATION_STATIC_INT8 = 1
+} hf_nibbleflow_activation_mode;
+
+typedef struct hf_nibbleflow_static_calibration {
+    uint32_t abi_version;
+    float activation_scale;
+    int32_t activation_zero_point;
+    float max_abs_activation;
+    float observed_clipping_fraction;
+    float max_clipping_fraction;
+    float observed_normalized_error;
+    float max_normalized_error;
+    uint64_t sample_count;
+} hf_nibbleflow_static_calibration;
+
+typedef struct hf_nibbleflow_adapter {
+    const float *down;
+    size_t down_count;
+    const float *up;
+    size_t up_count;
+    int32_t rank;
+    float scale;
+    uint32_t abi_version;
+} hf_nibbleflow_adapter;
+
+typedef struct hf_nibbleflow_execution_plan {
+    uint32_t abi_version;
+    hf_nibbleflow_activation_mode activation_mode;
+    const hf_nibbleflow_static_calibration *calibration;
+    const hf_nibbleflow_adapter *adapter;
+    int8_t *activation_scratch;
+    size_t activation_scratch_count;
+    float *adapter_scratch;
+    size_t adapter_scratch_count;
+} hf_nibbleflow_execution_plan;
+
 uint32_t hf_nibbleflow_runtime_abi(void);
 int hf_nibbleflow_has_neon(void);
 hf_status hf_nibbleflow_validate_model(const hf_nibbleflow_model *model);
+hf_status hf_nibbleflow_validate_static_calibration(const hf_nibbleflow_static_calibration *calibration);
+hf_status hf_nibbleflow_validate_adapter(const hf_nibbleflow_model *model, const hf_nibbleflow_adapter *adapter);
+hf_status hf_nibbleflow_validate_execution_plan(const hf_nibbleflow_model *model, const hf_nibbleflow_execution_plan *plan);
 hf_status hf_nibbleflow_matvec(const hf_nibbleflow_model *model, const float *input, size_t input_count, float *output, size_t output_count);
+hf_status hf_nibbleflow_matvec_ex(const hf_nibbleflow_model *model, const hf_nibbleflow_execution_plan *plan, const float *input, size_t input_count, float *output, size_t output_count);
 const char *hf_status_string(hf_status status);
 
 #ifdef __cplusplus

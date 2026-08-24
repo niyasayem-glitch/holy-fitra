@@ -26,6 +26,7 @@ struct CancellationToken {
 struct TaskContext {
     int worker_id = -1;
     bool on_big_core = false;
+    uint64_t deadline_ns = 0;
     std::shared_ptr<CancellationToken> cancellation;
     bool cancelled() const { return cancellation && cancellation->is_cancelled(); }
 };

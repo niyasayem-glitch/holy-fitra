@@ -34,6 +34,22 @@ struct ThermalSample {
     bool valid = false;
 };
 
+static const char *benchmark_execution_environment() {
+#if defined(__ANDROID__)
+    return "android-native-process";
+#else
+    return "host-native-process";
+#endif
+}
+
+static const char *benchmark_evidence_scope() {
+#if defined(__ANDROID__)
+    return "device-local-receipt-unverified";
+#else
+    return "host-only";
+#endif
+}
+
 struct PackedWorkload {
     std::vector<float> q;
     std::vector<float> k;
@@ -298,7 +314,8 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
 
     result.completed = failures == 0 && !latencies.empty();
     std::ostringstream json;
-    json << "{\"completed\":" << (result.completed ? "true" : "false");
+    json << "{\"schema\":\"holyfitra.ragged-device-benchmark/v2\",\"completed\":" << (result.completed ? "true" : "false");
+    json << ",\"execution_environment\":\"" << benchmark_execution_environment() << "\",\"evidence_scope\":\"" << benchmark_evidence_scope() << "\"";
     json << ",\"device_topology_source\":\"" << json_escape(topology.source) << "\"";
     json << ",\"measured_from_sysfs\":" << (topology.measured_from_sysfs ? "true" : "false");
     json << ",\"little_cores\":" << topology.little_cpus.size() << ",\"big_cores\":" << topology.big_cpus.size();
@@ -321,13 +338,13 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
 StreamedBlockBenchmarkResult run_holy_fitra_streamed_block_benchmark(const StreamedBlockBenchmarkConfig &config) {
     StreamedBlockBenchmarkResult result;
     if (config.rows <= 0 || config.rows > HF_STREAMED_F32_MAX_ROWS || config.columns <= 0 || config.columns > HF_STREAMED_F32_MAX_COLUMNS || config.warmup_iterations < 0 || config.warmup_iterations > 10000 || config.measured_iterations <= 0 || config.measured_iterations > 10000 || config.thermal_sample_period <= 0 || config.thermal_sample_period > 100000) {
-        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"invalid_config\"}";
+        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v2\",\"completed\":false,\"error\":\"invalid_config\"}";
         return result;
     }
     const size_t rows = static_cast<size_t>(config.rows);
     const size_t columns = static_cast<size_t>(config.columns);
     if (rows > std::numeric_limits<size_t>::max() / columns) {
-        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"overflow\"}";
+        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v2\",\"completed\":false,\"error\":\"overflow\"}";
         return result;
     }
     std::vector<float> input(rows);
@@ -341,7 +358,7 @@ StreamedBlockBenchmarkResult run_holy_fitra_streamed_block_benchmark(const Strea
     auto optimized = [&]() { return hf_streamed_f32_block_matvec(input.data(), input.size(), weights.data(), weights.size(), optimized_output.data(), optimized_output.size(), config.rows, config.columns, HF_STREAMED_F32_BLOCK_ABI); };
     for (int32_t iteration = 0; iteration < config.warmup_iterations; ++iteration) {
         if (scalar() != HF_OK || optimized() != HF_OK) {
-            result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"warmup_failed\"}";
+            result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v2\",\"completed\":false,\"error\":\"warmup_failed\"}";
             return result;
         }
     }
@@ -391,7 +408,8 @@ StreamedBlockBenchmarkResult run_holy_fitra_streamed_block_benchmark(const Strea
     const bool temperature_rise = std::isfinite(thermal_before.max_temp_c) && !temperatures.empty() && *std::max_element(temperatures.begin(), temperatures.end()) > thermal_before.max_temp_c + 5.0;
     result.completed = failures == 0 && correct && scalar_latencies.size() == static_cast<size_t>(config.measured_iterations) && optimized_latencies.size() == static_cast<size_t>(config.measured_iterations);
     std::ostringstream json;
-    json << "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":" << (result.completed ? "true" : "false");
+    json << "{\"schema\":\"holyfitra.streamed-block-benchmark/v2\",\"completed\":" << (result.completed ? "true" : "false");
+    json << ",\"execution_environment\":\"" << benchmark_execution_environment() << "\",\"evidence_scope\":\"" << benchmark_evidence_scope() << "\"";
     json << ",\"rows\":" << config.rows << ",\"columns\":" << config.columns << ",\"warmup_iterations\":" << config.warmup_iterations << ",\"measured_iterations\":" << config.measured_iterations;
     json << ",\"has_neon\":" << (hf_streamed_f32_block_has_neon() ? "true" : "false") << ",\"optimized_backend\":\"" << (hf_streamed_f32_block_has_neon() ? "native-neon" : "native-scalar") << "\"";
     append_streamed_summary(json, "scalar", scalar_summary);

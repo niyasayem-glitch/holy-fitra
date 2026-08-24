@@ -222,6 +222,7 @@ struct Scheduler::Impl {
                     TaskContext context;
                     context.worker_id = worker.id;
                     context.on_big_core = worker.big;
+                    context.deadline_ns = task.deadline_ns;
                     context.cancellation = task.cancellation;
                     task.on_cancel(context);
                 }
@@ -234,6 +235,7 @@ struct Scheduler::Impl {
                     TaskContext context;
                     context.worker_id = worker.id;
                     context.on_big_core = worker.big;
+                    context.deadline_ns = task.deadline_ns;
                     context.cancellation = task.cancellation;
                     task.on_deadline_missed(context);
                 }
@@ -242,6 +244,7 @@ struct Scheduler::Impl {
             TaskContext context;
             context.worker_id = worker.id;
             context.on_big_core = worker.big;
+            context.deadline_ns = task.deadline_ns;
             context.cancellation = task.cancellation;
             try {
                 task.function(context);
@@ -336,6 +339,7 @@ struct Scheduler::Impl {
                 TaskContext context;
                 context.worker_id = worker->id;
                 context.on_big_core = worker->big;
+                context.deadline_ns = task.deadline_ns;
                 context.cancellation = task.cancellation;
                 try {
                     task.on_cancel(context);

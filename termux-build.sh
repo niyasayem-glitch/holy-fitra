@@ -257,6 +257,15 @@ run_tests() {
     clang -O2 -c holy_fitra_ragged_kernel.c -o "${TMPDIR:-/tmp}/holy_fitra_ragged_termux.o"
     clang++ -O2 -std=c++17 -pthread -I. "${TMPDIR:-/tmp}/holy_fitra_ragged_termux.o" holy_fitra_dispatch.cpp holy_fitra_ragged_scheduler.cpp test_holy_fitra_ragged_scheduler.cpp -o "${TMPDIR:-/tmp}/holy_fitra_ragged_scheduler_termux_test"
     "${TMPDIR:-/tmp}/holy_fitra_ragged_scheduler_termux_test"
+    clang -O2 -c nibbleflow_kernel.c -o "${TMPDIR:-/tmp}/nibbleflow_kernel_termux.o"
+    clang++ -O2 -std=c++17 -I. "${TMPDIR:-/tmp}/nibbleflow_kernel_termux.o" nibbleflow_android.cpp test_nibbleflow_android.cpp -o "${TMPDIR:-/tmp}/nibbleflow_android_termux_test"
+    "${TMPDIR:-/tmp}/nibbleflow_android_termux_test"
+    clang++ -O2 -std=c++17 -I. "${TMPDIR:-/tmp}/nibbleflow_kernel_termux.o" nibbleflow_android.cpp test_nibbleflow_execution.cpp -o "${TMPDIR:-/tmp}/nibbleflow_execution_termux_test"
+    "${TMPDIR:-/tmp}/nibbleflow_execution_termux_test"
+    clang++ -O2 -std=c++17 -pthread -I. "${TMPDIR:-/tmp}/nibbleflow_kernel_termux.o" nibbleflow_android.cpp holy_fitra_dispatch.cpp holy_fitra_android_topology.cpp holy_fitra_runtime.cpp test_holy_fitra_runtime.cpp -o "${TMPDIR:-/tmp}/holy_fitra_runtime_termux_test"
+    "${TMPDIR:-/tmp}/holy_fitra_runtime_termux_test"
+    clang++ -O2 -std=c++17 -pthread -I. "${TMPDIR:-/tmp}/nibbleflow_kernel_termux.o" nibbleflow_android.cpp holy_fitra_dispatch.cpp holy_fitra_android_topology.cpp holy_fitra_runtime.cpp test_holy_fitra_batch_runtime.cpp -o "${TMPDIR:-/tmp}/holy_fitra_batch_runtime_termux_test"
+    "${TMPDIR:-/tmp}/holy_fitra_batch_runtime_termux_test"
     clang -O2 -I. holy_fitra_streamed_neon.c test_holy_fitra_streamed_neon.c -lm -o "${TMPDIR:-/tmp}/holy_fitra_streamed_neon_termux_test"
     "${TMPDIR:-/tmp}/holy_fitra_streamed_neon_termux_test"
     clang -O2 -c holy_fitra_streamed_neon.c -o "${TMPDIR:-/tmp}/holy_fitra_streamed_neon_termux.o"
@@ -265,6 +274,8 @@ run_tests() {
     "${TMPDIR:-/tmp}/holy_fitra_streamed_benchmark_termux_test"
     clang --target=aarch64-linux-android21 -ffreestanding -DHOLY_FITRA_FREESTANDING=1 -O2 -I. -c holy_fitra_streamed_neon.c -o "${TMPDIR:-/tmp}/holy_fitra_streamed_neon.android-arm64.o"
     readelf -h "${TMPDIR:-/tmp}/holy_fitra_streamed_neon.android-arm64.o" | grep -q 'AArch64'
+    clang --target=aarch64-linux-android21 -ffreestanding -DHOLY_FITRA_FREESTANDING=1 -O2 -I. -c nibbleflow_kernel.c -o "${TMPDIR:-/tmp}/nibbleflow_kernel.android-arm64.o"
+    readelf -h "${TMPDIR:-/tmp}/nibbleflow_kernel.android-arm64.o" | grep -q 'AArch64'
   fi
   ./holyfitra --help >/dev/null
   ./holyfitra doctor >/dev/null

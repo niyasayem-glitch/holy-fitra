@@ -152,6 +152,10 @@ extern "C" hf_status hf_runtime_submit_matvec_batch(hf_holyfitra_runtime *runtim
                 result = HF_CANCELLED;
                 break;
             }
+            if (context.deadline_ns != 0 && holyfitra::monotonic_time_ns() > context.deadline_ns) {
+                result = HF_DEADLINE_MISSED;
+                break;
+            }
             result = hf_nibbleflow_matvec(&runtime->model, input + index * input_stride, input_stride, output + index * output_stride, output_stride);
             if (result != HF_OK) break;
         }

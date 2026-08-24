@@ -12,7 +12,9 @@ int main() {
     config.continuous_thermal_sampling = false;
     const holyfitra::StreamedBlockBenchmarkResult result = holyfitra::run_holy_fitra_streamed_block_benchmark(config);
     if (!result.completed) return 1;
-    if (std::strstr(result.json.c_str(), "\"schema\":\"holyfitra.streamed-block-benchmark/v1\"") == nullptr) return 2;
+    if (std::strstr(result.json.c_str(), "\"schema\":\"holyfitra.streamed-block-benchmark/v2\"") == nullptr) return 2;
+    if (std::strstr(result.json.c_str(), "\"execution_environment\":\"host-native-process\"") == nullptr) return 6;
+    if (std::strstr(result.json.c_str(), "\"evidence_scope\":\"host-only\"") == nullptr) return 7;
     if (std::strstr(result.json.c_str(), "\"correctness\":{\"max_abs_error\":") == nullptr) return 3;
     if (std::strstr(result.json.c_str(), "\"pass\":true") == nullptr) return 4;
     config.columns = 513;
