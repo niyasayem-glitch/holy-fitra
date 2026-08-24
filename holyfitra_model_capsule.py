@@ -18,6 +18,7 @@ import numpy as np
 from holyfitra_ai_pipeline import PipelineResult
 from holyfitra_agent_receipt import AgentPlanReceipt
 from holyfitra_deploy import DeploymentBundle, MAX_DEPLOYMENT_BYTES, MAX_INFERENCE_BATCH_ROWS, MAX_INFERENCE_INPUT_BYTES, load_deployment_bytes
+from holyfitra_kv_residency import KVResidencyPolicy
 from holyfitra_tensor_contracts import TensorResourceContract
 
 _MAGIC = b"HFCAPSULE\x01"
@@ -205,6 +206,13 @@ class ModelCapsule:
     def layer_stream_manifest_json(self) -> dict[str, Any] | None:
         return _json_chunk(self.read_chunk("layer_stream_manifest.json")) if "layer_stream_manifest.json" in self._chunks else None
 
+    def kv_residency_policy_json(self) -> dict[str, Any] | None:
+        return _json_chunk(self.read_chunk("kv_residency_policy.json")) if "kv_residency_policy.json" in self._chunks else None
+
+    def kv_residency_policy(self) -> KVResidencyPolicy | None:
+        payload = self.kv_residency_policy_json()
+        return KVResidencyPolicy.from_body(payload) if payload is not None else None
+
     def open_streamed_mlp(self, native_kernel: Any | None = None) -> StreamedMLPInference:
         manifest = self.layer_stream_manifest_json()
         if manifest is None:
@@ -212,11 +220,13 @@ class ModelCapsule:
         return StreamedMLPInference(self, manifest, native_kernel=native_kernel)
 
 
-def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLike[str], *, signing_key: bytes, chunk_bytes: int = 65_536, metadata: dict[str, Any] | None = None, resource_contract: TensorResourceContract | None = None, agent_receipt: AgentPlanReceipt | None = None, deployment_signing_key: bytes | None = None, stream_block_columns: int | None = None) -> CapsuleArtifact:
+def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLike[str], *, signing_key: bytes, chunk_bytes: int = 65_536, metadata: dict[str, Any] | None = None, resource_contract: TensorResourceContract | None = None, agent_receipt: AgentPlanReceipt | None = None, kv_residency_policy: KVResidencyPolicy | None = None, deployment_signing_key: bytes | None = None, stream_block_columns: int | None = None) -> CapsuleArtifact:
     """Package an already-verified pipeline result into a lazily readable capsule."""
     result.verify()
     if resource_contract is not None:
         resource_contract.verify_plan(result.plan)
+    if kv_residency_policy is not None:
+        kv_residency_policy.verify()
     try:
         deployment = Path(result.artifact.path).read_bytes()
     except OSError as error:
@@ -243,6 +253,7 @@ def export_pipeline_capsule(result: PipelineResult, destination: str | os.PathLi
         metadata=metadata or {},
         resource_contract_payload=json.dumps(resource_contract.body(), sort_keys=True, separators=(",", ":")).encode("utf-8") if resource_contract is not None else None,
         agent_receipt_payload=json.dumps(agent_receipt.body(), sort_keys=True, separators=(",", ":")).encode("utf-8") if agent_receipt is not None else None,
+        kv_residency_policy_payload=kv_residency_policy.canonical().encode("utf-8") if kv_residency_policy is not None else None,
         layer_stream_payload=layer_stream_payload,
         stream_payloads=stream_payloads,
     )
@@ -279,7 +290,7 @@ def open_model_capsule(path: str | os.PathLike[str], *, signing_key: bytes, cach
     return ModelCapsule(source, manifest, chunks, cache_chunks=cache_chunks)
 
 
-def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, deployment_hash: str, plan_payload: bytes, receipt_payload: bytes, signing_key: bytes, chunk_bytes: int, metadata: dict[str, Any], resource_contract_payload: bytes | None, agent_receipt_payload: bytes | None, layer_stream_payload: bytes | None, stream_payloads: tuple[tuple[str, bytes], ...]) -> CapsuleArtifact:
+def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, deployment_hash: str, plan_payload: bytes, receipt_payload: bytes, signing_key: bytes, chunk_bytes: int, metadata: dict[str, Any], resource_contract_payload: bytes | None, agent_receipt_payload: bytes | None, kv_residency_policy_payload: bytes | None, layer_stream_payload: bytes | None, stream_payloads: tuple[tuple[str, bytes], ...]) -> CapsuleArtifact:
     key = _validated_key(signing_key)
     if not isinstance(chunk_bytes, int) or not MIN_CHUNK_BYTES <= chunk_bytes <= MAX_CHUNK_BYTES:
         raise CapsuleError("capsule chunk size is outside the configured range")
@@ -296,6 +307,8 @@ def _write_capsule(destination: str | os.PathLike[str], *, deployment: bytes, de
         chunks_payload.append(("resource_contract.json", resource_contract_payload))
     if agent_receipt_payload is not None:
         chunks_payload.append(("agent_receipt.json", agent_receipt_payload))
+    if kv_residency_policy_payload is not None:
+        chunks_payload.append(("kv_residency_policy.json", kv_residency_policy_payload))
     if layer_stream_payload is not None:
         chunks_payload.append(("layer_stream_manifest.json", layer_stream_payload))
         chunks_payload.extend(stream_payloads)
@@ -346,7 +359,7 @@ def _validate_manifest(manifest: dict[str, Any], payload_start: int, total_size:
             raise CapsuleError("capsule chunk ordering or identity is invalid")
         if name.startswith("deployment/"):
             seen_deployment += 1
-        elif name not in {"execution_plan.json", "pipeline_receipt.json", "resource_contract.json", "agent_receipt.json", "layer_stream_manifest.json"} and not name.startswith("stream/"):
+        elif name not in {"execution_plan.json", "pipeline_receipt.json", "resource_contract.json", "agent_receipt.json", "kv_residency_policy.json", "layer_stream_manifest.json"} and not name.startswith("stream/"):
             raise CapsuleError("capsule contains an unsupported chunk name")
         result[name] = CapsuleChunk(name, payload_start + offset, size, digest)
         expected_offset += size

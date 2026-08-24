@@ -14,6 +14,7 @@ from holyfitra_data import StreamingDataset
 from holyfitra_deploy import load_deployment
 from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
 from holyfitra_learning import TrainableMLP
+from holyfitra_kv_residency import KVPrecision, KVResidencyPolicy
 from holyfitra_model_capsule import CapsuleError, StreamedInferenceError, export_pipeline_capsule, open_model_capsule
 from holyfitra_streamed_native import StreamedNativeKernel
 from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
@@ -51,7 +52,8 @@ class ModelCapsuleTests(unittest.TestCase):
             contract = TensorResourceContract((TensorContract("input", (1, 64), "f32", device="neon"), TensorContract("output", (1, 8), "f32", device="neon")), memory_budget_bytes=65_536, max_energy=2.0)
             digest = "c" * 64
             agent_receipt = AgentPlanReceipt(("model.predict.local",), AgentBudget(1, 6, 4, 1000), (AgentEvidence("scorer", digest), AgentEvidence("proposals", digest)), (AgentApproval("verifier", 1), AgentApproval("governor", 1)), digest)
-            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
+            kv_policy = KVResidencyPolicy(4_096, 8, 16, (KVPrecision.FP16, KVPrecision.INT8, KVPrecision.INT4), 0.80, 0.10)
+            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt, kv_residency_policy=kv_policy, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
             capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=2)
             self.assertEqual(capsule.cached_chunk_count, 0)
             deployment_chunks = tuple(name for name in capsule.chunk_names if name.startswith("deployment/"))
@@ -68,6 +70,8 @@ class ModelCapsuleTests(unittest.TestCase):
             self.assertEqual(capsule.manifest["deployment_hash"], result.artifact.digest)
             self.assertEqual(capsule.resource_contract_json()["required_kernel_abi"], 1)
             self.assertEqual(capsule.agent_receipt_json()["schema"], "holyfitra.agent-plan-receipt/v1")
+            self.assertEqual(capsule.kv_residency_policy(), kv_policy)
+            self.assertEqual(capsule.kv_residency_policy_json()["schema"], "holyfitra.kv-residency-policy/v1")
             streamed = capsule.open_streamed_mlp()
             capsule.deployment_bytes = lambda: self.fail("streamed inference must not reassemble deployment bytes")
             np.testing.assert_allclose(streamed.predict(inputs), expected, rtol=1e-6, atol=1e-6)
