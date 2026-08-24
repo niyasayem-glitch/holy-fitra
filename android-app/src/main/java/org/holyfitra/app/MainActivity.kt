@@ -35,6 +35,7 @@ class MainActivity : Activity() {
     private lateinit var quickButton: Button
     private lateinit var sustainedButton: Button
     private lateinit var streamedButton: Button
+    private lateinit var streamedSustainedButton: Button
     private lateinit var exportButton: Button
     private var lastReport: String? = null
 
@@ -72,12 +73,14 @@ class MainActivity : Activity() {
 
         quickButton = actionButton(getString(R.string.run_quick_check)) { runBenchmark(sustained = false) }
         sustainedButton = actionButton(getString(R.string.run_sustained_check)) { runBenchmark(sustained = true) }
-        streamedButton = actionButton("Run streamed scalar vs NEON") { runStreamedBlockBenchmark() }
+        streamedButton = actionButton("Run streamed scalar vs NEON") { runStreamedBlockBenchmark(sustained = false) }
+        streamedSustainedButton = actionButton("Run sustained streamed scalar vs NEON") { runStreamedBlockBenchmark(sustained = true) }
         exportButton = actionButton(getString(R.string.export_report)) { exportReport() }
         exportButton.isEnabled = false
         root.addView(quickButton, matchParams(bottom = 10))
         root.addView(sustainedButton, matchParams(bottom = 10))
         root.addView(streamedButton, matchParams(bottom = 10))
+        root.addView(streamedSustainedButton, matchParams(bottom = 10))
         root.addView(exportButton, matchParams(bottom = 18))
 
         result = label("No result yet.", 14f, R.color.hf_text_muted)
@@ -136,21 +139,23 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun runStreamedBlockBenchmark() {
+    private fun runStreamedBlockBenchmark(sustained: Boolean) {
         if (!running.compareAndSet(false, true)) return
         setButtonsEnabled(false)
-        status.text = "Running streamed scalar versus runtime-selected block math… Keep device conditions consistent."
+        val measuredIterations = if (sustained) 5000 else 300
+        val warmupIterations = if (sustained) 50 else 30
+        status.text = if (sustained) "Running sustained streamed scalar versus runtime-selected block math… Keep the device conditions consistent." else "Running streamed scalar versus runtime-selected block math… Keep the device conditions consistent."
         status.setTextColor(getColorCompat(R.color.hf_warning))
         executor.execute {
             try {
                 val benchmark = HolyFitraBenchmark().runStreamedBlockSync(
-                    HolyFitraBenchmark.StreamedBlockConfig(rows = 256, columns = 128, warmupIterations = 30, measuredIterations = 300, seed = 12345L, thermalSamplePeriod = 1)
+                    HolyFitraBenchmark.StreamedBlockConfig(rows = 256, columns = 128, warmupIterations = warmupIterations, measuredIterations = measuredIterations, seed = 12345L, thermalSamplePeriod = 1)
                 )
-                val report = streamedEnvelope(benchmark)
+                val report = streamedEnvelope(benchmark, sustained)
                 saveReport(report)
                 runOnUiThread {
                     lastReport = report
-                    status.text = if (benchmark.completed) "Streamed block comparison completed on this device." else "Streamed block comparison returned an incomplete result."
+                    status.text = if (benchmark.completed) "${if (sustained) "Sustained " else ""}streamed block comparison completed on this device." else "Streamed block comparison returned an incomplete result."
                     status.setTextColor(if (benchmark.completed) getColorCompat(R.color.hf_success) else getColorCompat(R.color.hf_error))
                     result.text = formatStreamedResult(benchmark)
                     exportButton.isEnabled = benchmark.completed
@@ -222,11 +227,12 @@ class MainActivity : Activity() {
         .put("benchmark", benchmark.json)
         .toString(2)
 
-    private fun streamedEnvelope(benchmark: HolyFitraBenchmark.StreamedBlockResult): String = JSONObject()
+    private fun streamedEnvelope(benchmark: HolyFitraBenchmark.StreamedBlockResult, sustained: Boolean): String = JSONObject()
         .put("schema", "holyfitra.workbench.report.v1")
         .put("created_at", now())
         .put("device", capabilityText())
         .put("benchmark_kind", "streamed_block_scalar_vs_optimized")
+        .put("sustained", sustained)
         .put("benchmark", benchmark.json)
         .toString(2)
 
@@ -270,6 +276,7 @@ class MainActivity : Activity() {
         quickButton.isEnabled = enabled
         sustainedButton.isEnabled = enabled
         streamedButton.isEnabled = enabled
+        streamedSustainedButton.isEnabled = enabled
         exportButton.isEnabled = enabled && lastReport != null
     }
 
