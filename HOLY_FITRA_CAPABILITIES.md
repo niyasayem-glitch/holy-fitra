@@ -20,7 +20,7 @@ holyfitra capabilities
 | AI integration | Provider-neutral chat, embeddings, validated Holy Fitra generation, model selection, request boundaries, and credential-safe provider status | Unit tests and explicit provider configuration; real provider execution requires credentials |
 | Coding automation | Plan-first supervised agent, workspace confinement, allowlisted commands, transactional writes, rollback, improvement rounds, and high-risk branch restrictions | Unit tests and campaign dry-run gates |
 | Learning | Deterministic batching, streaming datasets, replay, supervised training, threshold policy learning, checkpoints, calibration-aware quantization, and deployment manifests | Python tests and numerical checks; not a claim of production-scale training |
-| Native AI runtime | NibbleFlow int4 kernels, ragged kernels, scheduler/work-stealing components, JNI wrappers, and benchmark schemas | Host/native object gates and remote Android build; device performance remains unmeasured |
+| Native AI runtime | NibbleFlow INT4 kernels with opt-in static-INT8 activation execution, calibration quality gates, bounded low-rank residual adapters, ragged kernels, deadline-aware batch scheduling, JNI wrappers, and versioned benchmark receipts | Host/native/sanitizer gates, AArch64 object emission, and remote Android arm64-v8a package verification; device performance remains unmeasured |
 | Android | arm64-v8a library, 16 KB ELF alignment, `c++_shared` packaging, installable Workbench debug APK, release APK, and AAR | Remote SDK/NDK CI; no physical-device execution in this environment |
 
 ## AI-first language direction
@@ -31,7 +31,7 @@ The project should not treat a large campaign count or a generated source file a
 
 ## Explicit evidence boundaries
 
-> Remote AArch64 compilation and 16 KB packaging verification do not prove ART/JNI lifecycle correctness, NEON throughput, big.LITTLE scheduling, thermal throttling behavior, or physical-device stability.
+> Remote AArch64 compilation, 16 KB packaging verification, and an Android-native-process benchmark receipt schema do not prove ART/JNI lifecycle correctness, NEON throughput, big.LITTLE scheduling, thermal throttling behavior, or physical-device stability.
 
 > Native built-in hybrid reducers lower to deterministic branch calls followed by scalar reduction. Their `workers` value is validated metadata, not evidence that the emitted scalar LLVM has launched native threads or achieved parallel speedup.
 
