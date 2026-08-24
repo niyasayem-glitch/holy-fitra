@@ -30,6 +30,21 @@ class HolyFitraBenchmark {
         }
     }
 
+    data class StreamedBlockConfig(
+        val rows: Int = 64,
+        val columns: Int = 64,
+        val warmupIterations: Int = 20,
+        val measuredIterations: Int = 200,
+        val seed: Long = 12345L,
+        val thermalSamplePeriod: Int = 1,
+    ) {
+        fun validate() {
+            require(rows in 1..8192 && columns in 1..512) { "streamed block dimensions are outside native safety bounds" }
+            require(warmupIterations >= 0 && measuredIterations > 0) { "invalid iteration counts" }
+            require(thermalSamplePeriod > 0) { "thermalSamplePeriod must be positive" }
+        }
+    }
+
     /** Blocking entry point for a dedicated worker thread or instrumentation harness. */
     fun runSync(config: Config = Config()): Result {
         config.validate()
@@ -40,6 +55,12 @@ class HolyFitraBenchmark {
     }
 
     suspend fun run(config: Config = Config()): Result = runSync(config)
+
+    /** Runs scalar and runtime-selected streamed float32 block paths in alternating order. */
+    fun runStreamedBlockSync(config: StreamedBlockConfig = StreamedBlockConfig()): StreamedBlockResult {
+        config.validate()
+        return StreamedBlockResult(nativeRunStreamedBlock(config.rows, config.columns, config.warmupIterations, config.measuredIterations, config.seed, config.thermalSamplePeriod))
+    }
 
     class Result(private val rawJson: String) {
         val json: JSONObject get() = JSONObject(rawJson)
@@ -69,6 +90,20 @@ class HolyFitraBenchmark {
         override fun toString(): String = rawJson
     }
 
+    class StreamedBlockResult(private val rawJson: String) {
+        val json: JSONObject get() = JSONObject(rawJson)
+        val completed: Boolean get() = json.optBoolean("completed", false)
+        val hasNeon: Boolean get() = json.optBoolean("has_neon", false)
+        val optimizedBackend: String get() = json.optString("optimized_backend", "unknown")
+        val speedupScalarOverOptimized: Double get() = json.optDouble("speedup_scalar_over_optimized", Double.NaN)
+        val correctnessPass: Boolean get() = json.optJSONObject("correctness")?.optBoolean("pass", false) ?: false
+        val thermalThrottleDetected: Boolean
+            get() = json.optJSONObject("thermal")?.let {
+                it.optBoolean("frequency_drop_detected", false) || it.optBoolean("temperature_rise_detected", false)
+            } ?: false
+        override fun toString(): String = rawJson
+    }
+
     private external fun nativeRun(
         dModel: Int,
         sequenceCount: Int,
@@ -81,4 +116,5 @@ class HolyFitraBenchmark {
         pinThreads: Boolean,
         thermalSamplePeriod: Int,
     ): String
+    private external fun nativeRunStreamedBlock(rows: Int, columns: Int, warmupIterations: Int, measuredIterations: Int, seed: Long, thermalSamplePeriod: Int): String
 }

@@ -43,3 +43,34 @@ Java_com_holyfitra_benchmark_HolyFitraBenchmark_nativeRun(
         return nullptr;
     }
 }
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_holyfitra_benchmark_HolyFitraBenchmark_nativeRunStreamedBlock(
+        JNIEnv *env,
+        jobject,
+        jint rows,
+        jint columns,
+        jint warmup_iterations,
+        jint measured_iterations,
+        jlong seed,
+        jint thermal_sample_period) {
+    holyfitra::StreamedBlockBenchmarkConfig config;
+    config.rows = static_cast<int32_t>(rows);
+    config.columns = static_cast<int32_t>(columns);
+    config.warmup_iterations = static_cast<int32_t>(warmup_iterations);
+    config.measured_iterations = static_cast<int32_t>(measured_iterations);
+    config.seed = static_cast<uint64_t>(seed);
+    config.thermal_sample_period = static_cast<int32_t>(thermal_sample_period);
+    try {
+        const holyfitra::StreamedBlockBenchmarkResult result = holyfitra::run_holy_fitra_streamed_block_benchmark(config);
+        return env->NewStringUTF(result.json.c_str());
+    } catch (const std::bad_alloc &) {
+        jclass clazz = env->FindClass("java/lang/OutOfMemoryError");
+        if (clazz) env->ThrowNew(clazz, "Holy Fitra streamed-block benchmark allocation failed");
+        return nullptr;
+    } catch (const std::exception &error) {
+        jclass clazz = env->FindClass("java/lang/IllegalStateException");
+        if (clazz) env->ThrowNew(clazz, error.what());
+        return nullptr;
+    }
+}

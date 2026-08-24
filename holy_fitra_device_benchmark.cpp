@@ -2,6 +2,7 @@
 
 #include "holy_fitra_android_topology.h"
 #include "holy_fitra_ragged_scheduler.h"
+#include "holy_fitra_streamed_neon.h"
 
 #include <algorithm>
 #include <cmath>
@@ -182,6 +183,30 @@ static bool has_cpu_flag(const char *needle) {
     return false;
 }
 
+struct StreamedLatencySummary {
+    double mean_ms = std::numeric_limits<double>::quiet_NaN();
+    double p50_ms = std::numeric_limits<double>::quiet_NaN();
+    double p95_ms = std::numeric_limits<double>::quiet_NaN();
+    double p99_ms = std::numeric_limits<double>::quiet_NaN();
+    double macc_per_second = std::numeric_limits<double>::quiet_NaN();
+};
+
+static StreamedLatencySummary summarize_streamed_latencies(const std::vector<uint64_t> &latencies, uint64_t multiply_accumulates) {
+    StreamedLatencySummary summary;
+    if (latencies.empty()) return summary;
+    const double total_ns = std::accumulate(latencies.begin(), latencies.end(), 0.0);
+    summary.mean_ms = total_ns / static_cast<double>(latencies.size()) / 1e6;
+    summary.p50_ms = percentile_ns(latencies, 0.50) / 1e6;
+    summary.p95_ms = percentile_ns(latencies, 0.95) / 1e6;
+    summary.p99_ms = percentile_ns(latencies, 0.99) / 1e6;
+    summary.macc_per_second = total_ns > 0.0 ? static_cast<double>(multiply_accumulates) * static_cast<double>(latencies.size()) / (total_ns / 1e9) : std::numeric_limits<double>::quiet_NaN();
+    return summary;
+}
+
+static void append_streamed_summary(std::ostringstream &json, const char *name, const StreamedLatencySummary &summary) {
+    json << ",\"" << name << "\":{\"latency_ms\":{\"mean\":" << json_double(summary.mean_ms) << ",\"p50\":" << json_double(summary.p50_ms) << ",\"p95\":" << json_double(summary.p95_ms) << ",\"p99\":" << json_double(summary.p99_ms) << "},\"throughput_macc_per_second\":" << json_double(summary.macc_per_second) << "}";
+}
+
 } // namespace
 
 DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfig &config) {
@@ -289,6 +314,93 @@ DeviceBenchmarkResult run_holy_fitra_device_benchmark(const DeviceBenchmarkConfi
     json << ",\"thermal\":{\"sample_count\":" << temperatures.size() << ",\"max_temp_c\":" << json_double(temperatures.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::max_element(temperatures.begin(), temperatures.end())) << ",\"min_freq_mhz\":" << json_double(frequencies.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::min_element(frequencies.begin(), frequencies.end())) << ",\"frequency_drop_detected\":" << (frequency_drop ? "true" : "false") << ",\"temperature_rise_detected\":" << (temperature_rise ? "true" : "false") << "}";
     json << ",\"last_status\":\"" << last_status << "\"";
     json << ",\"checksum\":" << checksum_bits << "}";
+    result.json = json.str();
+    return result;
+}
+
+StreamedBlockBenchmarkResult run_holy_fitra_streamed_block_benchmark(const StreamedBlockBenchmarkConfig &config) {
+    StreamedBlockBenchmarkResult result;
+    if (config.rows <= 0 || config.rows > HF_STREAMED_F32_MAX_ROWS || config.columns <= 0 || config.columns > HF_STREAMED_F32_MAX_COLUMNS || config.warmup_iterations < 0 || config.warmup_iterations > 10000 || config.measured_iterations <= 0 || config.measured_iterations > 10000 || config.thermal_sample_period <= 0 || config.thermal_sample_period > 100000) {
+        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"invalid_config\"}";
+        return result;
+    }
+    const size_t rows = static_cast<size_t>(config.rows);
+    const size_t columns = static_cast<size_t>(config.columns);
+    if (rows > std::numeric_limits<size_t>::max() / columns) {
+        result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"overflow\"}";
+        return result;
+    }
+    std::vector<float> input(rows);
+    std::vector<float> weights(rows * columns);
+    std::vector<float> scalar_output(columns, 0.0f);
+    std::vector<float> optimized_output(columns, 0.0f);
+    uint64_t random_state = config.seed;
+    for (float &value : input) value = static_cast<float>(uniform01(random_state) * 2.0 - 1.0);
+    for (float &value : weights) value = static_cast<float>(uniform01(random_state) * 2.0 - 1.0);
+    auto scalar = [&]() { return hf_streamed_f32_block_matvec_scalar(input.data(), input.size(), weights.data(), weights.size(), scalar_output.data(), scalar_output.size(), config.rows, config.columns, HF_STREAMED_F32_BLOCK_ABI); };
+    auto optimized = [&]() { return hf_streamed_f32_block_matvec(input.data(), input.size(), weights.data(), weights.size(), optimized_output.data(), optimized_output.size(), config.rows, config.columns, HF_STREAMED_F32_BLOCK_ABI); };
+    for (int32_t iteration = 0; iteration < config.warmup_iterations; ++iteration) {
+        if (scalar() != HF_OK || optimized() != HF_OK) {
+            result.json = "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":false,\"error\":\"warmup_failed\"}";
+            return result;
+        }
+    }
+    const ThermalSample thermal_before = sample_thermal();
+    std::vector<uint64_t> scalar_latencies;
+    std::vector<uint64_t> optimized_latencies;
+    std::vector<double> temperatures;
+    std::vector<double> frequencies;
+    scalar_latencies.reserve(static_cast<size_t>(config.measured_iterations));
+    optimized_latencies.reserve(static_cast<size_t>(config.measured_iterations));
+    double max_abs_error = 0.0;
+    double max_reference = 0.0;
+    int32_t failures = 0;
+    uint64_t checksum = 0;
+    for (int32_t iteration = 0; iteration < config.measured_iterations; ++iteration) {
+        if (config.continuous_thermal_sampling && iteration % config.thermal_sample_period == 0) {
+            const ThermalSample sample = sample_thermal();
+            if (std::isfinite(sample.max_temp_c)) temperatures.push_back(sample.max_temp_c);
+            if (std::isfinite(sample.max_current_freq_mhz)) frequencies.push_back(sample.max_current_freq_mhz);
+        }
+        const bool optimized_first = (next_random(random_state) & 1u) != 0;
+        auto timed = [](const auto &operation, std::vector<uint64_t> &latencies) {
+            const uint64_t start = monotonic_time_ns();
+            const hf_status status = operation();
+            const uint64_t finish = monotonic_time_ns();
+            if (status == HF_OK) latencies.push_back(finish - start);
+            return status;
+        };
+        const hf_status first = optimized_first ? timed(optimized, optimized_latencies) : timed(scalar, scalar_latencies);
+        const hf_status second = optimized_first ? timed(scalar, scalar_latencies) : timed(optimized, optimized_latencies);
+        if (first != HF_OK || second != HF_OK) { ++failures; continue; }
+        for (size_t index = 0; index < columns; ++index) {
+            const double reference = std::abs(static_cast<double>(scalar_output[index]));
+            const double error = std::abs(static_cast<double>(scalar_output[index]) - static_cast<double>(optimized_output[index]));
+            max_reference = std::max(max_reference, reference);
+            max_abs_error = std::max(max_abs_error, error);
+            checksum ^= static_cast<uint64_t>(static_cast<int64_t>(optimized_output[index] * 1000003.0f) + static_cast<int64_t>(index));
+        }
+    }
+    const ThermalSample thermal_after = sample_thermal();
+    const double tolerance = 1e-4 * std::max(1.0, max_reference);
+    const bool correct = max_abs_error <= tolerance;
+    const StreamedLatencySummary scalar_summary = summarize_streamed_latencies(scalar_latencies, static_cast<uint64_t>(rows) * static_cast<uint64_t>(columns));
+    const StreamedLatencySummary optimized_summary = summarize_streamed_latencies(optimized_latencies, static_cast<uint64_t>(rows) * static_cast<uint64_t>(columns));
+    const double speedup = optimized_summary.mean_ms > 0.0 ? scalar_summary.mean_ms / optimized_summary.mean_ms : std::numeric_limits<double>::quiet_NaN();
+    const bool frequency_drop = std::isfinite(thermal_before.max_current_freq_mhz) && std::isfinite(thermal_after.max_current_freq_mhz) && thermal_after.max_current_freq_mhz < thermal_before.max_current_freq_mhz * 0.90;
+    const bool temperature_rise = std::isfinite(thermal_before.max_temp_c) && !temperatures.empty() && *std::max_element(temperatures.begin(), temperatures.end()) > thermal_before.max_temp_c + 5.0;
+    result.completed = failures == 0 && correct && scalar_latencies.size() == static_cast<size_t>(config.measured_iterations) && optimized_latencies.size() == static_cast<size_t>(config.measured_iterations);
+    std::ostringstream json;
+    json << "{\"schema\":\"holyfitra.streamed-block-benchmark/v1\",\"completed\":" << (result.completed ? "true" : "false");
+    json << ",\"rows\":" << config.rows << ",\"columns\":" << config.columns << ",\"warmup_iterations\":" << config.warmup_iterations << ",\"measured_iterations\":" << config.measured_iterations;
+    json << ",\"has_neon\":" << (hf_streamed_f32_block_has_neon() ? "true" : "false") << ",\"optimized_backend\":\"" << (hf_streamed_f32_block_has_neon() ? "native-neon" : "native-scalar") << "\"";
+    append_streamed_summary(json, "scalar", scalar_summary);
+    append_streamed_summary(json, "optimized", optimized_summary);
+    json << ",\"speedup_scalar_over_optimized\":" << json_double(speedup);
+    json << ",\"correctness\":{\"max_abs_error\":" << json_double(max_abs_error) << ",\"tolerance\":" << json_double(tolerance) << ",\"pass\":" << (correct ? "true" : "false") << "}";
+    json << ",\"successful_iterations\":{\"scalar\":" << scalar_latencies.size() << ",\"optimized\":" << optimized_latencies.size() << "},\"failures\":" << failures;
+    json << ",\"thermal\":{\"sample_count\":" << temperatures.size() << ",\"max_temp_c\":" << json_double(temperatures.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::max_element(temperatures.begin(), temperatures.end())) << ",\"min_freq_mhz\":" << json_double(frequencies.empty() ? std::numeric_limits<double>::quiet_NaN() : *std::min_element(frequencies.begin(), frequencies.end())) << ",\"frequency_drop_detected\":" << (frequency_drop ? "true" : "false") << ",\"temperature_rise_detected\":" << (temperature_rise ? "true" : "false") << "}";
+    json << ",\"checksum\":" << checksum << "}";
     result.json = json.str();
     return result;
 }

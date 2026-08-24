@@ -15,6 +15,8 @@ int main(void) {
     if (hf_streamed_f32_block_abi() != HF_STREAMED_F32_BLOCK_ABI) return 1;
     if (hf_streamed_f32_block_matvec(input, 3, weights, 15, output, 5, 3, 5, HF_STREAMED_F32_BLOCK_ABI) != HF_OK) return 2;
     for (int index = 0; index < 5; ++index) if (fabsf(output[index] - expected[index]) > 1e-6f) return 3;
+    if (hf_streamed_f32_block_matvec_scalar(input, 3, weights, 15, output, 5, 3, 5, HF_STREAMED_F32_BLOCK_ABI) != HF_OK) return 8;
+    for (int index = 0; index < 5; ++index) if (fabsf(output[index] - expected[index]) > 1e-6f) return 9;
     if (hf_streamed_f32_block_matvec(input, 2, weights, 15, output, 5, 3, 5, HF_STREAMED_F32_BLOCK_ABI) != HF_BUFFER_TOO_SMALL) return 4;
     if (hf_streamed_f32_block_matvec(input, 3, weights, 15, output, 5, 3, 5, HF_STREAMED_F32_BLOCK_ABI + 1u) != HF_UNSUPPORTED_ABI) return 5;
     { const float invalid[] = {NAN, -2.0f, 0.5f}; if (hf_streamed_f32_block_matvec(invalid, 3, weights, 15, output, 5, 3, 5, HF_STREAMED_F32_BLOCK_ABI) != HF_INVALID_ARGUMENT) return 6; }

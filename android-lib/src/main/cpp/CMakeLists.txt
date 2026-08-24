@@ -42,6 +42,7 @@ set(HF_ROOT "${CMAKE_CURRENT_LIST_DIR}/../../../..")
 
 set(HF_RUNTIME_SOURCES
     "${HF_ROOT}/nibbleflow_kernel.c"
+    "${HF_ROOT}/holy_fitra_streamed_neon.c"
     "${HF_ROOT}/nibbleflow_android.cpp"
     "${HF_ROOT}/holy_fitra_dispatch.cpp"
     "${HF_ROOT}/holy_fitra_android_topology.cpp"
@@ -57,6 +58,7 @@ set(HF_NIBBLEFLOW_SOURCES
 
 set(HF_BENCHMARK_SOURCES
     "${HF_ROOT}/nibbleflow_kernel.c"
+    "${HF_ROOT}/holy_fitra_streamed_neon.c"
     "${HF_ROOT}/holy_fitra_ragged_kernel.c"
     "${HF_ROOT}/holy_fitra_ragged_scheduler.cpp"
     "${HF_ROOT}/holy_fitra_dispatch.cpp"

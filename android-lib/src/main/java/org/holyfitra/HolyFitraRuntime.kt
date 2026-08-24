@@ -130,6 +130,17 @@ class HolyFitraRuntime private constructor(private val nativeHandle: Long) : Aut
             return directBytes(Math.multiplyExact(count, Float.SIZE_BYTES))
         }
 
+        /** Runs one verified row-major float32 [rows, columns] streamed weight block synchronously. */
+        fun streamedBlockMatmul(input: ByteBuffer, weights: ByteBuffer, output: ByteBuffer, rows: Int, columns: Int, scalarOnly: Boolean = false) {
+            require(input.isDirect && weights.isDirect && output.isDirect) { "streamed block buffers must be direct" }
+            require(rows in 1..8192 && columns in 1..512) { "streamed block dimensions are outside the native safety bounds" }
+            val requiredWeights = Math.multiplyExact(rows.toLong(), columns.toLong()) * Float.SIZE_BYTES
+            require(input.capacity().toLong() >= rows.toLong() * Float.SIZE_BYTES && weights.capacity().toLong() >= requiredWeights && output.capacity().toLong() >= columns.toLong() * Float.SIZE_BYTES) { "streamed block buffers are too small" }
+            check(nativeStreamedBlockMatmul(input, weights, output, rows, columns, scalarOnly) == Status.OK.id) { "streamed block native dispatch failed" }
+        }
+
+        fun streamedBlockHasNeon(): Boolean = nativeStreamedBlockHasNeon()
+
         private external fun nativeCreate(packed: ByteBuffer, scales: ByteBuffer, bias: ByteBuffer?, inDim: Int, outDim: Int, groupSize: Int, queueCapacity: Int, pinThreads: Boolean): Long
         private external fun nativeClose(nativeHandle: Long)
         private external fun nativeSubmitMatvec(nativeHandle: Long, input: ByteBuffer, output: ByteBuffer, coreClass: Int, priority: Int, deadlineNs: Long): Long
@@ -139,5 +150,7 @@ class HolyFitraRuntime private constructor(private val nativeHandle: Long) : Aut
         private external fun nativeDestroyRequest(requestHandle: Long)
         private external fun nativeSetThermal(nativeHandle: Long, thermalState: Int)
         private external fun nativeStats(nativeHandle: Long): LongArray
+        private external fun nativeStreamedBlockMatmul(input: ByteBuffer, weights: ByteBuffer, output: ByteBuffer, rows: Int, columns: Int, scalarOnly: Boolean): Int
+        private external fun nativeStreamedBlockHasNeon(): Boolean
     }
 }

@@ -34,6 +34,7 @@ class MainActivity : Activity() {
     private lateinit var result: TextView
     private lateinit var quickButton: Button
     private lateinit var sustainedButton: Button
+    private lateinit var streamedButton: Button
     private lateinit var exportButton: Button
     private var lastReport: String? = null
 
@@ -71,10 +72,12 @@ class MainActivity : Activity() {
 
         quickButton = actionButton(getString(R.string.run_quick_check)) { runBenchmark(sustained = false) }
         sustainedButton = actionButton(getString(R.string.run_sustained_check)) { runBenchmark(sustained = true) }
+        streamedButton = actionButton("Run streamed scalar vs NEON") { runStreamedBlockBenchmark() }
         exportButton = actionButton(getString(R.string.export_report)) { exportReport() }
         exportButton.isEnabled = false
         root.addView(quickButton, matchParams(bottom = 10))
         root.addView(sustainedButton, matchParams(bottom = 10))
+        root.addView(streamedButton, matchParams(bottom = 10))
         root.addView(exportButton, matchParams(bottom = 18))
 
         result = label("No result yet.", 14f, R.color.hf_text_muted)
@@ -133,6 +136,39 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun runStreamedBlockBenchmark() {
+        if (!running.compareAndSet(false, true)) return
+        setButtonsEnabled(false)
+        status.text = "Running streamed scalar versus runtime-selected block math… Keep device conditions consistent."
+        status.setTextColor(getColorCompat(R.color.hf_warning))
+        executor.execute {
+            try {
+                val benchmark = HolyFitraBenchmark().runStreamedBlockSync(
+                    HolyFitraBenchmark.StreamedBlockConfig(rows = 256, columns = 128, warmupIterations = 30, measuredIterations = 300, seed = 12345L, thermalSamplePeriod = 1)
+                )
+                val report = streamedEnvelope(benchmark)
+                saveReport(report)
+                runOnUiThread {
+                    lastReport = report
+                    status.text = if (benchmark.completed) "Streamed block comparison completed on this device." else "Streamed block comparison returned an incomplete result."
+                    status.setTextColor(if (benchmark.completed) getColorCompat(R.color.hf_success) else getColorCompat(R.color.hf_error))
+                    result.text = formatStreamedResult(benchmark)
+                    exportButton.isEnabled = benchmark.completed
+                    setButtonsEnabled(true)
+                }
+            } catch (error: Throwable) {
+                runOnUiThread {
+                    status.text = "Streamed block comparison failed: ${error.message ?: error::class.java.simpleName}"
+                    status.setTextColor(getColorCompat(R.color.hf_error))
+                    result.text = "No new result was saved. The previous successful result remains available if one exists."
+                    setButtonsEnabled(true)
+                }
+            } finally {
+                running.set(false)
+            }
+        }
+    }
+
     private fun capabilityText(): String {
         val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "unknown"
         val neon = try { NibbleFlow.hasNeon().toString() } catch (_: Throwable) { "unavailable" }
@@ -159,11 +195,38 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun formatStreamedResult(benchmark: HolyFitraBenchmark.StreamedBlockResult): String {
+        val json = benchmark.json
+        val scalar = json.optJSONObject("scalar")?.optJSONObject("latency_ms")
+        val optimized = json.optJSONObject("optimized")?.optJSONObject("latency_ms")
+        val thermal = json.optJSONObject("thermal")
+        return buildString {
+            appendLine("STREAMED BLOCK COMPARISON")
+            appendLine("Runtime-selected backend: ${benchmark.optimizedBackend}; NEON reported: ${benchmark.hasNeon}")
+            appendLine("Block: ${json.optInt("rows")} × ${json.optInt("columns")}")
+            appendLine("Scalar p50: ${number(scalar?.optDouble("p50"))} ms")
+            appendLine("Optimized p50: ${number(optimized?.optDouble("p50"))} ms")
+            appendLine("Scalar/optimized mean speedup: ${number(benchmark.speedupScalarOverOptimized)}×")
+            appendLine("Numerical comparison: ${if (benchmark.correctnessPass) "pass" else "failed"}")
+            appendLine("Thermal signal: ${if (benchmark.thermalThrottleDetected) "detected" else "not detected by available sensors"}")
+            appendLine("Maximum sampled temperature: ${number(thermal?.optDouble("max_temp_c"))} °C")
+            appendLine("Evidence note: this is a device-local comparison, not a universal performance claim.")
+        }
+    }
+
     private fun envelope(benchmark: HolyFitraBenchmark.Result, sustained: Boolean): String = JSONObject()
         .put("schema", "holyfitra.workbench.report.v1")
         .put("created_at", now())
         .put("device", capabilityText())
         .put("sustained", sustained)
+        .put("benchmark", benchmark.json)
+        .toString(2)
+
+    private fun streamedEnvelope(benchmark: HolyFitraBenchmark.StreamedBlockResult): String = JSONObject()
+        .put("schema", "holyfitra.workbench.report.v1")
+        .put("created_at", now())
+        .put("device", capabilityText())
+        .put("benchmark_kind", "streamed_block_scalar_vs_optimized")
         .put("benchmark", benchmark.json)
         .toString(2)
 
@@ -206,6 +269,7 @@ class MainActivity : Activity() {
     private fun setButtonsEnabled(enabled: Boolean) {
         quickButton.isEnabled = enabled
         sustainedButton.isEnabled = enabled
+        streamedButton.isEnabled = enabled
         exportButton.isEnabled = enabled && lastReport != null
     }
 

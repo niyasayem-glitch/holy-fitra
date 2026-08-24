@@ -33,6 +33,16 @@ extern "C" {
 
 uint32_t hf_streamed_f32_block_abi(void);
 int hf_streamed_f32_block_has_neon(void);
+hf_status hf_streamed_f32_block_matvec_scalar(
+    const float *input,
+    size_t input_count,
+    const float *weights,
+    size_t weight_count,
+    float *output,
+    size_t output_count,
+    int32_t rows,
+    int32_t columns,
+    uint32_t abi_version);
 hf_status hf_streamed_f32_block_matvec(
     const float *input,
     size_t input_count,

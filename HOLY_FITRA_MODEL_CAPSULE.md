@@ -51,6 +51,8 @@ The streamed evaluator defaults to the host NumPy reference backend for its bloc
 
 The source is part of the Android CMake runtime and the canonical native gate builds its host C regression, runs address/undefined-behavior sanitizer checks during development validation, and cross-compiles an Android ARM64 object. The current evidence is host numerical equivalence plus an AArch64 object/assembly inspection that shows the emitted NEON instructions. It is **not** a measurement of device latency, throughput, thermal behavior, JNI integration, or correctness on a physical ARM64 device.
 
+The Android runtime now exposes `HolyFitraRuntime.streamedBlockMatmul(...)` for one direct-buffer float32 block row. It verifies directness and Kotlin-side capacity bounds before JNI repeats direct-buffer alignment/capacity validation and calls either the explicit scalar baseline or runtime-selected NEON path. This is a direct block primitive for a caller that already controls authenticated capsule loading; it does not move HMAC verification or stream-index trust decisions into JNI.
+
 ## Export example
 
 ```python

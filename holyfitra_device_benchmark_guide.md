@@ -38,6 +38,8 @@ The Kotlin class loads it with:
 System.loadLibrary("holyfitra_benchmark")
 ```
 
+The same library also contains the streamed float32 block comparison path and the scalar baseline. Android packaging therefore builds `holy_fitra_streamed_neon.c` into both `holyfitra_runtime` and `holyfitra_benchmark`.
+
 ## Kotlin Usage
 
 The benchmark must run away from the Android main thread. The provided API uses `Dispatchers.Default`:
@@ -62,6 +64,26 @@ Log.i("HolyFitra", "p99=${result.p99Ms} ms")
 ```
 
 Do not run the benchmark on the UI thread. The workload is intentionally sustained and may heat the device.
+
+## Streamed block scalar-versus-NEON campaign
+
+`HolyFitraBenchmark.runStreamedBlockSync(...)` compares an explicit scalar float32 block baseline with the runtime-selected implementation. On a physical AArch64 device that implementation is the guarded NEON path; on a non-AArch64 host it remains the scalar fallback. Each measured iteration runs both paths in pseudo-randomized order, verifies their output against a tolerance scaled to the scalar reference magnitude, and records separate latency distributions.
+
+```kotlin
+val result = benchmark.runStreamedBlockSync(
+    HolyFitraBenchmark.StreamedBlockConfig(
+        rows = 256,
+        columns = 128,
+        warmupIterations = 30,
+        measuredIterations = 300,
+        thermalSamplePeriod = 1,
+    )
+)
+```
+
+The result uses `holyfitra.streamed-block-benchmark/v1` and includes `scalar.latency_ms`, `optimized.latency_ms`, `speedup_scalar_over_optimized`, `correctness`, `has_neon`, `optimized_backend`, and the existing thermal signals. A completed report requires all paired iterations, zero failures, and a passing numerical comparison. Repeat every shape at least three times under both cool and sustained conditions; retain raw JSON rather than reporting a single best speedup.
+
+> No Android device is connected to the current development environment. The implementation and report schema are ready for a device run, but this repository currently contains no new physical-device timing, thermal, or NEON-throughput result.
 
 ## Measurement Protocol
 

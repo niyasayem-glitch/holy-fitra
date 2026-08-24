@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "holy_fitra_runtime.h"
+#include "holy_fitra_streamed_neon.h"
 
 namespace {
 
@@ -292,6 +293,30 @@ extern "C" JNIEXPORT jlong JNICALL Java_org_holyfitra_HolyFitraRuntime_nativeCre
         return 0;
     }
     return static_cast<jlong>(token);
+}
+
+extern "C" JNIEXPORT jint JNICALL Java_org_holyfitra_HolyFitraRuntime_nativeStreamedBlockMatmul(
+    JNIEnv *env, jclass, jobject input, jobject weights, jobject output, jint rows, jint columns, jboolean scalar_only) {
+    void *input_address = nullptr;
+    void *weight_address = nullptr;
+    void *output_address = nullptr;
+    size_t input_elements = 0;
+    size_t weight_elements = 0;
+    size_t output_elements = 0;
+    if (!direct_buffer(env, input, "input must be a direct float buffer", sizeof(float), alignof(float), &input_address, &input_elements)) return HF_INVALID_ARGUMENT;
+    if (!direct_buffer(env, weights, "weights must be a direct float buffer", sizeof(float), alignof(float), &weight_address, &weight_elements)) return HF_INVALID_ARGUMENT;
+    if (!direct_buffer(env, output, "output must be a direct float buffer", sizeof(float), alignof(float), &output_address, &output_elements)) return HF_INVALID_ARGUMENT;
+    const hf_status status = scalar_only == JNI_TRUE
+        ? hf_streamed_f32_block_matvec_scalar(static_cast<const float *>(input_address), input_elements, static_cast<const float *>(weight_address), weight_elements, static_cast<float *>(output_address), output_elements, rows, columns, HF_STREAMED_F32_BLOCK_ABI)
+        : hf_streamed_f32_block_matvec(static_cast<const float *>(input_address), input_elements, static_cast<const float *>(weight_address), weight_elements, static_cast<float *>(output_address), output_elements, rows, columns, HF_STREAMED_F32_BLOCK_ABI);
+    if (status != HF_OK) {
+        throw_exception(env, status == HF_INVALID_ARGUMENT || status == HF_BUFFER_TOO_SMALL ? "java/lang/IllegalArgumentException" : "java/lang/IllegalStateException", "streamed float32 block dispatch rejected its direct buffers or dimensions");
+    }
+    return static_cast<jint>(status);
+}
+
+extern "C" JNIEXPORT jboolean JNICALL Java_org_holyfitra_HolyFitraRuntime_nativeStreamedBlockHasNeon(JNIEnv *, jclass) {
+    return hf_streamed_f32_block_has_neon() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL Java_org_holyfitra_HolyFitraRuntime_nativeClose(JNIEnv *env, jclass, jlong native_handle) {

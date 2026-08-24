@@ -60,12 +60,25 @@ int hf_streamed_f32_block_has_neon(void) {
 #endif
 }
 
-hf_status hf_streamed_f32_block_matvec(const float *input, size_t input_count, const float *weights, size_t weight_count, float *output, size_t output_count, int32_t rows, int32_t columns, uint32_t abi_version) {
+static hf_status validate_block(const float *input, size_t input_count, const float *weights, size_t weight_count, float *output, size_t output_count, int32_t rows, int32_t columns, uint32_t abi_version) {
     size_t elements = 0;
     if (abi_version != HF_STREAMED_F32_BLOCK_ABI) return HF_UNSUPPORTED_ABI;
     if (!input || !weights || !output || !valid_shape(rows, columns, &elements)) return HF_INVALID_ARGUMENT;
     if (input_count < (size_t)rows || weight_count < elements || output_count < (size_t)columns) return HF_BUFFER_TOO_SMALL;
     if (!finite_values(input, (size_t)rows) || !finite_values(weights, elements)) return HF_INVALID_ARGUMENT;
+    return HF_OK;
+}
+
+hf_status hf_streamed_f32_block_matvec_scalar(const float *input, size_t input_count, const float *weights, size_t weight_count, float *output, size_t output_count, int32_t rows, int32_t columns, uint32_t abi_version) {
+    const hf_status validation = validate_block(input, input_count, weights, weight_count, output, output_count, rows, columns, abi_version);
+    if (validation != HF_OK) return validation;
+    streamed_f32_block_ref(input, weights, output, rows, columns);
+    return finite_values(output, (size_t)columns) ? HF_OK : HF_KERNEL_FAILURE;
+}
+
+hf_status hf_streamed_f32_block_matvec(const float *input, size_t input_count, const float *weights, size_t weight_count, float *output, size_t output_count, int32_t rows, int32_t columns, uint32_t abi_version) {
+    const hf_status validation = validate_block(input, input_count, weights, weight_count, output, output_count, rows, columns, abi_version);
+    if (validation != HF_OK) return validation;
 #if defined(__aarch64__)
     streamed_f32_block_neon(input, weights, output, rows, columns);
 #else
