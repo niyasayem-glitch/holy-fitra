@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import subprocess
 import sys
@@ -9,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, load_project, parse_native, test_project, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, inspect_file, load_project, parse_native, test_project, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -91,6 +93,52 @@ fn main() -> i32 { return fanout(5) }
             "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nfn r(a: i32) -> i32 { return a }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r",
             "fn a(x: i32) -> i32 { return x }\nfn b(x: i64) -> i64 { return x }\nfn r(a: i32, b: i32) -> i32 { return a + b }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r",
             "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nfn r(a: i32, b: i32) -> i64 { return a + b }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce r workers=33",
+        ]
+        for source in cases:
+            with self.assertRaises(HolyFitraError):
+                validate_native(parse_native(source))
+
+    def test_builtin_parallel_hybrid_reducers_lower_and_run(self):
+        source = """
+module builtin_hybrid
+fn left(x: i32) -> i32 { return x + 1 }
+fn right(x: i32) -> i32 { return x * 3 }
+hybrid parallel fn total(x: i32) -> i32 using [left, right] reduce builtin sum workers=2
+hybrid parallel fn lowest(x: i32) -> i32 using [left, right] reduce builtin min workers=2
+fn main() -> i32 { return total(7) }
+"""
+        program = parse_native(source)
+        validate_native(program)
+        llvm = emit_llvm(program)
+        self.assertIn('"reducer":"builtin:sum"', llvm)
+        self.assertIn("add i32", llvm)
+        self.assertIn("icmp slt i32", llvm)
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / "builtin.hf"
+            source_path.write_text(source, encoding="utf-8")
+            executable = Path(temporary) / "builtin"
+            build(source_path, executable)
+            run = subprocess.run([str(executable)], timeout=5)
+            self.assertEqual(run.returncode, 29)
+
+    def test_builtin_boolean_hybrid_reducers_lower_to_boolean_operations(self):
+        source = """
+module bool_hybrid
+fn left(x: bool) -> bool { return x }
+fn right(x: bool) -> bool { return true }
+hybrid parallel fn every(x: bool) -> bool using [left, right] reduce builtin all workers=2
+hybrid parallel fn either(x: bool) -> bool using [left, right] reduce builtin any workers=2
+fn main() -> i32 { if every(true) && either(false) { return 0 } else { return 1 } }
+"""
+        llvm = emit_llvm(parse_native(source))
+        self.assertIn("and i1", llvm)
+        self.assertIn("or i1", llvm)
+
+    def test_builtin_hybrid_reducer_contracts_fail_closed(self):
+        cases = [
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nhybrid parallel fn h(x: i32) -> i32 using [a, b] reduce builtin average\n",
+            "fn a(x: bool) -> bool { return x }\nfn b(x: bool) -> bool { return x }\nhybrid parallel fn h(x: bool) -> bool using [a, b] reduce builtin sum\n",
+            "fn a(x: i32) -> i32 { return x }\nfn b(x: i32) -> i32 { return x }\nhybrid parallel fn h(x: i32) -> bool using [a, b] reduce builtin any\n",
         ]
         for source in cases:
             with self.assertRaises(HolyFitraError):
@@ -284,6 +332,19 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(project.entry.name, "main.hf")
             self.assertEqual(project.target, "x86_64-pc-linux-gnu")
             self.assertTrue((root / "tests" / "smoke.hf").is_file())
+
+    def test_hybrid_project_template_and_inspection_are_explicit(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "hybrid_project"
+            init_project(root, "hybrid_project", "hybrid")
+            self.assertTrue((root / "hybrid" / "README.md").is_file())
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(inspect_file(root), 0)
+            report = json.loads(output.getvalue())
+            self.assertEqual(report["schema"], "holyfitra.inspect/v1")
+            self.assertEqual(report["hybrids"][0]["reducer"], {"kind": "builtin", "name": "sum"})
+            self.assertEqual(report["hybrids"][0]["native_parallel_execution"], "not_proven_by_scalar_ir")
 
     def test_ai_project_template_is_explicit_and_runnable(self):
         with tempfile.TemporaryDirectory() as temporary:

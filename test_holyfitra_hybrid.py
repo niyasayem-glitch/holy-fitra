@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 import unittest
 from threading import Event
-from holyfitra_hybrid import HybridFunctionError, TypedReducer, hybrid, parallel_hybrid
+from holyfitra_hybrid import HybridFunctionError, TypedReducer, builtin_reducer, hybrid, parallel_hybrid
 
 
 def double(value: int) -> int:
@@ -30,6 +30,14 @@ def branch_fast(value: int) -> int:
 
 def branch_fail(value: int) -> int:
     raise RuntimeError(f"bad branch {value}")
+
+
+def bool_passthrough(value: bool) -> bool:
+    return value
+
+
+def bool_true(_: bool) -> bool:
+    return True
 
 
 class HolyFitraHybridTests(unittest.TestCase):
@@ -65,6 +73,17 @@ class HolyFitraHybridTests(unittest.TestCase):
             fanout(3, cancel_event=cancelled)
         with self.assertRaises(HybridFunctionError):
             parallel_hybrid("bad_workers", double, increment, reducer=reducer, max_workers=33)
+
+    def test_builtin_reducers_match_native_hybrid_names(self):
+        summed = parallel_hybrid("builtin_sum", double, increment, reducer=builtin_reducer("sum", int), max_workers=2)
+        self.assertEqual(summed(3), 10)
+        both = parallel_hybrid("builtin_all", bool_passthrough, bool_true, reducer=builtin_reducer("all", bool), max_workers=2)
+        self.assertFalse(both(False))
+        self.assertTrue(both(True))
+        with self.assertRaises(HybridFunctionError):
+            builtin_reducer("sum", bool)
+        with self.assertRaises(HybridFunctionError):
+            builtin_reducer("average", int)
 
     def test_parallel_branch_failure_is_wrapped_and_fail_closed(self):
         reducer = TypedReducer(sum, int, int, name="sum_ints")

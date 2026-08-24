@@ -12,7 +12,7 @@ holyfitra capabilities
 
 | Layer | Current capability | Evidence status |
 |---|---|---|
-| Language frontend | Modules, functions, scalar types, booleans, comparisons, logical operators, structured control flow, path-sensitive returns, constant folding, ownership modes, effects, task metadata, and hybrid functions | Host regression and compiler tests |
+| Language frontend | Modules, functions, scalar types, booleans, comparisons, logical operators, structured control flow, path-sensitive returns, constant folding, ownership modes, effects, task metadata, user-defined hybrid reducers, typed built-in hybrid reducers, and static hybrid inspection | Host regression and compiler tests; scalar native lowering only |
 | HyperIR/tensor frontend | Tensor-oriented source parsing, execution-plan lowering, quantization metadata, ragged/dynamic prefill surfaces, and structured contracts | Python contract and numerical test surfaces; not equivalent to full native tensor-language lowering |
 | Compiler | LLVM IR emission, native build/run, cache telemetry, deterministic diagnostics, package manifests, project tests, TUI, and REPL | Host and Termux-compatible gates |
 | Self-hosting | C++17 seed compiler with lexer, parser, diagnostics, module/type-checking states, structured `basic`/`selfhost-core` presets, whole-tree digest manifests, portable source bundles, and AArch64 object emission | Bootstrap State 1–9 gate plus no-Python native v1 package/bundle regression |
@@ -31,6 +31,8 @@ The project should not treat a large campaign count or a generated source file a
 ## Explicit evidence boundaries
 
 > Remote AArch64 compilation and 16 KB packaging verification do not prove ART/JNI lifecycle correctness, NEON throughput, big.LITTLE scheduling, thermal throttling behavior, or physical-device stability.
+
+> Native built-in hybrid reducers lower to deterministic branch calls followed by scalar reduction. Their `workers` value is validated metadata, not evidence that the emitted scalar LLVM has launched native threads or achieved parallel speedup.
 
 The remaining high-value proof gates are a physical ARM64 Android campaign, an Android instrumentation app that exercises library loading and JNI error paths, repeated cold/warm runs across device states, thermal and frequency capture, and comparison against a declared baseline. These are separate from the language/compiler implementation and should not be silently inferred from host results.
 

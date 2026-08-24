@@ -218,6 +218,16 @@ class HybridSpec:
     max_workers: int = 1
 
 
+_BUILTIN_HYBRID_REDUCER_PREFIX = "builtin:"
+_BUILTIN_HYBRID_REDUCERS = frozenset({"sum", "product", "min", "max", "all", "any"})
+
+
+def _builtin_hybrid_reducer(reducer: str | None) -> str | None:
+    if reducer is None or not reducer.startswith(_BUILTIN_HYBRID_REDUCER_PREFIX):
+        return None
+    return reducer[len(_BUILTIN_HYBRID_REDUCER_PREFIX):]
+
+
 @dataclass(frozen=True)
 class Function:
     name: str
@@ -409,7 +419,10 @@ class Parser:
             max_workers = 1
             if strategy == "parallel":
                 self.expect("IDENT", "reduce")
-                reducer = self.expect("IDENT").text
+                if self.accept("IDENT", "builtin"):
+                    reducer = f"{_BUILTIN_HYBRID_REDUCER_PREFIX}{self.expect('IDENT').text}"
+                else:
+                    reducer = self.expect("IDENT").text
                 if self.accept("IDENT", "workers"):
                     self.expect("OP", "=")
                     max_workers = int(self.expect("INT").text)
@@ -587,7 +600,12 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
         return cached
     functions = {function.name: function for function in program.functions}
     direct = {
-        name: ((set(function.hybrid.components) | ({function.hybrid.reducer} if function.hybrid.reducer else set())) if function.hybrid is not None else _direct_calls_block(function.body))
+        name: (
+            set(function.hybrid.components)
+            | ({function.hybrid.reducer} if function.hybrid.reducer and _builtin_hybrid_reducer(function.hybrid.reducer) is None else set())
+            if function.hybrid is not None
+            else _direct_calls_block(function.body)
+        )
         for name, function in functions.items()
     }
     for name, calls in direct.items():
@@ -719,23 +737,40 @@ def validate_native(program: Program) -> None:
                 if not _same_value_type(expected, actual):
                     raise HolyFitraError(f"hybrid function {function.name} input type does not match {first.name}")
             if function.hybrid.strategy == "parallel":
-                if function.hybrid.reducer is None or function.hybrid.reducer not in functions:
+                builtin_reducer = _builtin_hybrid_reducer(function.hybrid.reducer)
+                if function.hybrid.reducer is None:
                     raise HolyFitraError(f"parallel hybrid {function.name} requires a known reducer")
                 if function.hybrid.max_workers <= 0 or function.hybrid.max_workers > 32:
                     raise HolyFitraError(f"parallel hybrid {function.name} workers must be between 1 and 32")
-                reducer = functions[function.hybrid.reducer]
-                if reducer.hybrid is not None:
-                    raise HolyFitraError(f"parallel reducer {reducer.name} cannot itself be a hybrid")
-                if len(reducer.parameters) != len(components):
-                    raise HolyFitraError(f"reducer {reducer.name} expects {len(reducer.parameters)} branch values")
-                for component, (_, reducer_type) in zip(components, reducer.parameters):
-                    assert component is not None
-                    if component.return_type.name == "void":
-                        raise HolyFitraError(f"parallel component {component.name} must return a value")
-                    if not _same_value_type(component.return_type, reducer_type):
-                        raise HolyFitraError(f"reducer {reducer.name} expects {reducer_type.name}, got {component.return_type.name}")
-                if not _same_value_type(reducer.return_type, function.return_type):
-                    raise HolyFitraError(f"parallel hybrid {function.name} returns {reducer.return_type.name}, expected {function.return_type.name}")
+                if builtin_reducer is not None:
+                    if builtin_reducer not in _BUILTIN_HYBRID_REDUCERS:
+                        raise HolyFitraError(f"parallel hybrid {function.name} uses unknown built-in reducer {builtin_reducer}")
+                    expected_types = {"bool"} if builtin_reducer in {"all", "any"} else {"i32", "i64"}
+                    if function.return_type.name not in expected_types:
+                        expected = "bool" if expected_types == {"bool"} else "i32 or i64"
+                        raise HolyFitraError(f"built-in reducer {builtin_reducer} requires {expected} output")
+                    for component in components:
+                        assert component is not None
+                        if component.return_type.name == "void":
+                            raise HolyFitraError(f"parallel component {component.name} must return a value")
+                        if not _same_value_type(component.return_type, function.return_type):
+                            raise HolyFitraError(f"built-in reducer {builtin_reducer} requires {function.return_type.name} branch values, got {component.return_type.name}")
+                else:
+                    if function.hybrid.reducer not in functions:
+                        raise HolyFitraError(f"parallel hybrid {function.name} requires a known reducer")
+                    reducer = functions[function.hybrid.reducer]
+                    if reducer.hybrid is not None:
+                        raise HolyFitraError(f"parallel reducer {reducer.name} cannot itself be a hybrid")
+                    if len(reducer.parameters) != len(components):
+                        raise HolyFitraError(f"reducer {reducer.name} expects {len(reducer.parameters)} branch values")
+                    for component, (_, reducer_type) in zip(components, reducer.parameters):
+                        assert component is not None
+                        if component.return_type.name == "void":
+                            raise HolyFitraError(f"parallel component {component.name} must return a value")
+                        if not _same_value_type(component.return_type, reducer_type):
+                            raise HolyFitraError(f"reducer {reducer.name} expects {reducer_type.name}, got {component.return_type.name}")
+                    if not _same_value_type(reducer.return_type, function.return_type):
+                        raise HolyFitraError(f"parallel hybrid {function.name} returns {reducer.return_type.name}, expected {function.return_type.name}")
             else:
                 previous = first.return_type
                 if previous.name == "void":
@@ -869,6 +904,32 @@ class LLVMEmitter:
         self.current_lines.append(f"  {result} = call {result_type.llvm} @{name}({', '.join(rendered)})")
         return result, result_type
 
+    def emit_builtin_hybrid_reducer(self, reducer: str, values: list[tuple[str, Type]]) -> tuple[str, Type]:
+        if len(values) < 2:
+            raise HolyFitraError("built-in hybrid reducer requires at least two branch values")
+        kind = _builtin_hybrid_reducer(reducer)
+        if kind not in _BUILTIN_HYBRID_REDUCERS:
+            raise HolyFitraError(f"unknown built-in hybrid reducer {kind or reducer}")
+        current, value_type = values[0]
+        for next_value, next_type in values[1:]:
+            if not _same_value_type(value_type, next_type):
+                raise HolyFitraError("built-in hybrid reducer received mixed branch types")
+            result = self.temp()
+            if kind == "sum":
+                self.current_lines.append(f"  {result} = add {value_type.llvm} {current}, {next_value}")
+            elif kind == "product":
+                self.current_lines.append(f"  {result} = mul {value_type.llvm} {current}, {next_value}")
+            elif kind in {"all", "any"}:
+                opcode = "and" if kind == "all" else "or"
+                self.current_lines.append(f"  {result} = {opcode} i1 {current}, {next_value}")
+            else:
+                predicate = "slt" if kind == "min" else "sgt"
+                comparison = self.temp()
+                self.current_lines.append(f"  {comparison} = icmp {predicate} {value_type.llvm} {current}, {next_value}")
+                self.current_lines.append(f"  {result} = select i1 {comparison}, {value_type.llvm} {current}, {value_type.llvm} {next_value}")
+            current = result
+        return current, value_type
+
     def emit_expr(self, expression: Expr) -> tuple[str, Type]:
         if isinstance(expression, BoolLiteral):
             return ("1" if expression.value else "0"), Type("bool")
@@ -983,7 +1044,10 @@ class LLVMEmitter:
             current_arguments = [(f"%{name}", type_) for name, type_ in function.parameters]
             if function.hybrid.strategy == "parallel":
                 branch_values = [self.emit_call_values(component_name, current_arguments) for component_name in function.hybrid.components]
-                current_value, current_type = self.emit_call_values(function.hybrid.reducer or "", branch_values)
+                if _builtin_hybrid_reducer(function.hybrid.reducer) is not None:
+                    current_value, current_type = self.emit_builtin_hybrid_reducer(function.hybrid.reducer or "", branch_values)
+                else:
+                    current_value, current_type = self.emit_call_values(function.hybrid.reducer or "", branch_values)
             else:
                 current_value, current_type = self.emit_call_values(function.hybrid.components[0], current_arguments)
                 for component_name in function.hybrid.components[1:]:
@@ -1276,7 +1340,7 @@ def load_project(path: Path) -> Project:
 
 
 def init_project(root: Path, name: str | None = None, template: str = "basic") -> int:
-    if template not in {"basic", "ai"}:
+    if template not in {"basic", "ai", "hybrid"}:
         raise HolyFitraError(f"unknown project template: {template}")
     root.mkdir(parents=True, exist_ok=True)
     project_name = name or root.name
@@ -1312,6 +1376,24 @@ def init_project(root: Path, name: str | None = None, template: str = "basic") -
             "and a deterministic scalar example. Use `holyfitra ai providers` to inspect configured "
             "providers without exposing credentials. Remote generation and agent application remain "
             "explicit opt-ins; generated changes must pass `holyfitra check` and project tests.\n",
+            encoding="utf-8",
+        )
+    elif template == "hybrid":
+        source.write_text(
+            f"module {project_name}\n"
+            "fn left_score(x: i32) -> i32 effects [model] { return x + 1 }\n"
+            "fn right_score(x: i32) -> i32 effects [memory] { return x * 2 }\n"
+            "hybrid parallel fn ensemble(x: i32) -> i32 effects [model, memory] using [left_score, right_score] reduce builtin sum workers=2\n"
+            "fn main() -> i32 effects [model, memory] { return ensemble(7) }\n",
+            encoding="utf-8",
+        )
+        hybrid_dir = root / "hybrid"
+        hybrid_dir.mkdir(exist_ok=True)
+        (hybrid_dir / "README.md").write_text(
+            "# Hybrid workspace\n\n"
+            "This starter demonstrates a typed built-in `sum` reducer over two scalar branches. "
+            "`workers=2` is validated metadata for a runtime-aware host; the native scalar LLVM path emits deterministic branch calls followed by a reducer. "
+            "Run `holyfitra inspect .` to review the topology without building or executing it.\n",
             encoding="utf-8",
         )
     else:
@@ -1402,6 +1484,55 @@ def check_file(source_path: Path, frontend: Frontend | str | None = None) -> int
         return 0
     except (HolyFitraError, ValueError) as error:
         print(json.dumps({"valid": False, "error": str(error)}, indent=2))
+        return 1
+
+
+def inspect_file(source_path: Path) -> int:
+    """Render a validated native topology report without building or executing code."""
+    try:
+        project = load_project(source_path)
+        if project.frontend is not Frontend.NATIVE:
+            raise HolyFitraError("inspect currently supports the native scalar frontend; use holyfitra plan for HyperIR sources")
+        program = parse_native(read_source(project.entry))
+        validate_native(program)
+        direct_calls, effective_effects = _effect_call_graph(program)
+        hybrids = []
+        for function in program.functions:
+            if function.hybrid is None:
+                continue
+            reducer_kind = _builtin_hybrid_reducer(function.hybrid.reducer)
+            hybrids.append(
+                {
+                    "name": function.name,
+                    "mode": function.hybrid.strategy,
+                    "components": list(function.hybrid.components),
+                    "reducer": {"kind": "builtin", "name": reducer_kind} if reducer_kind else {"kind": "function", "name": function.hybrid.reducer},
+                    "max_workers": function.hybrid.max_workers,
+                    "native_lowering": "branch_calls_then_builtin_reducer" if reducer_kind else "branch_calls_then_reducer",
+                    "native_parallel_execution": "not_proven_by_scalar_ir",
+                    "effective_effects": sorted(effective_effects[function.name]),
+                }
+            )
+        print(
+            json.dumps(
+                {
+                    "schema": "holyfitra.inspect/v1",
+                    "valid": True,
+                    "project": project.name,
+                    "entry": str(project.entry),
+                    "module": program.module,
+                    "functions": len(program.functions),
+                    "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()},
+                    "hybrids": hybrids,
+                    "boundary": "Inspection parses and validates native source only; it does not build, execute, call a provider, or run a device test.",
+                },
+                indent=2,
+                sort_keys=True,
+            )
+        )
+        return 0
+    except (HolyFitraError, ValueError) as error:
+        print(json.dumps({"schema": "holyfitra.inspect/v1", "valid": False, "error": str(error)}, indent=2, sort_keys=True))
         return 1
 
 
@@ -1496,6 +1627,7 @@ def capabilities_report() -> dict[str, object]:
             "effects": ["io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"],
             "structured_tasks": "bounded_metadata_and_runtime_contracts",
             "hybrid_functions": "implemented_with_typed_reducer_metadata",
+            "built_in_hybrid_reducers": {"sum": ["i32", "i64"], "product": ["i32", "i64"], "min": ["i32", "i64"], "max": ["i32", "i64"], "all": ["bool"], "any": ["bool"]},
         },
         "ai": {
             "provider_neutral_api": "implemented",
@@ -1548,7 +1680,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     init_parser = subparsers.add_parser("init", help="create a new Holy Fitra project")
     init_parser.add_argument("directory", type=Path)
     init_parser.add_argument("--name")
-    init_parser.add_argument("--template", choices=["basic", "ai"], default="basic", help="project starter template")
+    init_parser.add_argument("--template", choices=["basic", "ai", "hybrid"], default="basic", help="project starter template")
     doctor_parser = subparsers.add_parser("doctor", help="inspect compiler, Termux, LLVM, NumPy, and Android readiness")
     subparsers.add_parser("capabilities", help="report implemented language, AI, compiler, Android, and evidence surfaces")
     agent_parser = subparsers.add_parser("agent", help="plan or apply supervised AI changes inside a project workspace")
@@ -1594,6 +1726,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_parser = subparsers.add_parser("check", help="parse and validate a Holy Fitra source file or project directory")
     check_parser.add_argument("source", type=Path)
     check_parser.add_argument("--frontend", choices=[frontend.value for frontend in Frontend], help="explicitly select the frontend")
+    inspect_parser = subparsers.add_parser("inspect", help="inspect validated native functions and hybrid topology without building or executing")
+    inspect_parser.add_argument("source", type=Path)
     plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
     plan_parser.add_argument("source", type=Path)
     plan_parser.add_argument("-o", "--output", type=Path)
@@ -1660,6 +1794,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command == "check":
             return check_file(args.source, args.frontend)
+        if args.command == "inspect":
+            return inspect_file(args.source)
         if args.command == "plan":
             return plan_file(args.source, args.output)
         if args.command == "test":

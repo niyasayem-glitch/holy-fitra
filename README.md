@@ -191,6 +191,31 @@ fn main() -> i32 {
 
 Supported effect names are `io`, `network`, `tool`, `model`, `memory`, `thermal`, `random`, and `unsafe`. Unknown or duplicate effects are rejected. Effects are preserved in compiler diagnostics and LLVM metadata; later compiler phases will enforce effect capability propagation across call graphs.
 
+### Built-in hybrid reducers and inspection
+
+Parallel hybrid functions can now use a typed built-in reducer when a user-defined reducer would add only boilerplate:
+
+```holyfitra
+fn left_score(x: i32) -> i32 { return x + 1 }
+fn right_score(x: i32) -> i32 { return x * 2 }
+
+hybrid parallel fn ensemble(x: i32) -> i32
+    using [left_score, right_score]
+    reduce builtin sum
+    workers=2
+```
+
+`sum`, `product`, `min`, and `max` accept `i32` or `i64` branch values; `all` and `any` accept `bool` branch values. Every branch must take the same input shape as the hybrid and return the hybrid output type. Existing `reduce reducer_function` declarations remain supported for custom typed reduction.
+
+Use the static inspector to review a project’s call graph, effective effects, hybrid topology, selected reducer, and lowering contract:
+
+```bash
+holyfitra init ensemble-demo --template hybrid
+holyfitra inspect ensemble-demo
+```
+
+The inspector does not build, execute, contact a provider, or run a device test. In the native scalar LLVM path, `workers` is bounded concurrency metadata and the emitted code performs deterministic branch calls followed by a reducer; it does **not** by itself prove native thread creation or physical-device parallel speedup. The separately implemented Python hybrid runtime remains the host-parallel execution surface. See [`HOLY_FITRA_NATIVE_HYBRIDS_V2.md`](HOLY_FITRA_NATIVE_HYBRIDS_V2.md) for the full grammar and boundary contract.
+
 ## Ownership and AI safety contracts
 
 Holy Fitra now exposes explicit ownership modes for function parameters:

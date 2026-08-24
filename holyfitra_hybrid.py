@@ -165,6 +165,34 @@ def parallel_hybrid(name: str, *functions: Callable[..., Any], reducer: TypedRed
     return hybrid(name, *functions, effects=effects, max_steps=max_steps, mode="parallel", reducer=reducer, max_workers=max_workers)
 
 
+def builtin_reducer(name: str, value_type: type) -> TypedReducer:
+    """Create a typed host-runtime reducer matching a native `reduce builtin` name."""
+    if not isinstance(name, str) or name not in {"sum", "product", "min", "max", "all", "any"}:
+        raise HybridFunctionError("unknown built-in reducer")
+    if not isinstance(value_type, type):
+        raise HybridFunctionError("built-in reducer requires a value type")
+    if name in {"all", "any"}:
+        if value_type is not bool:
+            raise HybridFunctionError(f"built-in reducer {name} requires bool values")
+        operation = all if name == "all" else any
+        return TypedReducer(lambda values: operation(values), bool, bool, name=f"builtin_{name}")
+    if value_type is not int:
+        raise HybridFunctionError(f"built-in reducer {name} requires int values")
+    if name == "sum":
+        operation = sum
+    elif name == "product":
+        def operation(values: tuple[Any, ...]) -> int:
+            result = 1
+            for value in values:
+                result *= value
+            return result
+    elif name == "min":
+        operation = min
+    else:
+        operation = max
+    return TypedReducer(lambda values: operation(values), int, int, name=f"builtin_{name}")
+
+
 def _valid_type_spec(value: type | tuple[type, ...]) -> bool:
     if isinstance(value, type):
         return True
@@ -180,4 +208,4 @@ def _required_arity(function: Callable[..., Any]) -> int:
     return positional - len(defaults)
 
 
-__all__ = ["HybridFunction", "HybridFunctionError", "HybridPlan", "TypedReducer", "hybrid", "parallel_hybrid"]
+__all__ = ["HybridFunction", "HybridFunctionError", "HybridPlan", "TypedReducer", "builtin_reducer", "hybrid", "parallel_hybrid"]
