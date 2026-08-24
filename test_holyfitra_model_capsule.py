@@ -12,7 +12,7 @@ from holyfitra_data import StreamingDataset
 from holyfitra_deploy import load_deployment
 from holyfitra_agent_receipt import AgentApproval, AgentBudget, AgentEvidence, AgentPlanReceipt
 from holyfitra_learning import TrainableMLP
-from holyfitra_model_capsule import CapsuleError, export_pipeline_capsule, open_model_capsule
+from holyfitra_model_capsule import CapsuleError, StreamedInferenceError, export_pipeline_capsule, open_model_capsule
 from holyfitra_qat import QuantizationQualityGate, QuantizationSpec
 from holyfitra_tensor_contracts import TensorContract, TensorResourceContract
 
@@ -48,7 +48,7 @@ class ModelCapsuleTests(unittest.TestCase):
             contract = TensorResourceContract((TensorContract("input", (1, 64), "f32", device="neon"), TensorContract("output", (1, 8), "f32", device="neon")), memory_budget_bytes=65_536, max_energy=2.0)
             digest = "c" * 64
             agent_receipt = AgentPlanReceipt(("model.predict.local",), AgentBudget(1, 6, 4, 1000), (AgentEvidence("scorer", digest), AgentEvidence("proposals", digest)), (AgentApproval("verifier", 1), AgentApproval("governor", 1)), digest)
-            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt)
+            artifact = export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, resource_contract=contract, agent_receipt=agent_receipt, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
             capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=2)
             self.assertEqual(capsule.cached_chunk_count, 0)
             deployment_chunks = tuple(name for name in capsule.chunk_names if name.startswith("deployment/"))
@@ -65,6 +65,12 @@ class ModelCapsuleTests(unittest.TestCase):
             self.assertEqual(capsule.manifest["deployment_hash"], result.artifact.digest)
             self.assertEqual(capsule.resource_contract_json()["required_kernel_abi"], 1)
             self.assertEqual(capsule.agent_receipt_json()["schema"], "holyfitra.agent-plan-receipt/v1")
+            streamed = capsule.open_streamed_mlp()
+            capsule.deployment_bytes = lambda: self.fail("streamed inference must not reassemble deployment bytes")
+            np.testing.assert_allclose(streamed.predict(inputs), expected, rtol=1e-6, atol=1e-6)
+            self.assertFalse(streamed.uses_full_reassembly)
+            self.assertGreater(streamed.loaded_block_count, 1)
+            self.assertLessEqual(capsule.cached_chunk_count, 2)
             self.assertGreater(artifact.bytes_written, result.artifact.bytes_written)
 
     def test_capsule_rejects_wrong_key_and_lazy_chunk_tampering(self):
@@ -82,6 +88,32 @@ class ModelCapsuleTests(unittest.TestCase):
             capsule_path.write_bytes(raw)
             with self.assertRaises(CapsuleError):
                 capsule.read_chunk(first_chunk)
+
+    def test_streamed_layer_inference_rejects_lazy_block_tampering(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
+            capsule = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=1)
+            stream_chunk = next(name for name in capsule.chunk_names if name.startswith("stream/hidden.weight/"))
+            raw = bytearray(capsule_path.read_bytes())
+            raw[capsule._chunks[stream_chunk].offset] ^= 1
+            capsule_path.write_bytes(raw)
+            with self.assertRaises(CapsuleError):
+                capsule.open_streamed_mlp().predict(np.zeros((1, 64), dtype=np.float32))
+
+    def test_streamed_layer_inference_rejects_unsafe_inputs_and_incomplete_stream_request(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self._pipeline_result(directory)
+            capsule_path = Path(directory) / "model.hfcaps"
+            with self.assertRaises(CapsuleError):
+                export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, deployment_signing_key=DEPLOYMENT_KEY)
+            export_pipeline_capsule(result, capsule_path, signing_key=CAPSULE_KEY, chunk_bytes=1_024, deployment_signing_key=DEPLOYMENT_KEY, stream_block_columns=16)
+            stream = open_model_capsule(capsule_path, signing_key=CAPSULE_KEY, cache_chunks=1).open_streamed_mlp()
+            with self.assertRaises(StreamedInferenceError):
+                stream.predict(np.full((1, 64), np.nan, dtype=np.float32))
+            with self.assertRaises(StreamedInferenceError):
+                stream.predict(np.zeros((1, 63), dtype=np.float32))
 
 
 if __name__ == "__main__":

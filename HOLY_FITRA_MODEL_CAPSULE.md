@@ -33,7 +33,14 @@ for payload in capsule.iter_deployment_chunks():     # verified streaming chunks
     native_runtime.consume(payload)
 ```
 
-`load_deployment()` currently reconstructs the full compact MLP deployment in memory because the current Python reference runtime needs both dense layers. The chunk iterator is the compatible bridge for future native per-layer and streaming runtimes; it does not yet make MLP inference out-of-core.
+When an exporter supplies both the authenticated deployment key and `stream_block_columns`, the capsule also contains a canonical `holyfitra.layer-stream/v1` index. `open_streamed_mlp()` evaluates the compact two-layer MLP by reading only the current float32 weight block and its bias from authenticated `stream/` chunks. It never calls `deployment_bytes()` or rebuilds the legacy deployment payload. Its cache remains bounded by `cache_chunks` and it validates finite bounded inputs, canonical layer names, canonical block coverage, per-block byte contracts, and the binding between stream and deployment digest.
+
+```python
+stream = capsule.open_streamed_mlp()
+output = stream.predict(inputs)  # hidden blocks → ReLU → output blocks
+```
+
+The streamed evaluator uses the host NumPy matrix backend for its block math. It is real out-of-core layer evaluation for the compact MLP format, but it is not yet a Holy Fitra compiler-lowered ARM64 kernel or a general transformer runtime.
 
 ## Export example
 
@@ -47,6 +54,8 @@ capsule = export_pipeline_capsule(
     chunk_bytes=65_536,
     resource_contract=resource_contract,
     agent_receipt=agent_receipt,
+    deployment_signing_key=deployment_key,
+    stream_block_columns=64,
 )
 ```
 
