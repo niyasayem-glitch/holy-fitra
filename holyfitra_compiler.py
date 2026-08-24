@@ -1536,6 +1536,116 @@ def inspect_file(source_path: Path) -> int:
         return 1
 
 
+_MOBILE_BRIDGE_FORMAT = "holyfitra.toolchain-bridge.v1"
+_MOBILE_HANDOFF_FORMAT = "holyfitra.mobile-handoff.v1"
+_MOBILE_FINGERPRINT_ALGORITHM = "fnv1a32-local-utf16"
+_MOBILE_MAX_FILES = 12
+_MOBILE_MAX_SOURCE_LENGTH = 24_000
+
+
+def _mobile_stable_fingerprint(value: str) -> str:
+    """Match the Studio's UTF-16 FNV-1a local-content fingerprint exactly."""
+    encoded = value.encode("utf-16-le", errors="surrogatepass")
+    digest = 0x811C9DC5
+    for index in range(0, len(encoded), 2):
+        code_unit = encoded[index] | (encoded[index + 1] << 8)
+        digest ^= code_unit
+        digest = (digest * 0x01000193) & 0xFFFFFFFF
+    return f"local-{digest:08x}"
+
+
+def _validate_mobile_path(path: object) -> str:
+    if not isinstance(path, str) or not path or len(path) > 72 or "\x00" in path:
+        raise HolyFitraError("mobile package file path is invalid")
+    if re.fullmatch(r"[A-Za-z0-9_./-]+", path) is None or "//" in path or "\\" in path:
+        raise HolyFitraError(f"mobile package file path does not match Studio normalization: {path!r}")
+    candidate = Path(path)
+    if candidate.is_absolute() or any(part in {"", ".", ".."} for part in candidate.parts) or path.startswith("."):
+        raise HolyFitraError(f"mobile package file path is not normalized: {path!r}")
+    if candidate.suffix not in {".hf", ".hfmd"}:
+        raise HolyFitraError(f"mobile package file has unsupported extension: {path}")
+    return path
+
+
+def mobile_inspect_package(package_path: Path) -> int:
+    """Verify a Studio bridge package and statically inspect its native scalar entry only."""
+    receipt: dict[str, object] = {
+        "schema": "holyfitra.mobile-inspect-receipt.v1",
+        "workflow": "holyfitra-mobile-bridge",
+        "boundary": "This receipt verifies a transferred Studio package and statically inspects main.hf. It does not build, execute, upload, call a provider, or run a device test.",
+    }
+    try:
+        try:
+            value = json.loads(package_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as error:
+            raise HolyFitraError(f"cannot read mobile package JSON: {error}") from error
+        if not isinstance(value, dict) or value.get("format") != _MOBILE_HANDOFF_FORMAT:
+            raise HolyFitraError("unsupported mobile handoff format")
+        bridge = value.get("toolchainBridge")
+        if not isinstance(bridge, dict) or bridge.get("format") != _MOBILE_BRIDGE_FORMAT:
+            raise HolyFitraError("mobile package does not contain a supported toolchain bridge")
+        if bridge.get("entryPath") != "main.hf" or bridge.get("fingerprintAlgorithm") != _MOBILE_FINGERPRINT_ALGORITHM:
+            raise HolyFitraError("mobile bridge entry or fingerprint contract is unsupported")
+        raw_files = value.get("files")
+        if not isinstance(raw_files, list) or not raw_files or len(raw_files) > _MOBILE_MAX_FILES:
+            raise HolyFitraError("mobile package file count is outside the supported bound")
+        files: dict[str, str] = {}
+        for item in raw_files:
+            if not isinstance(item, dict):
+                raise HolyFitraError("mobile package file record is invalid")
+            path = _validate_mobile_path(item.get("path"))
+            content = item.get("content")
+            if not isinstance(content, str) or len(content) > _MOBILE_MAX_SOURCE_LENGTH:
+                raise HolyFitraError(f"mobile package file content is outside the supported bound: {path}")
+            if path in files:
+                raise HolyFitraError(f"mobile package contains duplicate path: {path}")
+            expected_file_fingerprint = _mobile_stable_fingerprint(f"{path}\0{content}")
+            if item.get("fingerprint") != expected_file_fingerprint:
+                raise HolyFitraError(f"mobile package file fingerprint does not match: {path}")
+            files[path] = content
+        workspace_fingerprint = _mobile_stable_fingerprint("\1".join(sorted(f"{path}\0{content}" for path, content in files.items())))
+        if bridge.get("workspaceFingerprint") != workspace_fingerprint:
+            raise HolyFitraError("mobile package workspace fingerprint does not match its exact files")
+        if "main.hf" not in files:
+            raise HolyFitraError("mobile package has no main.hf entry")
+        program = parse_native(files["main.hf"])
+        validate_native(program)
+        direct_calls, effective_effects = _effect_call_graph(program)
+        hybrids = [
+            {
+                "name": function.name,
+                "mode": function.hybrid.strategy,
+                "components": list(function.hybrid.components),
+                "reducer": _builtin_hybrid_reducer(function.hybrid.reducer) or function.hybrid.reducer,
+                "max_workers": function.hybrid.max_workers,
+            }
+            for function in program.functions
+            if function.hybrid is not None
+        ]
+        receipt.update(
+            {
+                "conclusion": "success",
+                "run_id": f"mobile-inspect-{workspace_fingerprint}",
+                "summary": "Studio bridge package fingerprint matched; native scalar main.hf passed static parsing and validation.",
+                "project": value.get("projectName") if isinstance(value.get("projectName"), str) else "Unnamed Studio project",
+                "entry": "main.hf",
+                "workspace_fingerprint": workspace_fingerprint,
+                "module": program.module,
+                "functions": len(program.functions),
+                "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()},
+                "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()},
+                "hybrids": hybrids,
+                "unlinked_source_files": sorted(path for path in files if path.endswith(".hf") and path != "main.hf"),
+            }
+        )
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        return 0
+    except (HolyFitraError, ValueError) as error:
+        receipt.update({"conclusion": "failure", "valid": False, "error": str(error)})
+        print(json.dumps(receipt, indent=2, sort_keys=True))
+        return 1
+
+
 def ai_providers() -> int:
     from holyfitra_ai_api import provider_status_json
     print(json.dumps({"providers": provider_status_json()}, indent=2, sort_keys=True))
@@ -1728,6 +1838,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     check_parser.add_argument("--frontend", choices=[frontend.value for frontend in Frontend], help="explicitly select the frontend")
     inspect_parser = subparsers.add_parser("inspect", help="inspect validated native functions and hybrid topology without building or executing")
     inspect_parser.add_argument("source", type=Path)
+    mobile_inspect_parser = subparsers.add_parser("mobile-inspect", help="verify a Studio bridge package and statically inspect its main.hf entry without building or executing")
+    mobile_inspect_parser.add_argument("package", type=Path)
     plan_parser = subparsers.add_parser("plan", help="lower tensor/effect source into a HyperIR execution plan")
     plan_parser.add_argument("source", type=Path)
     plan_parser.add_argument("-o", "--output", type=Path)
@@ -1796,6 +1908,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return check_file(args.source, args.frontend)
         if args.command == "inspect":
             return inspect_file(args.source)
+        if args.command == "mobile-inspect":
+            return mobile_inspect_package(args.package)
         if args.command == "plan":
             return plan_file(args.source, args.output)
         if args.command == "test":

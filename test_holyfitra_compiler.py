@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, inspect_file, load_project, parse_native, test_project, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, inspect_file, load_project, mobile_inspect_package, parse_native, test_project, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -345,6 +345,54 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(report["schema"], "holyfitra.inspect/v1")
             self.assertEqual(report["hybrids"][0]["reducer"], {"kind": "builtin", "name": "sum"})
             self.assertEqual(report["hybrids"][0]["native_parallel_execution"], "not_proven_by_scalar_ir")
+
+    def test_mobile_bridge_package_receipt_matches_exact_studio_source(self):
+        def mobile_fingerprint(value: str) -> str:
+            digest = 0x811C9DC5
+            encoded = value.encode("utf-16-le", errors="surrogatepass")
+            for index in range(0, len(encoded), 2):
+                digest ^= encoded[index] | (encoded[index + 1] << 8)
+                digest = (digest * 0x01000193) & 0xFFFFFFFF
+            return f"local-{digest:08x}"
+
+        main_source = "module mobile_bridge\nfn main() -> i32 { return 0 }\n"
+        extra_source = "module helpers\nfn score(x: i32) -> i32 { return x + 1 }\n"
+        files = [
+            {"path": "main.hf", "content": main_source},
+            {"path": "helper.hf", "content": extra_source},
+            {"path": "README.hfmd", "content": "# Mobile bridge\n"},
+        ]
+        for file in files:
+            file["fingerprint"] = mobile_fingerprint(f"{file['path']}\0{file['content']}")
+        workspace_fingerprint = mobile_fingerprint("\1".join(sorted(f"{file['path']}\0{file['content']}" for file in files)))
+        package = {
+            "format": "holyfitra.mobile-handoff.v1",
+            "projectName": "Bridge test",
+            "files": files,
+            "toolchainBridge": {
+                "format": "holyfitra.toolchain-bridge.v1",
+                "entryPath": "main.hf",
+                "workspaceFingerprint": workspace_fingerprint,
+                "fingerprintAlgorithm": "fnv1a32-local-utf16",
+            },
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            package_path = Path(temporary) / "mobile-package.json"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(mobile_inspect_package(package_path), 0)
+            receipt = json.loads(output.getvalue())
+            self.assertEqual(receipt["schema"], "holyfitra.mobile-inspect-receipt.v1")
+            self.assertEqual(receipt["conclusion"], "success")
+            self.assertEqual(receipt["workspace_fingerprint"], workspace_fingerprint)
+            self.assertEqual(receipt["unlinked_source_files"], ["helper.hf"])
+            package["files"][0]["content"] = "module mobile_bridge\nfn main() -> i32 { return 1 }\n"
+            package_path.write_text(json.dumps(package), encoding="utf-8")
+            output = io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(mobile_inspect_package(package_path), 1)
+            self.assertIn("fingerprint does not match", json.loads(output.getvalue())["error"])
 
     def test_ai_project_template_is_explicit_and_runnable(self):
         with tempfile.TemporaryDirectory() as temporary:

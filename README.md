@@ -216,6 +216,16 @@ holyfitra inspect ensemble-demo
 
 The inspector does not build, execute, contact a provider, or run a device test. In the native scalar LLVM path, `workers` is bounded concurrency metadata and the emitted code performs deterministic branch calls followed by a reducer; it does **not** by itself prove native thread creation or physical-device parallel speedup. The separately implemented Python hybrid runtime remains the host-parallel execution surface. See [`HOLY_FITRA_NATIVE_HYBRIDS_V2.md`](HOLY_FITRA_NATIVE_HYBRIDS_V2.md) for the full grammar and boundary contract.
 
+### Mobile Studio bridge
+
+Holy Fitra Mobile Studio can prepare a bounded `holyfitra.mobile-handoff.v1` package with a `holyfitra.toolchain-bridge.v1` record. Move that JSON through an explicit user-controlled transfer path, then run:
+
+```bash
+holyfitra mobile-inspect mobile-package.json
+```
+
+The command verifies every bounded path and per-file Studio fingerprint, recomputes the workspace fingerprint, and statically parses and validates `main.hf`. It returns a `holyfitra.mobile-inspect-receipt.v1` JSON receipt with a host-linked run ID, which can be reviewed and imported into the Studio Evidence Ledger. It does **not** build, execute, upload, call a provider, or run a device test. Additional `.hf` files are retained and reported as unlinked source until the native scalar module linker is implemented. The Mobile Studio APK does not yet embed the C++ Stage-0 compiler, LLVM backend, or JNI compiler module.
+
 ## Ownership and AI safety contracts
 
 Holy Fitra now exposes explicit ownership modes for function parameters:
