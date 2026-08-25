@@ -23,6 +23,24 @@ The compiler now centralizes constant signed division in `_signed_truncating_div
 
 The campaign also exposed a pre-definition call in `nibbleflow_kernel.c`: the ARM64 branch of `nibbleflow_int4_f32_batch4` called `nibbleflow_int4_f32` before that function was declared. A prototype now precedes the batch wrapper. This is a build-correctness repair; it does not alter the kernel’s algorithm or establish device performance.
 
+## Cycle two: contextual i64 literals
+
+The native frontend already accepted `i64` values from `arg_i64`, but a bare integer literal inferred as `i32` everywhere. Consequently, ordinary code such as `value + 1`, an `i64` declaration initialized from a literal, an `i64` return literal, or a literal argument to an `i64` parameter could be rejected despite the language advertising native `i64` arithmetic.
+
+The retained change applies a literal’s type from a nearby explicit `i32` or `i64` context only. It covers typed declarations, assignments, returns, function parameters, and the other operand of an arithmetic or comparison expression. It validates the literal’s signed range for that target width. Existing variables retain their exact types: combining an `i64` variable with an `i32` variable still fails rather than silently widening either value.
+
+| Case | Result |
+|---|---|
+| `arg_i64(0, 40) + 1` stored as `i64` | Accepted and emits `add i64` |
+| Literal passed to an `i64` parameter | Accepted and emitted as `i64` |
+| `i64` function returning `42` | Accepted and emitted as `ret i64 42` |
+| `2147483648` in an `i32` context | Rejected as out of range |
+| `9223372036854775808` in an `i64` context | Rejected as out of range |
+| `2147483647 + 1` in `i32`, or `9223372036854775807 + 1` in `i64` | Rejected before LLVM emission as out of range |
+| Mixed `i64` and `i32` variables | Rejected; no implicit variable widening |
+
+The contextual-i64 program also emitted an AArch64 Android-21 object with the expected `add i64` instruction in its LLVM IR. That is a cross-compilation check only. It does not demonstrate Android Bionic linking, APK integration, or physical ARM64 execution.
+
 ## Validation record
 
 | Gate | Result | Evidence boundary |
@@ -32,6 +50,9 @@ The campaign also exposed a pre-definition call in `nibbleflow_kernel.c`: the AR
 | Native NibbleFlow host tests | Pass | Android wrapper and batch-runtime host fixtures |
 | ASan/UBSan NibbleFlow host gate | Pass | Host execution only |
 | Strict AArch64 Android-21 object | Pass | Cross-object generation and ELF architecture only; not Bionic linking or device execution |
+| Contextual-i64 compiler suite | Pass: 42 tests | Includes literal-width, range, no-widening, and executable checks |
+| Documented compiler/core suite after cycle two | Pass: 115 tests | Host compiler/runtime contracts only |
+| Contextual-i64 AArch64 Android-21 object | Pass | Emitted object only; a target-triple override warning was emitted by Clang |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

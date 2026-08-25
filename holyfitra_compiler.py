@@ -566,12 +566,36 @@ def _same_value_type(left: Type, right: Type) -> bool:
     return left.name == right.name
 
 
+def _integer_literal_type(value: int, expected: Type | None = None) -> Type:
+    target = expected.name if expected is not None and expected.name in {"i32", "i64"} else "i32"
+    width = 32 if target == "i32" else 64
+    minimum = -(2 ** (width - 1))
+    maximum = 2 ** (width - 1) - 1
+    if not minimum <= value <= maximum:
+        raise HolyFitraError(f"integer literal {value} does not fit {target}")
+    return Type(target)
+
+
 def _signed_truncating_division(left: int, right: int) -> int:
     """Return the signed integer quotient with LLVM `sdiv` truncation semantics."""
     if right == 0:
         raise HolyFitraError("division by zero in constant expression")
     quotient = abs(left) // abs(right)
     return -quotient if (left < 0) != (right < 0) else quotient
+
+
+def _constant_integer_binary(operator: str, left: int, right: int, result_type: Type) -> int:
+    operations = {
+        "+": lambda: left + right,
+        "-": lambda: left - right,
+        "*": lambda: left * right,
+        "/": lambda: _signed_truncating_division(left, right),
+    }
+    if operator not in operations:
+        raise HolyFitraError(f"unsupported constant integer operator {operator}")
+    value = operations[operator]()
+    _integer_literal_type(value, result_type)
+    return value
 
 
 def _direct_calls_expression(expr: Expr) -> set[str]:
@@ -664,18 +688,26 @@ def _function_map(program: Program) -> dict[str, Function]:
     return functions
 
 
-def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[str, Function]) -> Type:
+def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[str, Function], expected: Type | None = None) -> Type:
     if isinstance(expr, BoolLiteral):
         return Type("bool")
     if isinstance(expr, IntLiteral):
-        return Type("i32")
+        return _integer_literal_type(expr.value, expected)
     if isinstance(expr, NameExpr):
         if expr.name not in variables:
             raise HolyFitraError(f"unknown value {expr.name}")
         return variables[expr.name]
     if isinstance(expr, BinaryExpr):
-        left = _infer_expression(expr.left, variables, functions)
-        right = _infer_expression(expr.right, variables, functions)
+        numeric_expected = expected if expected is not None and expected.name in {"i32", "i64"} else None
+        if isinstance(expr.left, IntLiteral) and not isinstance(expr.right, IntLiteral):
+            right = _infer_expression(expr.right, variables, functions)
+            left = _infer_expression(expr.left, variables, functions, right)
+        elif isinstance(expr.right, IntLiteral) and not isinstance(expr.left, IntLiteral):
+            left = _infer_expression(expr.left, variables, functions)
+            right = _infer_expression(expr.right, variables, functions, left)
+        else:
+            left = _infer_expression(expr.left, variables, functions, numeric_expected)
+            right = _infer_expression(expr.right, variables, functions, left if isinstance(expr.right, IntLiteral) else numeric_expected)
         if not _same_value_type(left, right):
             raise HolyFitraError(f"operator {expr.operator} requires matching types, got {left.name} and {right.name}")
         if expr.operator in {"&&", "||"}:
@@ -688,6 +720,8 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
             return Type("bool")
         if left.name not in {"i32", "i64"}:
             raise HolyFitraError(f"native arithmetic currently supports i32 and i64, not {left.name}")
+        if isinstance(expr.left, IntLiteral) and isinstance(expr.right, IntLiteral):
+            _constant_integer_binary(expr.operator, expr.left.value, expr.right.value, left)
         return left
     if isinstance(expr, CallExpr):
         if expr.name in _NATIVE_INPUT_BUILTINS:
@@ -707,7 +741,7 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
         if len(expr.arguments) != len(function.parameters):
             raise HolyFitraError(f"function {expr.name} expects {len(function.parameters)} arguments")
         for argument, (_, parameter_type) in zip(expr.arguments, function.parameters):
-            actual = _infer_expression(argument, variables, functions)
+            actual = _infer_expression(argument, variables, functions, parameter_type)
             if not _same_value_type(actual, parameter_type):
                 raise HolyFitraError(f"argument to {expr.name} requires {parameter_type.name}, got {actual.name}")
         return function.return_type
@@ -834,7 +868,7 @@ def validate_native(program: Program) -> None:
                 if isinstance(statement, LetStmt):
                     if statement.name in declared_names:
                         raise HolyFitraError(f"duplicate declaration {statement.name}")
-                    actual = _infer_expression(statement.value, scope, functions)
+                    actual = _infer_expression(statement.value, scope, functions, statement.type)
                     if statement.type is not None and not _same_value_type(actual, statement.type):
                         raise HolyFitraError(f"let {statement.name} declares {statement.type.name} but receives {actual.name}")
                     scope[statement.name] = statement.type or actual
@@ -846,8 +880,8 @@ def validate_native(program: Program) -> None:
                         raise HolyFitraError(f"unknown value {statement.name}")
                     if statement.name not in mutable_names:
                         raise HolyFitraError(f"cannot assign to immutable value {statement.name}")
-                    actual = _infer_expression(statement.value, scope, functions)
                     expected = scope[statement.name]
+                    actual = _infer_expression(statement.value, scope, functions, expected)
                     if not _same_value_type(actual, expected):
                         raise HolyFitraError(f"assignment to {statement.name} requires {expected.name}, got {actual.name}")
                 elif isinstance(statement, ReturnStmt):
@@ -858,7 +892,7 @@ def validate_native(program: Program) -> None:
                     else:
                         if statement.value is None:
                             raise HolyFitraError(f"function {function.name} must return {function.return_type.name}")
-                        actual = _infer_expression(statement.value, scope, functions)
+                        actual = _infer_expression(statement.value, scope, functions, function.return_type)
                         if not _same_value_type(actual, function.return_type):
                             raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
                 elif isinstance(statement, IfStmt):
@@ -1098,11 +1132,11 @@ class LLVMEmitter:
             current = result
         return current, value_type
 
-    def emit_expr(self, expression: Expr) -> tuple[str, Type]:
+    def emit_expr(self, expression: Expr, expected: Type | None = None) -> tuple[str, Type]:
         if isinstance(expression, BoolLiteral):
             return ("1" if expression.value else "0"), Type("bool")
         if isinstance(expression, IntLiteral):
-            return str(expression.value), Type("i32")
+            return str(expression.value), _integer_literal_type(expression.value, expected)
         if isinstance(expression, NameExpr):
             if expression.name not in self.variables:
                 raise HolyFitraError(f"unknown value {expression.name}")
@@ -1114,14 +1148,17 @@ class LLVMEmitter:
             if isinstance(expression.left, (IntLiteral, BoolLiteral)) and isinstance(expression.right, (IntLiteral, BoolLiteral)):
                 left_value = expression.left.value
                 right_value = expression.right.value
+                result_type = _integer_literal_type(left_value, expected) if isinstance(expression.left, IntLiteral) else Type("bool")
+                if isinstance(expression.right, IntLiteral):
+                    _integer_literal_type(right_value, result_type)
                 if expression.operator == "+":
-                    return str(left_value + right_value), Type("i32")
+                    return str(_constant_integer_binary("+", left_value, right_value, result_type)), result_type
                 if expression.operator == "-":
-                    return str(left_value - right_value), Type("i32")
+                    return str(_constant_integer_binary("-", left_value, right_value, result_type)), result_type
                 if expression.operator == "*":
-                    return str(left_value * right_value), Type("i32")
+                    return str(_constant_integer_binary("*", left_value, right_value, result_type)), result_type
                 if expression.operator == "/":
-                    return str(_signed_truncating_division(left_value, right_value)), Type("i32")
+                    return str(_constant_integer_binary("/", left_value, right_value, result_type)), result_type
                 if expression.operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                     outcomes = {"==": left_value == right_value, "!=": left_value != right_value, "<": left_value < right_value, "<=": left_value <= right_value, ">": left_value > right_value, ">=": left_value >= right_value, "&&": bool(left_value and right_value), "||": bool(left_value or right_value)}
                     return ("1" if outcomes[expression.operator] else "0"), Type("bool")
@@ -1149,8 +1186,16 @@ class LLVMEmitter:
                 self.current_lines.append(f"{merge_label}:")
                 self.current_lines.append(f"  {result} = phi i1 [ {right}, %{rhs_label} ], [ {short_value}, %{short_label} ]")
                 return result, Type("bool")
-            left, type_ = self.emit_expr(expression.left)
-            right, right_type = self.emit_expr(expression.right)
+            numeric_expected = expected if expected is not None and expected.name in {"i32", "i64"} else None
+            if isinstance(expression.left, IntLiteral) and not isinstance(expression.right, IntLiteral):
+                right, right_type = self.emit_expr(expression.right)
+                left, type_ = self.emit_expr(expression.left, right_type)
+            elif isinstance(expression.right, IntLiteral) and not isinstance(expression.left, IntLiteral):
+                left, type_ = self.emit_expr(expression.left)
+                right, right_type = self.emit_expr(expression.right, type_)
+            else:
+                left, type_ = self.emit_expr(expression.left, numeric_expected)
+                right, right_type = self.emit_expr(expression.right, type_ if isinstance(expression.right, IntLiteral) else numeric_expected)
             if not _same_value_type(type_, right_type):
                 raise HolyFitraError("binary operands have different types")
             if expression.operator in {"==", "!=", "<", "<=", ">", ">="}:
@@ -1186,7 +1231,7 @@ class LLVMEmitter:
                 raise HolyFitraError(f"function {expression.name} expects {len(function.parameters)} arguments")
             arguments: list[tuple[str, Type]] = []
             for argument, (_, parameter_type) in zip(expression.arguments, function.parameters):
-                value, actual_type = self.emit_expr(argument)
+                value, actual_type = self.emit_expr(argument, parameter_type)
                 arguments.append((value, actual_type))
                 if not _same_value_type(actual_type, parameter_type):
                     raise HolyFitraError("call argument type mismatch")
@@ -1201,6 +1246,7 @@ class LLVMEmitter:
         self.terminated = False
         self.variables = {name: f"%{name}.addr" for name, _ in function.parameters}
         self.types = dict(function.parameters)
+        self.current_return_type = function.return_type
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
         self.current_main_uses_native_input = function.name == "main" and bool(getattr(self, "main_input_builtins", frozenset()))
         if self.current_main_uses_native_input:
@@ -1254,8 +1300,12 @@ class LLVMEmitter:
                 block_terminated = True
                 break
             if isinstance(statement, LetStmt):
-                value, value_type = self.emit_expr(statement.value)
-                local_type = statement.type or value_type
+                if statement.type is None:
+                    value, value_type = self.emit_expr(statement.value)
+                    local_type = value_type
+                else:
+                    local_type = statement.type
+                    value, value_type = self.emit_expr(statement.value, local_type)
                 address = f"%{statement.name}.addr.{self.local_counter}"
                 self.local_counter += 1
                 self.alloca_lines.append(f"  {address} = alloca {local_type.llvm}")
@@ -1265,8 +1315,8 @@ class LLVMEmitter:
             elif isinstance(statement, AssignStmt):
                 if statement.name not in self.variables:
                     raise HolyFitraError(f"unknown value {statement.name}")
-                value, value_type = self.emit_expr(statement.value)
                 expected = self.types[statement.name]
+                value, value_type = self.emit_expr(statement.value, expected)
                 if not _same_value_type(value_type, expected):
                     raise HolyFitraError(f"assignment to {statement.name} requires {expected.name}, got {value_type.name}")
                 self.current_lines.append(f"  store {expected.llvm} {value}, {expected.llvm}* {self.variables[statement.name]}")
@@ -1274,7 +1324,7 @@ class LLVMEmitter:
                 if statement.value is None:
                     self.current_lines.append("  ret void")
                 else:
-                    value, value_type = self.emit_expr(statement.value)
+                    value, value_type = self.emit_expr(statement.value, self.current_return_type)
                     self.current_lines.append(f"  ret {value_type.llvm} {value}")
                 self.terminated = True
                 block_terminated = True

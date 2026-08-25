@@ -43,6 +43,43 @@ fn main() -> i32 {
         with self.assertRaisesRegex(HolyFitraError, "division by zero"):
             emit_llvm(parse_native("fn main() -> i32 { return 1 / 0 }"))
 
+    def test_contextual_i64_literals_preserve_explicit_widths(self):
+        source = """
+module contextual_i64
+fn increment(value: i64) -> i64 { return value + 1 }
+fn literal_return() -> i64 { return 42 }
+fn main() -> i32 effects [io] {
+    var value: i64 = arg_i64(0, 40)
+    value = increment(value) + 1
+    let direct: i64 = increment(41)
+    let answer: i64 = literal_return()
+    if (value == 42) && (direct == answer) { return 0 } else { return 1 }
+}
+"""
+        program = parse_native(source)
+        validate_native(program)
+        llvm = emit_llvm(program)
+        self.assertIn("add i64", llvm)
+        self.assertIn("call i64 @increment(i64 41)", llvm)
+        self.assertIn("ret i64 42", llvm)
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / "contextual_i64.hf"
+            executable = Path(temporary) / "contextual_i64"
+            source_path.write_text(source, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(source_path, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 0)
+            self.assertEqual(subprocess.run([str(executable), "40"], timeout=5).returncode, 0)
+        for source, pattern in (
+            ("fn main() -> i32 { let value: i32 = 2147483648 return 0 }", "does not fit i32"),
+            ("fn main() -> i32 { let value: i64 = 9223372036854775808 return 0 }", "does not fit i64"),
+            ("fn main() -> i32 { let value: i32 = 2147483647 + 1 return 0 }", "does not fit i32"),
+            ("fn main() -> i32 { let value: i64 = 9223372036854775807 + 1 return 0 }", "does not fit i64"),
+            ("fn main() -> i32 { let wide: i64 = 1 let narrow: i32 = 1 return wide + narrow }", "requires matching types"),
+        ):
+            with self.assertRaisesRegex(HolyFitraError, pattern):
+                validate_native(parse_native(source))
+
     def test_hybrid_function_composes_multiple_typed_functions(self):
         source = """
 module hybrid_test
