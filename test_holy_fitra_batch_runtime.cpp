@@ -30,10 +30,20 @@ int main() {
     }
 
     hf_runtime_request *batch_request = nullptr;
+    const hf_runtime_stats before_parallel_batch = hf_runtime_get_stats(runtime);
     assert(hf_runtime_submit_matvec_batch(runtime, input.data(), batch, input_stride, output.data(), output_stride, HF_RUNTIME_CORE_ANY, HF_RUNTIME_PRIORITY_THROUGHPUT, 0, &batch_request) == HF_OK);
     assert(hf_runtime_wait(batch_request, 1000) == HF_OK);
     hf_runtime_request_destroy(batch_request);
+    const hf_runtime_stats after_parallel_batch = hf_runtime_get_stats(runtime);
+    // The host scheduler exposes at least two workers for this 16-row request,
+    // proving that the public batch handle now completes multiple bounded ranges.
+    assert(after_parallel_batch.completed >= before_parallel_batch.completed + 2);
     for (size_t row = 0; row < batch; ++row) for (int col = 0; col < out_dim; ++col) assert(std::fabs(output[row * output_stride + static_cast<size_t>(col)] - baseline[row * output_stride + static_cast<size_t>(col)]) < 1e-6f);
+
+    hf_runtime_request *single_row_request = nullptr;
+    assert(hf_runtime_submit_matvec_batch(runtime, input.data(), 1, input_stride, output.data(), output_stride, HF_RUNTIME_CORE_ANY, HF_RUNTIME_PRIORITY_THROUGHPUT, 0, &single_row_request) == HF_OK);
+    assert(hf_runtime_wait(single_row_request, 1000) == HF_OK);
+    hf_runtime_request_destroy(single_row_request);
 
     hf_runtime_request *overflow_request = nullptr;
     assert(hf_runtime_submit_matvec_batch(runtime, input.data(), SIZE_MAX, input_stride, output.data(), output_stride, HF_RUNTIME_CORE_ANY, HF_RUNTIME_PRIORITY_THROUGHPUT, 0, &overflow_request) == HF_OVERFLOW);

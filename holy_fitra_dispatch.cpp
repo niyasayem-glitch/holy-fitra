@@ -362,5 +362,6 @@ std::vector<WorkerStats> Scheduler::worker_stats() const {
     for (const auto &worker : impl_->workers) result.push_back(worker->stats);
     return result;
 }
+size_t Scheduler::worker_count() const { return impl_->workers.size(); }
 
 } // namespace holyfitra

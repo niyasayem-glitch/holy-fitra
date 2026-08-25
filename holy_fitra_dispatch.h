@@ -86,6 +86,7 @@ public:
     void shutdown();
     SchedulerStats stats() const;
     std::vector<WorkerStats> worker_stats() const;
+    size_t worker_count() const;
 
 private:
     struct Impl;

@@ -1,6 +1,7 @@
 #include "holy_fitra_runtime.h"
 #include "holy_fitra_android_topology.h"
 
+#include <algorithm>
 #include <chrono>
 #include <condition_variable>
 #include <memory>
@@ -18,8 +19,9 @@ struct hf_runtime_request {
     std::mutex mutex;
     std::condition_variable condition;
     bool done = false;
-    hf_status result = HF_KERNEL_FAILURE;
+    hf_status result = HF_OK;
     std::shared_ptr<holyfitra::CancellationToken> cancellation = std::make_shared<holyfitra::CancellationToken>();
+    size_t pending_tasks = 0;
 };
 
 struct hf_holyfitra_runtime {
@@ -65,6 +67,61 @@ static ThermalState to_thermal(int value) {
     }
 }
 
+static int status_priority(hf_status status) {
+    switch (status) {
+        case HF_OK: return 0;
+        case HF_CANCELLED: return 1;
+        case HF_DEADLINE_MISSED: return 2;
+        case HF_KERNEL_FAILURE: return 3;
+        default: return 4;
+    }
+}
+
+static void complete_request_task(hf_runtime_request *state, hf_status result) {
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        if (status_priority(result) > status_priority(state->result)) state->result = result;
+        if (state->pending_tasks > 0) --state->pending_tasks;
+        if (state->pending_tasks == 0 && !state->done) {
+            state->done = true;
+            notify = true;
+        }
+    }
+    if (notify) state->condition.notify_all();
+}
+
+static void reserve_request_tasks(hf_runtime_request *state, size_t count) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->pending_tasks += count;
+}
+
+static hf_status run_matvec_range(
+    hf_holyfitra_runtime *runtime,
+    const float *input,
+    size_t start,
+    size_t end,
+    size_t input_stride,
+    float *output,
+    size_t output_stride,
+    holyfitra::TaskContext &context) {
+    for (size_t index = start; index < end; ++index) {
+        if (context.cancelled()) return HF_CANCELLED;
+        if (context.deadline_ns != 0 && holyfitra::monotonic_time_ns() > context.deadline_ns) return HF_DEADLINE_MISSED;
+        const hf_status result = hf_nibbleflow_matvec(&runtime->model, input + index * input_stride, input_stride, output + index * output_stride, output_stride);
+        if (result != HF_OK) return result;
+    }
+    return HF_OK;
+}
+
+static hf_status submit_runtime_task(hf_holyfitra_runtime *runtime, Task task, hf_runtime_request *state) {
+    const SubmitStatus status = runtime->scheduler->submit(std::move(task));
+    if (status == SubmitStatus::Accepted) return HF_OK;
+    const hf_status result = status == SubmitStatus::Backpressure ? HF_BUFFER_TOO_SMALL : HF_KERNEL_FAILURE;
+    complete_request_task(state, result);
+    return result;
+}
+
 extern "C" uint32_t hf_runtime_abi(void) { return 1; }
 
 extern "C" hf_holyfitra_runtime *hf_runtime_create(const hf_nibbleflow_model *model, size_t queue_capacity, int pin_threads) {
@@ -100,34 +157,16 @@ extern "C" hf_status hf_runtime_submit_matvec(hf_holyfitra_runtime *runtime, con
     task.deadline_ns = deadline_ns;
     task.cancellation = state->cancellation;
     task.function = [runtime, input, input_count, output, output_count, state](holyfitra::TaskContext &context) {
-        hf_status result = context.cancelled() ? HF_CANCELLED : hf_nibbleflow_matvec(&runtime->model, input, input_count, output, output_count);
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->result = result;
-            state->done = true;
-        }
-        state->condition.notify_all();
+        complete_request_task(state, context.cancelled() ? HF_CANCELLED : hf_nibbleflow_matvec(&runtime->model, input, input_count, output, output_count));
     };
-    task.on_cancel = [state](holyfitra::TaskContext &) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->result = HF_CANCELLED;
-        state->done = true;
-        state->condition.notify_all();
-    };
-    task.on_deadline_missed = [state](holyfitra::TaskContext &) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->result = HF_DEADLINE_MISSED;
-        state->done = true;
-        state->condition.notify_all();
-    };
-    const SubmitStatus status = runtime->scheduler->submit(std::move(task));
-    if (status == SubmitStatus::Backpressure) {
+    task.on_cancel = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_CANCELLED); };
+    task.on_deadline_missed = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_DEADLINE_MISSED); };
+    task.on_failure = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_KERNEL_FAILURE); };
+    reserve_request_tasks(state, 1);
+    const hf_status submit_result = submit_runtime_task(runtime, std::move(task), state);
+    if (submit_result != HF_OK) {
         delete state;
-        return HF_BUFFER_TOO_SMALL;
-    }
-    if (status == SubmitStatus::Stopped || status == SubmitStatus::Rejected) {
-        delete state;
-        return HF_KERNEL_FAILURE;
+        return submit_result;
     }
     *request = state;
     return HF_OK;
@@ -140,52 +179,42 @@ extern "C" hf_status hf_runtime_submit_matvec_batch(hf_holyfitra_runtime *runtim
     if (input_stride < static_cast<size_t>(runtime->model.in_dim) || output_stride < static_cast<size_t>(runtime->model.out_dim)) return HF_BUFFER_TOO_SMALL;
     if (batch_count > SIZE_MAX / input_stride || batch_count > SIZE_MAX / output_stride) return HF_OVERFLOW;
     auto *state = new hf_runtime_request();
-    Task task;
-    task.core_class = to_core_class(core_class);
-    task.priority = to_priority(priority);
-    task.deadline_ns = deadline_ns;
-    task.cancellation = state->cancellation;
-    task.function = [runtime, input, batch_count, input_stride, output, output_stride, state](holyfitra::TaskContext &context) {
-        hf_status result = HF_OK;
-        for (size_t index = 0; index < batch_count; ++index) {
-            if (context.cancelled()) {
-                result = HF_CANCELLED;
-                break;
-            }
-            if (context.deadline_ns != 0 && holyfitra::monotonic_time_ns() > context.deadline_ns) {
-                result = HF_DEADLINE_MISSED;
-                break;
-            }
-            result = hf_nibbleflow_matvec(&runtime->model, input + index * input_stride, input_stride, output + index * output_stride, output_stride);
-            if (result != HF_OK) break;
+
+    // Independent rows share one public request while the existing scheduler
+    // executes only a bounded number of contiguous ranges. Small batches retain
+    // the serial shape to avoid fan-out overhead or an unproven thread claim.
+    constexpr size_t kParallelBatchMinimumRows = 4;
+    const size_t workers = runtime->scheduler->worker_count();
+    const size_t task_count = batch_count >= kParallelBatchMinimumRows && workers > 1 ? std::min(batch_count, workers) : 1;
+    const size_t base_rows = batch_count / task_count;
+    const size_t remainder = batch_count % task_count;
+    // Reserve all completion slots before the first range is submitted. A fast
+    // first worker must not make the shared request observable as complete
+    // while later ranges are still being enqueued.
+    reserve_request_tasks(state, task_count);
+    size_t begin = 0;
+    for (size_t task_index = 0; task_index < task_count; ++task_index) {
+        const size_t end = begin + base_rows + (task_index < remainder ? 1u : 0u);
+        Task task;
+        task.core_class = to_core_class(core_class);
+        task.priority = to_priority(priority);
+        task.deadline_ns = deadline_ns;
+        task.cancellation = state->cancellation;
+        task.function = [runtime, input, begin, end, input_stride, output, output_stride, state](holyfitra::TaskContext &context) {
+            complete_request_task(state, run_matvec_range(runtime, input, begin, end, input_stride, output, output_stride, context));
+        };
+        task.on_cancel = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_CANCELLED); };
+        task.on_deadline_missed = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_DEADLINE_MISSED); };
+        task.on_failure = [state](holyfitra::TaskContext &) { complete_request_task(state, HF_KERNEL_FAILURE); };
+        const hf_status submit_result = submit_runtime_task(runtime, std::move(task), state);
+        if (submit_result != HF_OK) {
+            state->cancellation->cancel();
+            for (size_t unsent = task_index + 1; unsent < task_count; ++unsent) complete_request_task(state, HF_CANCELLED);
+            hf_runtime_wait(state, 0);
+            delete state;
+            return submit_result;
         }
-        {
-            std::lock_guard<std::mutex> lock(state->mutex);
-            state->result = result;
-            state->done = true;
-        }
-        state->condition.notify_all();
-    };
-    task.on_cancel = [state](holyfitra::TaskContext &) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->result = HF_CANCELLED;
-        state->done = true;
-        state->condition.notify_all();
-    };
-    task.on_deadline_missed = [state](holyfitra::TaskContext &) {
-        std::lock_guard<std::mutex> lock(state->mutex);
-        state->result = HF_DEADLINE_MISSED;
-        state->done = true;
-        state->condition.notify_all();
-    };
-    const SubmitStatus status = runtime->scheduler->submit(std::move(task));
-    if (status == SubmitStatus::Backpressure) {
-        delete state;
-        return HF_BUFFER_TOO_SMALL;
-    }
-    if (status == SubmitStatus::Stopped || status == SubmitStatus::Rejected) {
-        delete state;
-        return HF_KERNEL_FAILURE;
+        begin = end;
     }
     *request = state;
     return HF_OK;
