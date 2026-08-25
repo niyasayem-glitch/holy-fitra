@@ -71,6 +71,14 @@ The native scalar frontend now supports `break` and `continue` inside `while` bo
 
 The retained regression executes nested loops where the inner `continue` skips one value and the inner `break` exits another; the expected result is produced on the host. The focused compiler suite passed 44 tests, the documented compiler/core suite passed 117 tests, and the same fixture emitted an AArch64 Android-21 object. The cross-object receipt does not establish Bionic linking, APK behavior, or physical-device execution.
 
+## Cycle five: deterministic native modules
+
+The native scalar frontend now accepts top-level `import "relative/module.hf";` directives after the optional `module` declaration and before functions. Resolution is deterministic and dependency-first. A project manifest defines the import root when present; otherwise the entry file’s directory is the root. Imports must be relative `.hf` files, must resolve inside that root after canonicalization, and are bounded to a 64-file graph. Escaped paths, missing files, duplicate imports, cycles, duplicate module names, anonymous imported modules, and imported `main` functions fail closed with deterministic diagnostics.
+
+Imported functions join one explicit global native function namespace. This first module wave intentionally does not introduce module-qualified calls, selective imports, implicit visibility, package execution, dynamic loading, or device-runtime claims. The compiler incorporates each module’s canonical root-relative path and exact source into cache identity, so a transitive import change produces a new LLVM and native-artifact cache key. `check` and `inspect` receipts include the resolved dependency order; native package creation includes the resolved source modules.
+
+Validation exercised a transitive three-module call that returned the expected host status, repeated resolution with stable module order/digest/LLVM, imported-source cache invalidation, root-escape rejection, duplicate-import rejection, cycle rejection, imported-main rejection, the `check` receipt, and an AArch64 Android-21 object emission. The cross-object gate establishes neither Android Bionic linking nor physical-device execution.
+
 ## Validation record
 
 | Gate | Result | Evidence boundary |
@@ -88,6 +96,9 @@ The retained regression executes nested loops where the inner `continue` skips o
 | Loop-control focused compiler suite | Pass: 44 tests | Nested host execution plus outside-loop diagnostics |
 | Documented compiler/core suite after cycle four | Pass: 117 tests | Host compiler/runtime contracts only |
 | Loop-control AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
+| Native module focused compiler suite | Pass: 45 tests | Transitive calls, deterministic order, import-aware cache identity, and graph diagnostics |
+| Documented compiler/core suite after cycle five | Pass: 118 tests | Host compiler/runtime contracts only |
+| Imported-module AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

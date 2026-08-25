@@ -9,6 +9,7 @@ AST, LLVM IR emitter, cache, and build/run CLI for executable programs.
 Supported native source subset:
 
 module name
+import "relative/module.hf"
 fn add(a: i32, b: i32) -> i32 {
     let c = a + b
     return c
@@ -44,8 +45,9 @@ _MEMORY_COMPILE_CACHE: OrderedDict[str, tuple["Program", str]] = OrderedDict()
 _MEMORY_COMPILE_CACHE_LIMIT = 32
 _EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, set[str]]]] = OrderedDict()
 _EFFECT_GRAPH_CACHE_LIMIT = 64
-_LLVM_CACHE_SCHEMA = 3
-_NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v2"
+_LLVM_CACHE_SCHEMA = 4
+_NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v3"
+_MAX_NATIVE_IMPORTS = 64
 _ARG_I32_BUILTIN = "arg_i32"
 _ARG_I64_BUILTIN = "arg_i64"
 _NATIVE_INPUT_BUILTINS = frozenset({_ARG_I32_BUILTIN, _ARG_I64_BUILTIN})
@@ -257,6 +259,13 @@ class Function:
 class Program:
     module: str
     functions: tuple[Function, ...]
+    imports: tuple["ImportDecl", ...] = ()
+
+
+@dataclass(frozen=True)
+class ImportDecl:
+    path: str
+    line: int
 
 
 _TOKEN_RE = re.compile(
@@ -324,6 +333,18 @@ class Parser:
         module = "anonymous"
         if self.accept("IDENT", "module"):
             module = self.expect("IDENT").text
+        imports: list[ImportDecl] = []
+        while self.accept("IDENT", "import"):
+            token = self.expect("STRING")
+            raw_path = token.text[1:-1]
+            if "\\" in raw_path:
+                raise HolyFitraError(f"import path must not use escapes at {token.line}:{token.column}")
+            if not raw_path:
+                raise HolyFitraError(f"import path must not be empty at {token.line}:{token.column}")
+            self.accept("PUNCT", ";")
+            imports.append(ImportDecl(raw_path, token.line))
+            if len(imports) > _MAX_NATIVE_IMPORTS:
+                raise HolyFitraError(f"import count exceeds {_MAX_NATIVE_IMPORTS}")
         functions: list[Function] = []
         while self.current.kind != "EOF":
             if len(functions) >= MAX_FUNCTIONS and self.current.kind == "IDENT" and self.current.text in {"fn", "hybrid"}:
@@ -346,7 +367,7 @@ class Parser:
             raise HolyFitraError(f"unexpected top-level token {token.text!r} at {token.line}:{token.column}")
         if not functions:
             raise HolyFitraError("program must declare at least one function")
-        return Program(module, tuple(functions))
+        return Program(module, tuple(functions), tuple(imports))
 
     def _skip_balanced_block(self) -> None:
         if self.accept("PUNCT", "{") is None:
@@ -588,6 +609,96 @@ def parse_native(source: str) -> Program:
         return Parser(lex(source)).parse()
     except RecursionError as error:
         raise HolyFitraError(f"expression nesting exceeds {MAX_AST_DEPTH}") from error
+
+
+@dataclass(frozen=True)
+class NativeModule:
+    path: Path
+    relative_path: str
+    source: str
+    program: Program
+
+
+@dataclass(frozen=True)
+class NativeModuleGraph:
+    root: Path
+    entry: Path
+    modules: tuple[NativeModule, ...]
+    program: Program
+
+
+def _resolve_native_import(root: Path, importer: Path, raw_path: str, line: int) -> Path:
+    candidate_path = Path(raw_path)
+    if candidate_path.is_absolute() or candidate_path.suffix != ".hf":
+        raise HolyFitraError(f"import must reference a relative .hf file at line {line}: {raw_path!r}")
+    candidate = (importer.parent / candidate_path).resolve()
+    if candidate != root and root not in candidate.parents:
+        raise HolyFitraError(f"import escapes module root at line {line}: {raw_path!r}")
+    if not candidate.is_file():
+        raise HolyFitraError(f"import does not exist at line {line}: {raw_path!r}")
+    return candidate
+
+
+def resolve_native_modules(source_path: Path, root: Path | None = None) -> NativeModuleGraph:
+    entry = source_path.resolve()
+    module_root = (root or source_path.parent).resolve()
+    if entry != module_root and module_root not in entry.parents:
+        raise HolyFitraError(f"native entry escapes module root: {entry}")
+    modules: dict[Path, NativeModule] = {}
+    ordered: list[NativeModule] = []
+    active: list[Path] = []
+
+    def relative(path: Path) -> str:
+        return path.relative_to(module_root).as_posix()
+
+    def visit(path: Path) -> None:
+        if path in active:
+            cycle_start = active.index(path)
+            cycle = active[cycle_start:] + [path]
+            raise HolyFitraError(f"import cycle: {' -> '.join(relative(item) for item in cycle)}")
+        if path in modules:
+            return
+        if len(modules) + len(active) >= _MAX_NATIVE_IMPORTS:
+            raise HolyFitraError(f"module import graph exceeds {_MAX_NATIVE_IMPORTS} files")
+        source = read_source(path)
+        program = parse_native(source)
+        module = NativeModule(path, relative(path), source, program)
+        active.append(path)
+        try:
+            imported_paths: set[Path] = set()
+            for declaration in program.imports:
+                imported = _resolve_native_import(module_root, path, declaration.path, declaration.line)
+                if imported in imported_paths:
+                    raise HolyFitraError(f"duplicate import at line {declaration.line}: {declaration.path!r}")
+                imported_paths.add(imported)
+                visit(imported)
+        finally:
+            active.pop()
+        modules[path] = module
+        ordered.append(module)
+
+    visit(entry)
+    module_names: dict[str, NativeModule] = {}
+    for module in ordered:
+        if module.path != entry and module.program.module == "anonymous":
+            raise HolyFitraError(f"imported module must declare a module name: {module.relative_path}")
+        previous = module_names.get(module.program.module)
+        if previous is not None:
+            raise HolyFitraError(f"duplicate module name {module.program.module!r}: {previous.relative_path} and {module.relative_path}")
+        module_names[module.program.module] = module
+        if module.path != entry and any(function.name == "main" for function in module.program.functions):
+            raise HolyFitraError(f"imported module must not declare main: {module.relative_path}")
+    entry_program = modules[entry].program
+    combined_functions = tuple(function for module in ordered for function in module.program.functions)
+    return NativeModuleGraph(module_root, entry, tuple(ordered), Program(entry_program.module, combined_functions, entry_program.imports))
+
+
+def _native_module_root(source_path: Path) -> Path:
+    resolved = source_path.resolve()
+    for candidate in (resolved.parent, *resolved.parents):
+        if (candidate / "holyfitra.toml").is_file():
+            return candidate
+    return resolved.parent
 
 
 def _same_value_type(left: Type, right: Type) -> bool:
@@ -1471,9 +1582,10 @@ def _sha256_file(path: Path) -> str:
 
 
 def compile_native_file(source_path: Path, cache_dir: Path | None = None, target: str | None = None) -> tuple[Program, str, str]:
-    source = read_source(source_path)
+    graph = resolve_native_modules(source_path, _native_module_root(source_path))
     effective_target = _effective_target(target)
-    cache_identity = "\\0".join((source, effective_target, str(_LLVM_CACHE_SCHEMA), _NATIVE_COMPILER_ABI))
+    source_identity = "\\0".join(f"{module.relative_path}\\0{module.source}" for module in graph.modules)
+    cache_identity = "\\0".join((source_identity, effective_target, str(_LLVM_CACHE_SCHEMA), _NATIVE_COMPILER_ABI))
     digest = hashlib.sha256(cache_identity.encode("utf-8")).hexdigest()
     memory_cached = _MEMORY_COMPILE_CACHE.get(digest)
     if memory_cached is not None:
@@ -1503,7 +1615,7 @@ def compile_native_file(source_path: Path, cache_dir: Path | None = None, target
                 cache_path.unlink()
             except OSError:
                 pass
-    program = parse_native(source)
+    program = graph.program
     if llvm is None:
         llvm = emit_llvm(program, target)
         payload = json.dumps(
@@ -1600,11 +1712,13 @@ class Project:
 
 def load_project(path: Path) -> Project:
     root = path if path.is_dir() else path.parent
-    manifest = root / "holyfitra.toml"
+    manifest_root = next((candidate for candidate in (root, *root.parents) if (candidate / "holyfitra.toml").is_file()), None)
+    manifest = (manifest_root or root) / "holyfitra.toml"
     if not manifest.exists():
         if path.is_file():
             return Project(path.parent, path.stem, path, None, Frontend.NATIVE)
         raise HolyFitraError(f"no holyfitra.toml found in {root}")
+    root = manifest.parent
     try:
         document = tomllib.loads(manifest.read_text(encoding="utf-8"))
     except tomllib.TOMLDecodeError as error:
@@ -1725,8 +1839,15 @@ def package_file(source_path: Path, output: Path, version: str, target: str | No
     from hyperc_package import HyperPackageBuilder
     relative_entry = project.entry.relative_to(project.root).as_posix()
     builder = HyperPackageBuilder(project.name, version, target or project.target or _native_target())
-    builder.add_file(project.root, relative_entry, "source")
-    builder.set_metadata(compiler="holyfitra", frontend=str(project.frontend), entry=relative_entry)
+    imported_modules: list[str] = []
+    if project.frontend is Frontend.NATIVE:
+        graph = resolve_native_modules(project.entry, project.root)
+        for module in graph.modules:
+            builder.add_file(project.root, module.relative_path, "source")
+        imported_modules = [module.relative_path for module in graph.modules if module.path != graph.entry]
+    else:
+        builder.add_file(project.root, relative_entry, "source")
+    builder.set_metadata(compiler="holyfitra", frontend=str(project.frontend), entry=relative_entry, imported_modules=imported_modules)
     package = builder.build()
     secret = os.environ.get("HOLYFITRA_PACKAGE_SECRET")
     if secret:
@@ -1763,10 +1884,11 @@ def check_file(source_path: Path, frontend: Frontend | str | None = None) -> int
             result = compile_source(source)
             print(json.dumps(result, indent=2, sort_keys=True, default=str))
             return 0 if result["valid"] else 1
-        program = parse_native(source)
+        graph = resolve_native_modules(source_path, project.root)
+        program = graph.program
         validate_native(program)
         direct_calls, effective_effects = _effect_call_graph(program)
-        print(json.dumps({"valid": True, "module": program.module, "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()}, "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()}, "functions": [{"name": function.name, "effects": list(function.effects), "parameters": [{"name": name, "type": type_.name, "mode": type_.mode} for name, type_ in function.parameters], "task": ({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised} if function.task else None)} for function in program.functions]}, indent=2))
+        print(json.dumps({"valid": True, "module": program.module, "modules": [module.relative_path for module in graph.modules], "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()}, "effective_effects": {name: sorted(effects) for name, effects in effective_effects.items()}, "functions": [{"name": function.name, "effects": list(function.effects), "parameters": [{"name": name, "type": type_.name, "mode": type_.mode} for name, type_ in function.parameters], "task": ({"async": function.task.async_, "priority": function.task.priority, "deadline_ms": function.task.deadline_ms, "capacity": function.task.capacity, "cancelable": function.task.cancelable, "supervised": function.task.supervised} if function.task else None)} for function in program.functions]}, indent=2))
         return 0
     except (HolyFitraError, ValueError) as error:
         print(json.dumps({"valid": False, "error": str(error)}, indent=2))
@@ -1779,7 +1901,8 @@ def inspect_file(source_path: Path) -> int:
         project = load_project(source_path)
         if project.frontend is not Frontend.NATIVE:
             raise HolyFitraError("inspect currently supports the native scalar frontend; use holyfitra plan for HyperIR sources")
-        program = parse_native(read_source(project.entry))
+        graph = resolve_native_modules(project.entry, project.root)
+        program = graph.program
         validate_native(program)
         direct_calls, effective_effects = _effect_call_graph(program)
         hybrids = []
@@ -1807,6 +1930,7 @@ def inspect_file(source_path: Path) -> int:
                     "project": project.name,
                     "entry": str(project.entry),
                     "module": program.module,
+                    "modules": [module.relative_path for module in graph.modules],
                     "functions": len(program.functions),
                     "call_graph": {name: sorted(calls) for name, calls in direct_calls.items()},
                     "hybrids": hybrids,
@@ -2018,6 +2142,7 @@ def capabilities_report() -> dict[str, object]:
         "language": {
             "native_scalar_frontend": "implemented_and_host_validated",
             "native_scalar_control_flow": "if_while_break_continue_host_and_aarch64_object_validated",
+            "native_scalar_modules": "deterministic_relative_imports_host_and_aarch64_object_validated",
             "hyperir_tensor_effect_frontend": "implemented_and_contract_validated",
             "self_hosted_bootstrap_states": "states_1_to_9_validated",
             "ownership_modes": ["owned", "borrow", "borrow_mut", "shared"],

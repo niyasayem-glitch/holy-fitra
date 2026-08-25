@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, compile_native_file, emit_llvm, init_project, inspect_file, load_project, mobile_inspect_package, parse_native, test_project, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, check_file, compile_native_file, emit_llvm, init_project, inspect_file, load_project, mobile_inspect_package, package_file, parse_native, test_project, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -133,6 +133,71 @@ fn main() -> i32 {
         for keyword in ("break", "continue"):
             with self.assertRaisesRegex(HolyFitraError, f"{keyword} is only valid inside a while loop"):
                 validate_native(parse_native(f"fn main() -> i32 {{ {keyword} return 0 }}"))
+
+    def test_deterministic_native_module_imports_and_cache_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source_dir = root / "src"
+            library = source_dir / "lib"
+            library.mkdir(parents=True)
+            (root / "holyfitra.toml").write_text('[project]\nname = "modules"\nentry = "src/main.hf"\n', encoding="utf-8")
+            main = source_dir / "main.hf"
+            math = library / "math.hf"
+            transform = library / "transform.hf"
+            main.write_text(
+                'module modules\nimport "lib/math.hf";\nimport "lib/transform.hf";\nfn main() -> i32 { return transform(40) }\n',
+                encoding="utf-8",
+            )
+            math.write_text("module math\nfn increment(value: i32) -> i32 { return value + 1 }\n", encoding="utf-8")
+            transform.write_text('module transform\nimport "math.hf";\nfn transform(value: i32) -> i32 { return increment(value) + 1 }\n', encoding="utf-8")
+            cache = root / "cache"
+            _MEMORY_COMPILE_CACHE.clear()
+            program, llvm, digest = compile_native_file(main, cache_dir=cache)
+            self.assertEqual([function.name for function in program.functions], ["increment", "transform", "main"])
+            self.assertIn("call i32 @increment", llvm)
+            _MEMORY_COMPILE_CACHE.clear()
+            repeated_program, repeated_llvm, repeated_digest = compile_native_file(main, cache_dir=cache)
+            self.assertEqual(repeated_digest, digest)
+            self.assertEqual(repeated_llvm, llvm)
+            self.assertEqual([function.name for function in repeated_program.functions], ["increment", "transform", "main"])
+            executable = root / "modules"
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(main, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 42)
+            checked = io.StringIO()
+            with contextlib.redirect_stdout(checked):
+                self.assertEqual(check_file(main), 0)
+            self.assertEqual(json.loads(checked.getvalue())["modules"], ["src/lib/math.hf", "src/lib/transform.hf", "src/main.hf"])
+            package_path = root / "modules.hfpackage"
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(package_file(main, package_path, "0.1.0"), 0)
+            package = json.loads(package_path.read_text(encoding="utf-8"))
+            self.assertEqual([item["path"] for item in package["files"]], ["src/lib/math.hf", "src/lib/transform.hf", "src/main.hf"])
+            self.assertEqual(package["metadata"]["imported_modules"], ["src/lib/math.hf", "src/lib/transform.hf"])
+            math.write_text("module math\nfn increment(value: i32) -> i32 { return value + 2 }\n", encoding="utf-8")
+            _MEMORY_COMPILE_CACHE.clear()
+            _, changed_llvm, changed_digest = compile_native_file(main, cache_dir=cache)
+            self.assertNotEqual(changed_digest, digest)
+            self.assertNotEqual(changed_llvm, llvm)
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(main, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 43)
+
+            outside = root.parent / "outside.hf"
+            outside.write_text("module outside\nfn helper() -> i32 { return 0 }\n", encoding="utf-8")
+            main.write_text('module modules\nimport "../../outside.hf";\nfn main() -> i32 { return 0 }\n', encoding="utf-8")
+            with self.assertRaisesRegex(HolyFitraError, "import escapes module root"):
+                compile_native_file(main, cache_dir=cache)
+            main.write_text('module modules\nimport "lib/math.hf";\nimport "lib/math.hf";\nfn main() -> i32 { return 0 }\n', encoding="utf-8")
+            with self.assertRaisesRegex(HolyFitraError, "duplicate import"):
+                compile_native_file(main, cache_dir=cache)
+            main.write_text('module modules\nimport "lib/transform.hf";\nfn main() -> i32 { return 0 }\n', encoding="utf-8")
+            transform.write_text('module transform\nimport "../main.hf";\nfn transform(value: i32) -> i32 { return value }\n', encoding="utf-8")
+            with self.assertRaisesRegex(HolyFitraError, "import cycle"):
+                compile_native_file(main, cache_dir=cache)
+            transform.write_text("module transform\nfn main() -> i32 { return 0 }\n", encoding="utf-8")
+            with self.assertRaisesRegex(HolyFitraError, "imported module must not declare main"):
+                compile_native_file(main, cache_dir=cache)
 
     def test_hybrid_function_composes_multiple_typed_functions(self):
         source = """
@@ -404,7 +469,7 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(rebuilt_llvm, expected_llvm)
             payload = json.loads(cache_path.read_text(encoding="utf-8"))
             self.assertEqual(payload["digest"], digest)
-            self.assertEqual(payload["schema"], 3)
+            self.assertEqual(payload["schema"], 4)
             self.assertEqual(payload["llvm_sha256"], hashlib.sha256(expected_llvm.encode("utf-8")).hexdigest())
 
     def test_comment_only_source_change_has_a_distinct_cache_entry(self):
