@@ -350,6 +350,45 @@ fn main() -> i32 effects [io] { return arg_i32(0, 7) }
         with self.assertRaisesRegex(HolyFitraError, "reserved"):
             validate_native(parse_native(reserved_builtin))
 
+    def test_arg_i64_bridge_accepts_signed_bounds_and_rejects_overflow(self):
+        source_text = """
+module dynamic_i64
+fn main() -> i32 effects [io] {
+    let value = arg_i64(0, -7)
+    let maximum = arg_i64(1, 9223372036854775807)
+    let minimum = arg_i64(2, -9223372036854775808)
+    let negative = arg_i64(3, -9)
+    if value == maximum { return 11 } else {
+        if value == minimum { return 12 } else {
+            if value == negative { return 13 } else { return 7 }
+        }
+    }
+}
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "main.hf"
+            executable = root / "main"
+            source.write_text(source_text, encoding="utf-8")
+            program = parse_native(source_text)
+            validate_native(program)
+            llvm = emit_llvm(program)
+            self.assertIn("define internal i64 @hf_arg_i64", llvm)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(build(source, executable), 0)
+            self.assertEqual(subprocess.run([str(executable)]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "9223372036854775807"]).returncode, 11)
+            self.assertEqual(subprocess.run([str(executable), "-9223372036854775808"]).returncode, 12)
+            self.assertEqual(subprocess.run([str(executable), "-9"]).returncode, 13)
+            self.assertEqual(subprocess.run([str(executable), "9223372036854775808"]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "-9223372036854775809"]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "12x"]).returncode, 7)
+
+    def test_arg_i64_bridge_rejects_out_of_range_fallback(self):
+        out_of_range_fallback = "fn main() -> i32 effects [io] { let value = arg_i64(0, 9223372036854775808) return 0 }"
+        with self.assertRaisesRegex(HolyFitraError, "fallback must fit i64"):
+            validate_native(parse_native(out_of_range_fallback))
+
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
         with tempfile.TemporaryDirectory() as temporary:

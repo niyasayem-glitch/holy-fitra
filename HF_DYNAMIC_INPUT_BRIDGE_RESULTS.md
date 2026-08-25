@@ -2,15 +2,16 @@
 
 ## Retained capability
 
-HF now supports a bounded native-scalar expression:
+HF now supports bounded native-scalar expressions:
 
 ```hf
 arg_i32(position, fallback)
+arg_i64(position, fallback)
 ```
 
-The bridge accepts at most eight positional decimal argv values and is available only directly in `fn main() -> i32 effects [io]`. Both operands must be i32 literals. A missing argument, malformed decimal string, trailing content, or out-of-range value produces the specified fallback. The user source remains parameterless; only a `main` that uses the builtin receives the hidden native C ABI `argc` and `argv` parameters. Existing parameterless programs keep their former ABI.
+The bridge accepts at most eight positional decimal argv values and is available only directly in `fn main() -> i32 effects [io]`. Both operands are literals and each function returns its named signed type. A missing argument, malformed decimal string, trailing content, or out-of-range value produces the specified fallback. The i64 helper accumulates in i128 so it can reject values outside `[-9223372036854775808, 9223372036854775807]` before narrowing. The user source remains parameterless; only a `main` that uses an input builtin receives the hidden native C ABI `argc` and `argv` parameters. Existing parameterless programs keep their former ABI.
 
-The emitted helper is self-contained LLVM rather than a copied parser or general process API. It rejects a user-defined `arg_i32`, does not expose filesystem, environment, shell, standard input, or network access, and preserves explicit `io` effect declaration. The compiler suite added malformed, out-of-range, negative, missing-input, compatibility, and reserved-name tests; 38 compiler tests passed.
+The emitted helpers are self-contained LLVM rather than copied parsers or a general process API. They reject user-defined builtin names, do not expose filesystem, environment, shell, standard input, or network access, and preserve explicit `io` effect declaration. The compiler suite now contains malformed, out-of-range, negative, missing-input, compatibility, reserved-name, and i64-boundary tests; all 40 compiler tests passed. The i64 signed-boundary scenario passed 20 consecutive fresh test rounds, and the existing i32 dynamic workload still passed after the extension.
 
 ## Matched host exercise
 
