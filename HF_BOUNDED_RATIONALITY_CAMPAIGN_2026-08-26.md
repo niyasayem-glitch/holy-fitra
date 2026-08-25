@@ -99,6 +99,8 @@ Validation exercised a transitive three-module call that returned the expected h
 | Native module focused compiler suite | Pass: 45 tests | Transitive calls, deterministic order, import-aware cache identity, and graph diagnostics |
 | Documented compiler/core suite after cycle five | Pass: 118 tests | Host compiler/runtime contracts only |
 | Imported-module AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
+| AI plan-review focused suite | Pass: 22 tests | Deterministic review receipt, zero-mutation rejection, provider normalization, and campaign contracts |
+| Full Holy Fitra regression suite after AI review gate | Pass: 286 tests | Host-only unit and integration contracts; no external model, Android, or device execution implied |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

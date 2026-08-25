@@ -1711,6 +1711,7 @@ class Project:
 
 
 def load_project(path: Path) -> Project:
+    requested_entry = path.resolve() if path.is_file() else None
     root = path if path.is_dir() else path.parent
     manifest_root = next((candidate for candidate in (root, *root.parents) if (candidate / "holyfitra.toml").is_file()), None)
     manifest = (manifest_root or root) / "holyfitra.toml"
@@ -1734,6 +1735,10 @@ def load_project(path: Path) -> Project:
     root_resolved = root.resolve()
     if entry != root_resolved and root_resolved not in entry.parents:
         raise HolyFitraError(f"project entry escapes project root: {entry}")
+    if requested_entry is not None:
+        if requested_entry != root_resolved and root_resolved not in requested_entry.parents:
+            raise HolyFitraError(f"requested source escapes project root: {requested_entry}")
+        entry = requested_entry
     if not entry.is_file():
         raise HolyFitraError(f"project entry does not exist: {entry}")
     return Project(root_resolved, str(name), entry, build_config.get("target"), frontend)

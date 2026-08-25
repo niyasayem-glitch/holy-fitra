@@ -119,6 +119,29 @@ class AgentPlan:
             ],
         }
 
+    @property
+    def digest(self) -> str:
+        canonical = json.dumps(self.body(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class AgentPlanReview:
+    plan_digest: str
+    accepted: bool
+    errors: tuple[str, ...]
+    write_digests: tuple[dict[str, Any], ...]
+    validation_commands: tuple[tuple[str, ...], ...]
+
+    def body(self) -> dict[str, Any]:
+        return {
+            "plan_digest": self.plan_digest,
+            "accepted": self.accepted,
+            "errors": list(self.errors),
+            "write_digests": list(self.write_digests),
+            "validation_commands": [list(command) for command in self.validation_commands],
+        }
+
 
 @dataclass(frozen=True)
 class AgentRun:
@@ -128,6 +151,7 @@ class AgentRun:
     observations: tuple[dict[str, Any], ...]
     changed_files: tuple[str, ...] = ()
     rolled_back: bool = False
+    review: AgentPlanReview | None = None
 
     def body(self) -> dict[str, Any]:
         return {
@@ -137,6 +161,7 @@ class AgentRun:
             "observations": list(self.observations),
             "changed_files": list(self.changed_files),
             "rolled_back": self.rolled_back,
+            "review": self.review.body() if self.review else None,
         }
 
 
@@ -342,8 +367,34 @@ class CodingAgent:
             raise AgentError("agent acceptance criteria must be strings")
         return AgentPlan(str(document.get("summary", "")), tuple(actions), tuple(acceptance))
 
+    def review_plan(self, plan: AgentPlan) -> AgentPlanReview:
+        errors: list[str] = []
+        write_digests: list[dict[str, Any]] = []
+        validation_commands: list[tuple[str, ...]] = []
+        last_write = -1
+        last_validation = -1
+        finish_indices: list[int] = []
+        for index, action in enumerate(plan.actions):
+            if action.kind == "write_file":
+                last_write = index
+                content = action.content.encode("utf-8")
+                write_digests.append({"path": action.path, "bytes": len(content), "sha256": hashlib.sha256(content).hexdigest()})
+            elif action.kind == "run_check":
+                last_validation = index
+                validation_commands.append(action.command)
+            elif action.kind == "finish":
+                finish_indices.append(index)
+        if len(finish_indices) > 1:
+            errors.append("AI plan contains more than one finish action")
+        if finish_indices and finish_indices[0] != len(plan.actions) - 1:
+            errors.append("AI plan finish action must be last")
+        if self.workspace.policy.require_tests_after_write and last_write >= 0 and last_validation <= last_write:
+            errors.append("AI plan writes files without a later validation command")
+        return AgentPlanReview(plan.digest, not errors, tuple(errors), tuple(write_digests), tuple(validation_commands))
+
     def inspect_plan(self, plan: AgentPlan) -> AgentRun:
-        observations: list[dict[str, Any]] = []
+        review = self.review_plan(plan)
+        observations: list[dict[str, Any]] = [{"kind": "plan_review", **review.body()}]
         for action in plan.actions:
             if action.kind == "read_file":
                 observations.append({"kind": "read_file", "path": action.path, "content": self.workspace.read(action.path)})
@@ -353,13 +404,16 @@ class CodingAgent:
                 observations.append({"kind": "run_check", "command": list(action.command), "status": "requires_apply_mode"})
             elif action.kind == "finish":
                 observations.append({"kind": "finish", "reason": action.reason})
-        return AgentRun("planned", plan.summary, plan, tuple(observations))
+        return AgentRun("planned" if review.accepted else "rejected", plan.summary, plan, tuple(observations), review=review)
 
     def apply_plan(self, goal: str, plan: AgentPlan) -> AgentRun:
         if not self.workspace.policy.allow_write or not self.workspace.policy.allow_commands:
             raise AgentError("apply mode requires both allow_write and allow_commands policy flags")
+        review = self.review_plan(plan)
+        if not review.accepted:
+            return AgentRun("rejected", goal, plan, ({"kind": "plan_review", **review.body()},), review=review)
         backups: dict[Path, bytes | None] = {}
-        observations: list[dict[str, Any]] = []
+        observations: list[dict[str, Any]] = [{"kind": "plan_review", **review.body()}]
         changed: list[str] = []
         try:
             for action in plan.actions:
@@ -386,8 +440,8 @@ class CodingAgent:
         except Exception as error:
             self._rollback(backups)
             observations.append({"kind": "rollback", "reason": str(error)})
-            return AgentRun("rolled_back", goal, plan, tuple(observations), tuple(sorted(set(changed))), True)
-        return AgentRun("applied", goal, plan, tuple(observations), tuple(sorted(set(changed))), False)
+            return AgentRun("rolled_back", goal, plan, tuple(observations), tuple(sorted(set(changed))), True, review)
+        return AgentRun("applied", goal, plan, tuple(observations), tuple(sorted(set(changed))), False, review)
 
     def run(self, goal: str, *, apply: bool = False, provider: str | None = None, model: str | None = None) -> AgentRun:
         plan = self.build_plan(goal, provider=provider, model=model)
@@ -430,4 +484,4 @@ def run_agent(root: str | os.PathLike[str], goal: str, *, apply: bool = False, i
     return agent.run(goal, apply=apply, provider=provider, model=model).body()
 
 
-__all__ = ["AgentAction", "AgentCommandRunner", "AgentError", "AgentPlan", "AgentPolicy", "AgentRun", "CodingAgent", "CommandResult", "Workspace", "run_agent"]
+__all__ = ["AgentAction", "AgentCommandRunner", "AgentError", "AgentPlan", "AgentPlanReview", "AgentPolicy", "AgentRun", "CodingAgent", "CommandResult", "Workspace", "run_agent"]

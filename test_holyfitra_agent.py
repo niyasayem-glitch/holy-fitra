@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import os
 import tempfile
@@ -94,8 +95,49 @@ class AgentTests(unittest.TestCase):
         agent = CodingAgent(workspace)
         plan = AgentPlan("write without test", (AgentAction("write_file", "src/main.hf", "module demo\nfn main() -> i32 { return 1 }\n"),))
         result = agent.apply_plan("write source", plan)
-        self.assertEqual(result.status, "rolled_back")
+        self.assertEqual(result.status, "rejected")
+        self.assertFalse(result.rolled_back)
+        self.assertIsNotNone(result.review)
         self.assertEqual(workspace.read("src/main.hf").split("return ")[1].split()[0], "0")
+        temporary.cleanup()
+
+    def test_review_rejects_write_after_last_validation_without_mutation(self) -> None:
+        temporary, workspace = self.workspace(apply=True)
+        agent = CodingAgent(workspace)
+        plan = AgentPlan(
+            "unsafe ordering",
+            (
+                AgentAction("write_file", "src/main.hf", "module demo\nfn main() -> i32 { return 1 }\n"),
+                AgentAction("run_check", command=("git", "diff", "--check")),
+                AgentAction("write_file", "src/main.hf", "module demo\nfn main() -> i32 { return 2 }\n"),
+            ),
+        )
+        result = agent.apply_plan("unsafe ordering", plan)
+        self.assertEqual(result.status, "rejected")
+        self.assertFalse(result.rolled_back)
+        self.assertIsNotNone(result.review)
+        assert result.review is not None
+        self.assertFalse(result.review.accepted)
+        self.assertIn("without a later validation command", result.review.errors[0])
+        self.assertEqual(workspace.read("src/main.hf").split("return ")[1].split()[0], "0")
+        temporary.cleanup()
+
+    def test_review_receipt_uses_digests_not_generated_write_content(self) -> None:
+        temporary, workspace = self.workspace()
+        agent = CodingAgent(workspace)
+        plan = AgentPlan(
+            "review proof",
+            (
+                AgentAction("write_file", "src/main.hf", "module demo\nfn main() -> i32 { return 7 }\n"),
+                AgentAction("run_check", command=("holyfitra", "check", "src/main.hf")),
+            ),
+        )
+        review = agent.review_plan(plan)
+        self.assertTrue(review.accepted)
+        body = review.body()
+        self.assertEqual(len(body["plan_digest"]), 64)
+        self.assertEqual(body["write_digests"][0]["path"], "src/main.hf")
+        self.assertNotIn("return 7", json.dumps(body))
         temporary.cleanup()
 
 
