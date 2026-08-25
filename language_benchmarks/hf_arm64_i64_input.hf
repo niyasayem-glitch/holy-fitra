@@ -1,0 +1,13 @@
+module hf_arm64_i64_input
+
+fn main() -> i32 effects [io] {
+    let value = arg_i64(0, -7)
+    let maximum = arg_i64(1, 9223372036854775807)
+    let minimum = arg_i64(2, -9223372036854775808)
+    let negative = arg_i64(3, -9)
+    if value == maximum { return 11 } else {
+        if value == minimum { return 12 } else {
+            if value == negative { return 13 } else { return 7 }
+        }
+    }
+}
