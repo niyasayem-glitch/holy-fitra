@@ -114,5 +114,53 @@ int main() {
         assert(failed.load(std::memory_order_relaxed) == 1);
     }
 
+    {
+        Scheduler scheduler(SchedulerConfig{1, 0, 8, false, {}, {}});
+        std::mutex mutex;
+        std::condition_variable condition;
+        bool started = false;
+        bool release = false;
+        std::vector<int> order;
+        Task blocker;
+        blocker.function = [&](TaskContext &) {
+            std::unique_lock<std::mutex> lock(mutex);
+            started = true;
+            condition.notify_all();
+            condition.wait(lock, [&] { return release; });
+        };
+        assert(scheduler.submit(std::move(blocker)) == SubmitStatus::Accepted);
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            assert(condition.wait_for(lock, std::chrono::seconds(1), [&] { return started; }));
+        }
+        const auto append = [&](int value, Priority priority, uint64_t deadline_ns) {
+            Task task;
+            task.priority = priority;
+            task.deadline_ns = deadline_ns;
+            task.function = [&, value](TaskContext &) {
+                std::lock_guard<std::mutex> lock(mutex);
+                order.push_back(value);
+                condition.notify_all();
+            };
+            assert(scheduler.submit(std::move(task)) == SubmitStatus::Accepted);
+        };
+        const uint64_t now = monotonic_time_ns();
+        append(1, Priority::Background, 0);
+        append(2, Priority::Latency, now + 2000000000ull);
+        append(3, Priority::Latency, now + 1000000000ull);
+        append(4, Priority::Interactive, 0);
+        {
+            std::lock_guard<std::mutex> lock(mutex);
+            release = true;
+        }
+        condition.notify_all();
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            assert(condition.wait_for(lock, std::chrono::seconds(1), [&] { return order.size() == 4; }));
+        }
+        scheduler.shutdown();
+        assert((order == std::vector<int>{4, 3, 2, 1}));
+    }
+
     return 0;
 }

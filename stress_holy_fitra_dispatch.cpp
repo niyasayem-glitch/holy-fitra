@@ -31,6 +31,7 @@ int main() {
                 task.on_cancel = [&](holyfitra::TaskContext &) { cancelled.fetch_add(1, std::memory_order_relaxed); };
                 task.on_failure = [&](holyfitra::TaskContext &) { failed.fetch_add(1, std::memory_order_relaxed); };
                 task.on_deadline_missed = [&](holyfitra::TaskContext &) { cancelled.fetch_add(1, std::memory_order_relaxed); };
+                task.priority = static_cast<holyfitra::Priority>((worker + iteration) % 4);
                 task.core_class = (iteration % 3 == 0) ? holyfitra::CoreClass::BigPreferred : holyfitra::CoreClass::Any;
                 const auto status = scheduler.submit(std::move(task));
                 if (status == holyfitra::SubmitStatus::Accepted) accepted.fetch_add(1, std::memory_order_relaxed);
