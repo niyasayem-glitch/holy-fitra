@@ -100,6 +100,8 @@ void nibbleflow_int4_f32_ref(const float *input, const uint8_t *packed, const fl
     if (full_tile_end < out_dim) nibbleflow_int4_f32_ref_scalar_range(input, packed, scales, bias, output, in_dim, out_dim, group_size, full_tile_end, out_dim);
 }
 
+void nibbleflow_int4_f32(const float *input, const uint8_t *packed, const float *scales, const float *bias, float *output, int32_t in_dim, int32_t out_dim, int32_t group_size);
+
 void nibbleflow_int4_f32_batch4(const float *input, size_t input_stride, const uint8_t *packed, const float *scales, const float *bias, float *output, size_t output_stride, int32_t in_dim, int32_t out_dim, int32_t group_size) {
 #if defined(__aarch64__)
     // Keep the established architecture-specific NEON implementation as the

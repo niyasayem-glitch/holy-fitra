@@ -566,6 +566,14 @@ def _same_value_type(left: Type, right: Type) -> bool:
     return left.name == right.name
 
 
+def _signed_truncating_division(left: int, right: int) -> int:
+    """Return the signed integer quotient with LLVM `sdiv` truncation semantics."""
+    if right == 0:
+        raise HolyFitraError("division by zero in constant expression")
+    quotient = abs(left) // abs(right)
+    return -quotient if (left < 0) != (right < 0) else quotient
+
+
 def _direct_calls_expression(expr: Expr) -> set[str]:
     if isinstance(expr, CallExpr):
         calls = {expr.name}
@@ -1113,9 +1121,7 @@ class LLVMEmitter:
                 if expression.operator == "*":
                     return str(left_value * right_value), Type("i32")
                 if expression.operator == "/":
-                    if right_value == 0:
-                        raise HolyFitraError("division by zero in constant expression")
-                    return str(left_value // right_value), Type("i32")
+                    return str(_signed_truncating_division(left_value, right_value)), Type("i32")
                 if expression.operator in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
                     outcomes = {"==": left_value == right_value, "!=": left_value != right_value, "<": left_value < right_value, "<=": left_value <= right_value, ">": left_value > right_value, ">=": left_value >= right_value, "&&": bool(left_value and right_value), "||": bool(left_value or right_value)}
                     return ("1" if outcomes[expression.operator] else "0"), Type("bool")

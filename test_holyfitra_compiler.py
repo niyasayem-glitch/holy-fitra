@@ -26,6 +26,23 @@ fn main() -> i32 {
 }
 """
 
+    def test_constant_signed_division_matches_llvm_truncation(self):
+        cases = ((-5, 2, -2), (5, -2, -2), (-5, -2, 2))
+        for left, right, expected in cases:
+            source = f"fn main() -> i32 {{ return {left} / {right} }}"
+            program = parse_native(source)
+            validate_native(program)
+            self.assertIn(f"ret i32 {expected}", emit_llvm(program))
+            with tempfile.TemporaryDirectory() as temporary:
+                source_path = Path(temporary) / "division.hf"
+                executable = Path(temporary) / "division"
+                source_path.write_text(source, encoding="utf-8")
+                with contextlib.redirect_stdout(io.StringIO()):
+                    build(source_path, executable)
+                self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, expected % 256)
+        with self.assertRaisesRegex(HolyFitraError, "division by zero"):
+            emit_llvm(parse_native("fn main() -> i32 { return 1 / 0 }"))
+
     def test_hybrid_function_composes_multiple_typed_functions(self):
         source = """
 module hybrid_test
