@@ -88,6 +88,13 @@ hf_status hf_nibbleflow_validate_static_calibration(const hf_nibbleflow_static_c
 hf_status hf_nibbleflow_validate_adapter(const hf_nibbleflow_model *model, const hf_nibbleflow_adapter *adapter);
 hf_status hf_nibbleflow_validate_execution_plan(const hf_nibbleflow_model *model, const hf_nibbleflow_execution_plan *plan);
 hf_status hf_nibbleflow_matvec(const hf_nibbleflow_model *model, const float *input, size_t input_count, float *output, size_t output_count);
+/*
+ * Executes a bounded FP32 batch. Rows are contiguous at the supplied strides;
+ * groups of four reuse packed INT4 weights, while residual rows use the stable
+ * single-row path. Execution plans are intentionally excluded from this v1
+ * helper so adapter and activation-scratch semantics remain row-local.
+ */
+hf_status hf_nibbleflow_matvec_batch_f32(const hf_nibbleflow_model *model, const float *input, size_t row_count, size_t input_stride, float *output, size_t output_stride);
 hf_status hf_nibbleflow_matvec_ex(const hf_nibbleflow_model *model, const hf_nibbleflow_execution_plan *plan, const float *input, size_t input_count, float *output, size_t output_count);
 const char *hf_status_string(hf_status status);
 

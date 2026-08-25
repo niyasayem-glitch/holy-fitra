@@ -133,7 +133,15 @@ static hf_status run_matvec_range(
     float *output,
     size_t output_stride,
     holyfitra::TaskContext &context) {
-    for (size_t index = start; index < end; ++index) {
+    size_t index = start;
+    while (index + 4 <= end) {
+        if (context.cancelled()) return HF_CANCELLED;
+        if (context.deadline_ns != 0 && holyfitra::monotonic_time_ns() > context.deadline_ns) return HF_DEADLINE_MISSED;
+        const hf_status result = hf_nibbleflow_matvec_batch_f32(&runtime->model, input + index * input_stride, 4, input_stride, output + index * output_stride, output_stride);
+        if (result != HF_OK) return result;
+        index += 4;
+    }
+    for (; index < end; ++index) {
         if (context.cancelled()) return HF_CANCELLED;
         if (context.deadline_ns != 0 && holyfitra::monotonic_time_ns() > context.deadline_ns) return HF_DEADLINE_MISSED;
         const hf_status result = hf_nibbleflow_matvec(&runtime->model, input + index * input_stride, input_stride, output + index * output_stride, output_stride);

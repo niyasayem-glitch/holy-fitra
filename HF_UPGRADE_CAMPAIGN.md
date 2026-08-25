@@ -1,0 +1,59 @@
+# HF Upgrade Campaign
+
+## Non-negotiable performance baseline
+
+The prior pure-Python test was a correctness floor, not a competitive performance target. The stronger comparison expands the exact same deterministic packed-INT4 fixture to FP32 and executes the batch with OpenBLAS SGEMM, configured with three OpenBLAS threads. Both paths produce exact output sum and weighted checksum agreement within `1e-6`.
+
+| Host-only result | HF INT4 runtime | OpenBLAS FP32 expanded fixture |
+|---|---:|---:|
+| Matvec dimensions / batch | 1,024 × 1,024 / 32 | 1,024 × 1,024 / 32 |
+| Dense-equivalent MACs | 33,554,432 | 33,554,432 |
+| Matched samples | 5 | 5 |
+| Mean batch latency | 7.890 ms | 0.349 ms |
+| Range | 6.375–11.724 ms | 0.268–0.432 ms |
+| Throughput | 4.253 GMAC/s | 96.214 GMAC/s |
+
+OpenBLAS is **22.62× faster** than the current HF host runtime on this particular host and expanded FP32 baseline. This is intentionally an uncomfortable but useful result: HF cannot be described as competitive with optimized native linear algebra on this workload. It does **not** prove the same ratio on ARM64/Android, because the current host binary follows NibbleFlow’s scalar fallback while its NEON path is AArch64-only. It also does not erase INT4’s memory-footprint advantage; it identifies a kernel and scheduling throughput gap that must be closed with measured work.
+
+## First audit finding
+
+The current scalar fallback loops one output at a time, repeatedly reloads input values across the four packed output lanes, and executes scalar nibble decode / float multiply-add operations. The AArch64 NEON implementation already recognizes output tiles of four lanes but currently expands bytes and scalar constructs inside its inner pair loop. The immediate high-value target is therefore a **portable output-tile kernel** that makes four output lanes the fundamental fallback unit, then a separately tested ARM64 NEON rewrite that removes stack-array decode/construct overhead. Neither change should be accepted merely because it looks vectorized; each needs numerical equivalence, sanitizer checks, host baseline improvement where applicable, and later Android evidence.
+
+## Evidence limits
+
+All values in this record are x86-64 host results. No Android ABI, ART/JNI lifecycle, ARM64 NEON throughput, core affinity, thermals, battery use, or physical-device latency is claimed. OpenBLAS is credited at <https://github.com/OpenMathLib/OpenBLAS>; its FP32 expanded model is a stronger comparator, not code imported into HF.
+
+## Whole-system audit
+
+| Layer | Verified state | Bottleneck or gap | Candidate upgrade | Evidence required |
+|---|---|---|---|---|
+| INT4 kernel | Scalar host fallback is one-output-at-a-time; ARM64 path tiles four outputs but decodes through scalar stack arrays in the inner loop. | Repeated input loads and nibble decode; no host SIMD path. | **P0:** portable 4-output tile fallback; **P1:** register-first ARM64 NEON 4×depth block. | Numerical equivalence, host benchmark, sanitizer; separate Android run. |
+| Batch runtime | Bounded batch ranges and deterministic receipt state are present. | Rows are scheduled independently of kernel-level input block reuse. | P1: batch-aware `M×K×N` microkernel API after P0 kernel is stable. | Range/cancellation tests and matched throughput benchmark. |
+| Scheduler | Priority/deadline/thermal policies and stealing are implemented. | Pop and steal linearly scan each protected deque; submit also scans worker queues. | P1: bounded priority bins or heap-backed queues only if high-queue benchmark proves it. | Queue-contention, fairness, deadline, cancellation, and device tests. |
+| Topology | Sysfs capacity/frequency classification and conservative worker counts are present. | Fallback fabricates an eight-CPU layout when sysfs is unavailable. | P1: truthful unknown-topology mode rather than inferred big/little partition. | Topology unit tests and Android device validation. |
+| JNI / buffers | Direct buffers and global references avoid per-request data copies; lifecycle leases guard handles. | Registry access is globally serialized; effect unmeasured. | P2: sharded registry only if JNI concurrency profiling justifies it. | JNI lifecycle and contention testing. |
+| Compiler | Self-hosted seed has bounded lexer/parser/type/lowering and LLVM textual emission. | No observed module/object cache or incremental invalidation record. | P1: fingerprinted local module cache with compiler/target keys and source-safe receipts. | Compiler corpus correctness, cache hit/miss, invalidation, and deterministic output tests. |
+| Android build | Release target uses `-O3`, section garbage collection, and hidden visibility. | No optional LTO/PGO measurement gate and host CMake cannot link JNI without NDK headers. | P2: opt-in Android LTO matrix, only retained if NDK package size/latency regressions pass. | Android NDK build, package size, and device measurements. |
+| Studio / cloud | Local rules, contracts, capsules, and manual cloud backup are user-controlled. | No reliable native compiler execution inside the app, by design. | Keep explicit host handoff; ingest only matching host/CI receipts. | Host/CI receipt validation, no device performance claim. |
+
+## External guidance applied
+
+The gemmlowp kernel and design documentation separates a packed format from an architecture-specific inner block kernel, emphasizing register reuse and cache-friendly traversal.[1] [2] This supports HF’s plan to optimize only after defining a stable tile format and benchmark gate, rather than adding arbitrary SIMD instructions. ExecuTorch’s XNNPACK overview confirms that mobile CPU kernels are backend-specific and that operator/lowering selection must precede a direct runtime comparison.[3] HF will therefore not claim equivalence to an XNNPACK or OpenBLAS backend until it has a matched operator and target build.
+
+## References
+
+[1]: https://github.com/google/gemmlowp/blob/master/doc/kernel.md "gemmlowp kernels"
+[2]: https://chromium.googlesource.com/external/github.com/google/gemmlowp/+/HEAD/doc/design.md "gemmlowp design"
+[3]: https://docs.pytorch.org/executorch/stable/backends/xnnpack/xnnpack-overview.html "ExecuTorch XNNPACK backend"
+
+## Selected upgrade cohort
+
+The P0 cohort is a portable **4-output-tile FP32 activation / packed-INT4 weight fallback**. It will reuse each two-element activation pair across the four packed output lanes, preserve existing per-group scale semantics, and retain the old single-output loop only for a tail smaller than four outputs. This is a direct response to the measured scalar bottleneck and remains independently implemented.
+
+The cohort deliberately excludes a premature XNNPACK dependency, OpenBLAS runtime dependency, queue replacement, cache implementation, LTO, and ARM assembly rewrite. Each is valuable only after a smaller correctness-preserving kernel change establishes a better baseline.
+
+## Measured cohort result
+
+The portable four-output fallback reduced the five-sample host mean from 7.890 ms to 6.650 ms, a **1.187×** gain, while preserving both deterministic checksums within `1e-6`. The follow-on four-row batch helper reuses packed weights across compatible FP32 rows inside each existing runtime range. With both changes, the host mean fell to **3.283 ms**, or **10.220 GMAC/s**: a **2.403×** improvement over the original 7.890 ms path. The matched OpenBLAS FP32-expanded comparator remains 9.41× faster on this host, which is an honest remaining gap rather than a success claim.
+
+The direct batch API and shared-request batch runtime passed their focused regressions, the neighboring runtime and scheduler regressions, 100 repeated direct-plus-runtime stress rounds, and AddressSanitizer/UndefinedBehaviorSanitizer on the large fixture. The bare host cross-compiler could not verify the AArch64 object because an Android NDK sysroot is unavailable in this sandbox. The AArch64 branch deliberately keeps the established per-row NEON route until a separately tested multi-row NEON microkernel is available. No Android package, device, thermal, or ARM throughput result is claimed.

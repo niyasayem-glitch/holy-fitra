@@ -19,6 +19,20 @@ int main() {
 
     assert(hf_nibbleflow_matvec(&model, input, 4, output, 4) == HF_OK);
     for (float value : output) assert(std::fabs(value + 1.5f) < 1e-6f);
+    const float batch_input[] = {
+        1.0f, -1.0f, 0.5f, -0.5f,
+        0.5f, 1.0f, -0.5f, -1.0f,
+        -1.0f, 0.5f, 1.0f, -0.5f,
+        0.25f, -0.25f, 0.75f, -0.75f,
+    };
+    float batch_output[16] = {};
+    float row_output[4] = {};
+    assert(hf_nibbleflow_matvec_batch_f32(&model, batch_input, 4, 4, batch_output, 4) == HF_OK);
+    for (int row = 0; row < 4; ++row) {
+        assert(hf_nibbleflow_matvec(&model, batch_input + row * 4, 4, row_output, 4) == HF_OK);
+        for (int column = 0; column < 4; ++column) assert(std::fabs(batch_output[row * 4 + column] - row_output[column]) < 1e-6f);
+    }
+    assert(hf_nibbleflow_matvec_batch_f32(&model, batch_input, 0, 4, batch_output, 4) == HF_INVALID_ARGUMENT);
     const float invalid_input[] = {std::numeric_limits<float>::quiet_NaN(), -1.0f, 0.5f, -0.5f};
     assert(hf_nibbleflow_matvec(&model, invalid_input, 4, output, 4) == HF_INVALID_ARGUMENT);
 

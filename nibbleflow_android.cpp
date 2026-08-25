@@ -4,6 +4,7 @@
 #include <limits>
 
 extern "C" void nibbleflow_int4_f32(const float *, const uint8_t *, const float *, const float *, float *, int32_t, int32_t, int32_t);
+extern "C" void nibbleflow_int4_f32_batch4(const float *, size_t, const uint8_t *, const float *, const float *, float *, size_t, int32_t, int32_t, int32_t);
 extern "C" void nibbleflow_int4_i8_f32(const int8_t *, float, int32_t, const uint8_t *, const float *, const float *, float *, int32_t, int32_t, int32_t);
 
 static bool multiply_size(size_t left, size_t right, size_t *result) {
@@ -162,6 +163,26 @@ extern "C" hf_status hf_nibbleflow_matvec_ex(const hf_nibbleflow_model *model, c
 
 extern "C" hf_status hf_nibbleflow_matvec(const hf_nibbleflow_model *model, const float *input, size_t input_count, float *output, size_t output_count) {
     return hf_nibbleflow_matvec_ex(model, nullptr, input, input_count, output, output_count);
+}
+
+extern "C" hf_status hf_nibbleflow_matvec_batch_f32(const hf_nibbleflow_model *model, const float *input, size_t row_count, size_t input_stride, float *output, size_t output_stride) {
+    const hf_status model_status = hf_nibbleflow_validate_model(model);
+    if (model_status != HF_OK) return model_status;
+    if (!input || !output || row_count == 0) return HF_INVALID_ARGUMENT;
+    if (input_stride < static_cast<size_t>(model->in_dim) || output_stride < static_cast<size_t>(model->out_dim)) return HF_BUFFER_TOO_SMALL;
+    if (row_count > std::numeric_limits<size_t>::max() / input_stride || row_count > std::numeric_limits<size_t>::max() / output_stride) return HF_OVERFLOW;
+    for (size_t row = 0; row < row_count; ++row) {
+        if (!finite_values(input + row * input_stride, static_cast<size_t>(model->in_dim))) return HF_INVALID_ARGUMENT;
+    }
+    size_t row = 0;
+    while (row + 4 <= row_count) {
+        nibbleflow_int4_f32_batch4(input + row * input_stride, input_stride, model->packed, model->scales, model->bias, output + row * output_stride, output_stride, model->in_dim, model->out_dim, model->group_size);
+        row += 4;
+    }
+    for (; row < row_count; ++row) {
+        nibbleflow_int4_f32(input + row * input_stride, model->packed, model->scales, model->bias, output + row * output_stride, model->in_dim, model->out_dim, model->group_size);
+    }
+    return finite_values(output, row_count * output_stride) ? HF_OK : HF_KERNEL_FAILURE;
 }
 
 extern "C" const char *hf_status_string(hf_status status) {
