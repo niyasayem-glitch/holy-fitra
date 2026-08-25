@@ -16,12 +16,13 @@ using holyfitra::Task;
 using holyfitra::ThermalState;
 
 struct hf_runtime_request {
-    std::mutex mutex;
+    mutable std::mutex mutex;
     std::condition_variable condition;
     bool done = false;
     hf_status result = HF_OK;
     std::shared_ptr<holyfitra::CancellationToken> cancellation = std::make_shared<holyfitra::CancellationToken>();
     size_t pending_tasks = 0;
+    hf_runtime_batch_receipt batch_receipt{HF_RUNTIME_BATCH_RECEIPT_ABI, 0, 0, 0, 0, 0, 0, 0, 0};
 };
 
 struct hf_holyfitra_runtime {
@@ -82,6 +83,12 @@ static void complete_request_task(hf_runtime_request *state, hf_status result) {
     {
         std::lock_guard<std::mutex> lock(state->mutex);
         if (status_priority(result) > status_priority(state->result)) state->result = result;
+        switch (result) {
+            case HF_OK: ++state->batch_receipt.completed_ranges; break;
+            case HF_CANCELLED: ++state->batch_receipt.cancelled_ranges; break;
+            case HF_DEADLINE_MISSED: ++state->batch_receipt.deadline_missed_ranges; break;
+            default: ++state->batch_receipt.failed_ranges; break;
+        }
         if (state->pending_tasks > 0) --state->pending_tasks;
         if (state->pending_tasks == 0 && !state->done) {
             state->done = true;
@@ -94,6 +101,27 @@ static void complete_request_task(hf_runtime_request *state, hf_status result) {
 static void reserve_request_tasks(hf_runtime_request *state, size_t count) {
     std::lock_guard<std::mutex> lock(state->mutex);
     state->pending_tasks += count;
+    state->batch_receipt.planned_ranges += count;
+}
+
+static void admit_request_task(hf_runtime_request *state) {
+    std::lock_guard<std::mutex> lock(state->mutex);
+    ++state->batch_receipt.admitted_ranges;
+}
+
+static void reject_request_task(hf_runtime_request *state, hf_status result) {
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        ++state->batch_receipt.rejected_ranges;
+        if (status_priority(result) > status_priority(state->result)) state->result = result;
+        if (state->pending_tasks > 0) --state->pending_tasks;
+        if (state->pending_tasks == 0 && !state->done) {
+            state->done = true;
+            notify = true;
+        }
+    }
+    if (notify) state->condition.notify_all();
 }
 
 static hf_status run_matvec_range(
@@ -116,9 +144,12 @@ static hf_status run_matvec_range(
 
 static hf_status submit_runtime_task(hf_holyfitra_runtime *runtime, Task task, hf_runtime_request *state) {
     const SubmitStatus status = runtime->scheduler->submit(std::move(task));
-    if (status == SubmitStatus::Accepted) return HF_OK;
+    if (status == SubmitStatus::Accepted) {
+        admit_request_task(state);
+        return HF_OK;
+    }
     const hf_status result = status == SubmitStatus::Backpressure ? HF_BUFFER_TOO_SMALL : HF_KERNEL_FAILURE;
-    complete_request_task(state, result);
+    reject_request_task(state, result);
     return result;
 }
 
@@ -151,6 +182,7 @@ extern "C" hf_status hf_runtime_submit_matvec(hf_holyfitra_runtime *runtime, con
     if (!valid_core_class(core_class) || !valid_priority(priority)) return HF_INVALID_ARGUMENT;
     if (input_count < static_cast<size_t>(runtime->model.in_dim) || output_count < static_cast<size_t>(runtime->model.out_dim)) return HF_BUFFER_TOO_SMALL;
     auto *state = new hf_runtime_request();
+    state->batch_receipt.row_count = 1;
     Task task;
     task.core_class = to_core_class(core_class);
     task.priority = to_priority(priority);
@@ -179,6 +211,7 @@ extern "C" hf_status hf_runtime_submit_matvec_batch(hf_holyfitra_runtime *runtim
     if (input_stride < static_cast<size_t>(runtime->model.in_dim) || output_stride < static_cast<size_t>(runtime->model.out_dim)) return HF_BUFFER_TOO_SMALL;
     if (batch_count > SIZE_MAX / input_stride || batch_count > SIZE_MAX / output_stride) return HF_OVERFLOW;
     auto *state = new hf_runtime_request();
+    state->batch_receipt.row_count = batch_count;
 
     // Independent rows share one public request while the existing scheduler
     // executes only a bounded number of contiguous ranges. Small batches retain
@@ -240,6 +273,13 @@ extern "C" void hf_runtime_request_destroy(hf_runtime_request *request) {
     hf_runtime_cancel(request);
     hf_runtime_wait(request, 0);
     delete request;
+}
+
+extern "C" hf_status hf_runtime_get_batch_receipt(const hf_runtime_request *request, hf_runtime_batch_receipt *receipt) {
+    if (!request || !receipt) return HF_INVALID_ARGUMENT;
+    std::lock_guard<std::mutex> lock(request->mutex);
+    *receipt = request->batch_receipt;
+    return HF_OK;
 }
 
 extern "C" void hf_runtime_set_thermal(hf_holyfitra_runtime *runtime, int thermal_state) {

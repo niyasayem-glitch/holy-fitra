@@ -24,6 +24,21 @@ typedef struct hf_runtime_stats {
     uint32_t abi_version;
 } hf_runtime_stats;
 
+// Host-local request accounting inspired by Taskflow's task visibility model.
+// It records scheduler range outcomes, not hardware-core use or device metrics.
+#define HF_RUNTIME_BATCH_RECEIPT_ABI 1u
+typedef struct hf_runtime_batch_receipt {
+    uint32_t abi_version;
+    uint64_t row_count;
+    uint64_t planned_ranges;
+    uint64_t admitted_ranges;
+    uint64_t completed_ranges;
+    uint64_t cancelled_ranges;
+    uint64_t deadline_missed_ranges;
+    uint64_t failed_ranges;
+    uint64_t rejected_ranges;
+} hf_runtime_batch_receipt;
+
 enum hf_runtime_core_class {
     HF_RUNTIME_CORE_ANY = 0,
     HF_RUNTIME_CORE_BIG_ONLY = 1,
@@ -47,6 +62,7 @@ hf_status hf_runtime_submit_matvec_batch(hf_holyfitra_runtime *runtime, const fl
 hf_status hf_runtime_wait(hf_runtime_request *request, uint64_t timeout_ms);
 void hf_runtime_cancel(hf_runtime_request *request);
 void hf_runtime_request_destroy(hf_runtime_request *request);
+hf_status hf_runtime_get_batch_receipt(const hf_runtime_request *request, hf_runtime_batch_receipt *receipt);
 void hf_runtime_set_thermal(hf_holyfitra_runtime *runtime, int thermal_state);
 hf_runtime_stats hf_runtime_get_stats(const hf_holyfitra_runtime *runtime);
 const char *hf_runtime_status_string(hf_status status);
