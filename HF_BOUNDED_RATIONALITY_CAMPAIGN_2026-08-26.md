@@ -41,6 +41,12 @@ The retained change applies a literal’s type from a nearby explicit `i32` or `
 
 The contextual-i64 program also emitted an AArch64 Android-21 object with the expected `add i64` instruction in its LLVM IR. That is a cross-compilation check only. It does not demonstrate Android Bionic linking, APK integration, or physical ARM64 execution.
 
+## Cycle three: expression precedence
+
+The native parser previously placed arithmetic, comparisons, `&&`, and `||` in incompatible precedence groups. For example, `1 == 1 && 2 == 2` was grouped as a boolean combined with an integer and rejected by type checking. The parser now follows the conventional order: multiplication/division, addition/subtraction, comparisons, logical AND, then logical OR. Parentheses continue to override that order.
+
+The regression compiles and executes a combined arithmetic/comparison/logical expression, and the documented full compiler/core suite passed afterward. This changes source-language interpretation for previously ambiguous unparenthesized expressions, but it moves that interpretation to the documented conventional ordering rather than silently accepting a mixed-type form.
+
 ## Validation record
 
 | Gate | Result | Evidence boundary |
@@ -53,6 +59,8 @@ The contextual-i64 program also emitted an AArch64 Android-21 object with the ex
 | Contextual-i64 compiler suite | Pass: 42 tests | Includes literal-width, range, no-widening, and executable checks |
 | Documented compiler/core suite after cycle two | Pass: 115 tests | Host compiler/runtime contracts only |
 | Contextual-i64 AArch64 Android-21 object | Pass | Emitted object only; a target-triple override warning was emitted by Clang |
+| Precedence-focused compiler suite | Pass: 43 tests | Covers an unparenthesized arithmetic, comparison, AND, and OR expression |
+| Documented compiler/core suite after cycle three | Pass: 116 tests | Host compiler/runtime contracts only |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

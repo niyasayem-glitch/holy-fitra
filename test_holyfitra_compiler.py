@@ -80,6 +80,25 @@ fn main() -> i32 effects [io] {
             with self.assertRaisesRegex(HolyFitraError, pattern):
                 validate_native(parse_native(source))
 
+    def test_native_expression_precedence_matches_arithmetic_comparison_and_logic(self):
+        source = """
+module expression_precedence
+fn main() -> i32 {
+    if 1 + 2 * 3 == 7 && 3 < 4 || false { return 0 } else { return 1 }
+}
+"""
+        program = parse_native(source)
+        validate_native(program)
+        llvm = emit_llvm(program)
+        self.assertIn("ret i32 0", llvm)
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / "precedence.hf"
+            executable = Path(temporary) / "precedence"
+            source_path.write_text(source, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(source_path, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 0)
+
     def test_hybrid_function_composes_multiple_typed_functions(self):
         source = """
 module hybrid_test

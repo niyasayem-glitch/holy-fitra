@@ -503,22 +503,32 @@ class Parser:
             raise HolyFitraError(f"expression nesting exceeds {MAX_AST_DEPTH} at {token.line}:{token.column}")
         self._expression_depth += 1
         try:
-            return self.parse_additive()
+            return self.parse_logical_or()
         finally:
             self._expression_depth -= 1
 
-    def parse_additive(self) -> Expr:
+    def parse_logical_or(self) -> Expr:
+        expression = self.parse_logical_and()
+        while self.current.kind == "OP" and self.current.text == "||":
+            expression = BinaryExpr(self.advance().text, expression, self.parse_logical_and())
+        return expression
+
+    def parse_logical_and(self) -> Expr:
         expression = self.parse_comparison()
+        while self.current.kind == "OP" and self.current.text == "&&":
+            expression = BinaryExpr(self.advance().text, expression, self.parse_comparison())
+        return expression
+
+    def parse_additive(self) -> Expr:
+        expression = self.parse_multiplicative()
         while self.current.kind == "OP" and self.current.text in {"+", "-"}:
-            operator = self.advance().text
-            expression = BinaryExpr(operator, expression, self.parse_comparison())
+            expression = BinaryExpr(self.advance().text, expression, self.parse_multiplicative())
         return expression
 
     def parse_comparison(self) -> Expr:
-        expression = self.parse_multiplicative()
-        while self.current.kind == "OP" and self.current.text in {"==", "!=", "<", "<=", ">", ">=", "&&", "||"}:
-            operator = self.advance().text
-            expression = BinaryExpr(operator, expression, self.parse_multiplicative())
+        expression = self.parse_additive()
+        while self.current.kind == "OP" and self.current.text in {"==", "!=", "<", "<=", ">", ">="}:
+            expression = BinaryExpr(self.advance().text, expression, self.parse_additive())
         return expression
 
     def parse_multiplicative(self) -> Expr:
