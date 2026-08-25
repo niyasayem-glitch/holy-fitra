@@ -299,6 +299,21 @@ fn main() -> i32 effects [model] { return a() }
             self.assertEqual(payload["schema"], 3)
             self.assertEqual(payload["llvm_sha256"], hashlib.sha256(expected_llvm.encode("utf-8")).hexdigest())
 
+    def test_comment_only_source_change_has_a_distinct_cache_entry(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "main.hf"
+            cache_dir = root / "cache"
+            source.write_text(self.SOURCE, encoding="utf-8")
+            _, original_llvm, original_digest = compile_native_file(source, cache_dir=cache_dir)
+            _MEMORY_COMPILE_CACHE.clear()
+            source.write_text(self.SOURCE + "\n// source-content cache-key regression\n", encoding="utf-8")
+            _, comment_llvm, comment_digest = compile_native_file(source, cache_dir=cache_dir)
+            self.assertNotEqual(original_digest, comment_digest)
+            self.assertEqual(original_llvm, comment_llvm)
+            self.assertTrue((cache_dir / f"{original_digest}.json").is_file())
+            self.assertTrue((cache_dir / f"{comment_digest}.json").is_file())
+
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
         with tempfile.TemporaryDirectory() as temporary:
