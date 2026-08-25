@@ -186,6 +186,16 @@ class ReturnStmt:
 
 
 @dataclass(frozen=True)
+class BreakStmt:
+    line: int
+
+
+@dataclass(frozen=True)
+class ContinueStmt:
+    line: int
+
+
+@dataclass(frozen=True)
 class IfStmt:
     condition: Expr
     then_body: tuple[Statement, ...]
@@ -200,7 +210,7 @@ class WhileStmt:
     line: int
 
 
-Statement = LetStmt | AssignStmt | ReturnStmt | IfStmt | WhileStmt
+Statement = LetStmt | AssignStmt | ReturnStmt | BreakStmt | ContinueStmt | IfStmt | WhileStmt
 
 
 @dataclass(frozen=True)
@@ -451,6 +461,14 @@ class Parser:
         return Type(token.text, mode)
 
     def parse_statement(self) -> Statement:
+        if self.accept("IDENT", "break"):
+            line = self.tokens[self.index - 1].line
+            self.accept("PUNCT", ";")
+            return BreakStmt(line)
+        if self.accept("IDENT", "continue"):
+            line = self.tokens[self.index - 1].line
+            self.accept("PUNCT", ";")
+            return ContinueStmt(line)
         if self.accept("IDENT", "while"):
             line = self.tokens[self.index - 1].line
             condition = self.parse_expression()
@@ -871,6 +889,7 @@ def validate_native(program: Program) -> None:
             scope: dict[str, Type],
             mutable_names: set[str],
             declared_names: set[str],
+            loop_depth: int = 0,
         ) -> bool:
             guaranteed_return = False
             for statement in statements:
@@ -905,18 +924,24 @@ def validate_native(program: Program) -> None:
                         actual = _infer_expression(statement.value, scope, functions, function.return_type)
                         if not _same_value_type(actual, function.return_type):
                             raise HolyFitraError(f"function {function.name} returns {actual.name}, expected {function.return_type.name}")
+                elif isinstance(statement, BreakStmt):
+                    if loop_depth <= 0:
+                        raise HolyFitraError(f"break is only valid inside a while loop at line {statement.line}")
+                elif isinstance(statement, ContinueStmt):
+                    if loop_depth <= 0:
+                        raise HolyFitraError(f"continue is only valid inside a while loop at line {statement.line}")
                 elif isinstance(statement, IfStmt):
                     condition_type = _infer_expression(statement.condition, scope, functions)
                     if condition_type.name != "bool":
                         raise HolyFitraError("if condition must be bool")
-                    then_return = validate_block(statement.then_body, dict(scope), set(mutable_names), set())
-                    else_return = bool(statement.else_body) and validate_block(statement.else_body, dict(scope), set(mutable_names), set())
+                    then_return = validate_block(statement.then_body, dict(scope), set(mutable_names), set(), loop_depth)
+                    else_return = bool(statement.else_body) and validate_block(statement.else_body, dict(scope), set(mutable_names), set(), loop_depth)
                     guaranteed_return = then_return and else_return
                 elif isinstance(statement, WhileStmt):
                     condition_type = _infer_expression(statement.condition, scope, functions)
                     if condition_type.name != "bool":
                         raise HolyFitraError("while condition must be bool")
-                    validate_block(statement.body, dict(scope), set(mutable_names), set())
+                    validate_block(statement.body, dict(scope), set(mutable_names), set(), loop_depth + 1)
                     guaranteed_return = False
                 if was_terminated:
                     guaranteed_return = True
@@ -1257,6 +1282,7 @@ class LLVMEmitter:
         self.variables = {name: f"%{name}.addr" for name, _ in function.parameters}
         self.types = dict(function.parameters)
         self.current_return_type = function.return_type
+        self.loop_labels: list[tuple[str, str]] = []
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
         self.current_main_uses_native_input = function.name == "main" and bool(getattr(self, "main_input_builtins", frozenset()))
         if self.current_main_uses_native_input:
@@ -1338,6 +1364,20 @@ class LLVMEmitter:
                     self.current_lines.append(f"  ret {value_type.llvm} {value}")
                 self.terminated = True
                 block_terminated = True
+            elif isinstance(statement, BreakStmt):
+                if not self.loop_labels:
+                    raise HolyFitraError(f"break is only valid inside a while loop at line {statement.line}")
+                _, exit_label = self.loop_labels[-1]
+                self.current_lines.append(f"  br label %{exit_label}")
+                self.terminated = True
+                block_terminated = True
+            elif isinstance(statement, ContinueStmt):
+                if not self.loop_labels:
+                    raise HolyFitraError(f"continue is only valid inside a while loop at line {statement.line}")
+                head_label, _ = self.loop_labels[-1]
+                self.current_lines.append(f"  br label %{head_label}")
+                self.terminated = True
+                block_terminated = True
             elif isinstance(statement, WhileStmt):
                 head_label = self.block("while_head")
                 body_label = self.block("while_body")
@@ -1354,7 +1394,11 @@ class LLVMEmitter:
                 self.variables = dict(saved_variables)
                 self.types = dict(saved_types)
                 self.terminated = False
-                body_terminated = self.emit_block(statement.body)
+                self.loop_labels.append((head_label, exit_label))
+                try:
+                    body_terminated = self.emit_block(statement.body)
+                finally:
+                    self.loop_labels.pop()
                 if not body_terminated:
                     self.current_lines.append(f"  br label %{head_label}")
                 self.current_lines.append(f"{exit_label}:")
@@ -1973,6 +2017,7 @@ def capabilities_report() -> dict[str, object]:
         "source_repository": "https://github.com/niyasayem-glitch/holy-fitra",
         "language": {
             "native_scalar_frontend": "implemented_and_host_validated",
+            "native_scalar_control_flow": "if_while_break_continue_host_and_aarch64_object_validated",
             "hyperir_tensor_effect_frontend": "implemented_and_contract_validated",
             "self_hosted_bootstrap_states": "states_1_to_9_validated",
             "ownership_modes": ["owned", "borrow", "borrow_mut", "shared"],

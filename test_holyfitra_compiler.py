@@ -99,6 +99,41 @@ fn main() -> i32 {
                 build(source_path, executable)
             self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 0)
 
+    def test_break_and_continue_lower_in_nested_native_loops(self):
+        source = """
+module loop_control
+fn main() -> i32 {
+    var outer: i32 = 0
+    var total: i32 = 0
+    while outer < 3 {
+        outer = outer + 1
+        var inner: i32 = 0
+        while inner < 5 {
+            inner = inner + 1
+            if inner == 2 { continue }
+            if inner == 4 { break }
+            total = total + 1
+        }
+    }
+    return total
+}
+"""
+        program = parse_native(source)
+        validate_native(program)
+        llvm = emit_llvm(program)
+        self.assertGreaterEqual(llvm.count("while_head"), 2)
+        self.assertGreaterEqual(llvm.count("while_exit"), 2)
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / "loop_control.hf"
+            executable = Path(temporary) / "loop_control"
+            source_path.write_text(source, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(source_path, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 6)
+        for keyword in ("break", "continue"):
+            with self.assertRaisesRegex(HolyFitraError, f"{keyword} is only valid inside a while loop"):
+                validate_native(parse_native(f"fn main() -> i32 {{ {keyword} return 0 }}"))
+
     def test_hybrid_function_composes_multiple_typed_functions(self):
         source = """
 module hybrid_test

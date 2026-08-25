@@ -65,6 +65,12 @@ The native parser previously placed arithmetic, comparisons, `&&`, and `||` in i
 
 The regression compiles and executes a combined arithmetic/comparison/logical expression, and the documented full compiler/core suite passed afterward. This changes source-language interpretation for previously ambiguous unparenthesized expressions, but it moves that interpretation to the documented conventional ordering rather than silently accepting a mixed-type form.
 
+## Cycle four: bounded loop control
+
+The native scalar frontend now supports `break` and `continue` inside `while` bodies. Both statements are rejected outside a loop with a line-specific diagnostic. Nested loops bind each statement to its innermost loop: `continue` branches to that loop’s condition head, while `break` branches to that loop’s exit label. This adds practical source-language control flow without introducing implicit exceptions, runtime allocation, or new ABI behavior.
+
+The retained regression executes nested loops where the inner `continue` skips one value and the inner `break` exits another; the expected result is produced on the host. The focused compiler suite passed 44 tests, the documented compiler/core suite passed 117 tests, and the same fixture emitted an AArch64 Android-21 object. The cross-object receipt does not establish Bionic linking, APK behavior, or physical-device execution.
+
 ## Validation record
 
 | Gate | Result | Evidence boundary |
@@ -79,6 +85,9 @@ The regression compiles and executes a combined arithmetic/comparison/logical ex
 | Contextual-i64 AArch64 Android-21 object | Pass | Emitted object only; a target-triple override warning was emitted by Clang |
 | Precedence-focused compiler suite | Pass: 43 tests | Covers an unparenthesized arithmetic, comparison, AND, and OR expression |
 | Documented compiler/core suite after cycle three | Pass: 116 tests | Host compiler/runtime contracts only |
+| Loop-control focused compiler suite | Pass: 44 tests | Nested host execution plus outside-loop diagnostics |
+| Documented compiler/core suite after cycle four | Pass: 117 tests | Host compiler/runtime contracts only |
+| Loop-control AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities
