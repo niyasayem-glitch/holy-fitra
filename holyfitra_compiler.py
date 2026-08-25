@@ -46,6 +46,7 @@ _EFFECT_GRAPH_CACHE: OrderedDict[object, tuple[dict[str, set[str]], dict[str, se
 _EFFECT_GRAPH_CACHE_LIMIT = 64
 _LLVM_CACHE_SCHEMA = 3
 _NATIVE_COMPILER_ABI = "holyfitra-native-scalar-v2"
+_ARG_I32_BUILTIN = "arg_i32"
 
 
 def _termux_prefix() -> str | None:
@@ -604,7 +605,7 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
             set(function.hybrid.components)
             | ({function.hybrid.reducer} if function.hybrid.reducer and _builtin_hybrid_reducer(function.hybrid.reducer) is None else set())
             if function.hybrid is not None
-            else _direct_calls_block(function.body)
+            else _direct_calls_block(function.body) - {_ARG_I32_BUILTIN}
         )
         for name, function in functions.items()
     }
@@ -677,6 +678,16 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
             raise HolyFitraError(f"native arithmetic currently supports i32 and i64, not {left.name}")
         return left
     if isinstance(expr, CallExpr):
+        if expr.name == _ARG_I32_BUILTIN:
+            if len(expr.arguments) != 2 or not all(isinstance(argument, IntLiteral) for argument in expr.arguments):
+                raise HolyFitraError("arg_i32 requires literal position and fallback arguments")
+            position = expr.arguments[0].value
+            fallback = expr.arguments[1].value
+            if not 0 <= position <= 7:
+                raise HolyFitraError("arg_i32 position must be between 0 and 7")
+            if not -(2**31) <= fallback <= 2**31 - 1:
+                raise HolyFitraError("arg_i32 fallback must fit i32")
+            return Type("i32")
         if expr.name not in functions:
             raise HolyFitraError(f"unknown function {expr.name}")
         function = functions[expr.name]
@@ -692,9 +703,12 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
 
 def validate_native(program: Program) -> None:
     functions = _function_map(program)
+    if _ARG_I32_BUILTIN in functions:
+        raise HolyFitraError("arg_i32 is reserved for the native input bridge")
     direct_calls, effective_effects = _effect_call_graph(program)
     allowed_effects = {"io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"}
     for function in program.functions:
+        uses_arg_i32 = _ARG_I32_BUILTIN in _direct_calls_block(function.body)
         parameter_names = [name for name, _ in function.parameters]
         if len(parameter_names) != len(set(parameter_names)):
             raise HolyFitraError(f"function {function.name} has duplicate parameters")
@@ -708,6 +722,10 @@ def validate_native(program: Program) -> None:
             raise HolyFitraError(f"function {function.name} declares unknown effects: {', '.join(sorted(unknown_effects))}")
         if len(set(function.effects)) != len(function.effects):
             raise HolyFitraError(f"function {function.name} declares duplicate effects")
+        if uses_arg_i32 and (function.name != "main" or function.parameters or function.return_type.name != "i32"):
+            raise HolyFitraError("arg_i32 is supported only directly in parameterless fn main() -> i32")
+        if uses_arg_i32 and "io" not in function.effects:
+            raise HolyFitraError("arg_i32 requires main to declare effects [io]")
         required_from_calls = effective_effects[function.name] - set(function.effects)
         if required_from_calls and "unsafe" not in function.effects:
             raise HolyFitraError(f"function {function.name} must declare transitive effects: {', '.join(sorted(required_from_calls))}")
@@ -879,11 +897,80 @@ class LLVMEmitter:
         target_lines = [f"; Holy Fitra target: {triple}"]
         if triple.startswith("aarch64"):
             target_lines.extend(("; Holy Fitra ABI: AAPCS64", "; Holy Fitra vector capability: NEON when available", "; Parallel hybrid lowering: independent branch calls followed by typed reducer"))
+        self.main_uses_arg_i32 = any(
+            function.name == "main" and _ARG_I32_BUILTIN in _direct_calls_block(function.body)
+            for function in self.program.functions
+        )
         lines = [f"; Holy Fitra module {self.program.module}", *target_lines, f'target triple = "{triple}"', ""]
+        if self.main_uses_arg_i32:
+            lines.extend(self.emit_arg_i32_helper())
+            lines.append("")
         for function in self.program.functions:
             lines.extend(self.emit_function(function))
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
+
+    @staticmethod
+    def emit_arg_i32_helper() -> list[str]:
+        """Emit a libc-free, bounded decimal argv parser for the native main ABI."""
+        return [
+            "define internal i32 @hf_arg_i32(i32 %hf_argc, i8** %hf_argv, i32 %hf_position, i32 %hf_default) {",
+            "entry:",
+            "  %hf_nonnegative = icmp sge i32 %hf_position, 0",
+            "  %hf_within_bound = icmp sle i32 %hf_position, 7",
+            "  %hf_position_ok = and i1 %hf_nonnegative, %hf_within_bound",
+            "  br i1 %hf_position_ok, label %hf_argc_check, label %hf_fallback",
+            "hf_argc_check:",
+            "  %hf_offset = add i32 %hf_position, 1",
+            "  %hf_available = icmp sgt i32 %hf_argc, %hf_offset",
+            "  br i1 %hf_available, label %hf_load_argument, label %hf_fallback",
+            "hf_load_argument:",
+            "  %hf_slot = getelementptr inbounds i8*, i8** %hf_argv, i32 %hf_offset",
+            "  %hf_text = load i8*, i8** %hf_slot",
+            "  %hf_first = load i8, i8* %hf_text",
+            "  %hf_negative = icmp eq i8 %hf_first, 45",
+            "  %hf_first_nonzero = icmp ne i8 %hf_first, 0",
+            "  br i1 %hf_first_nonzero, label %hf_sign, label %hf_fallback",
+            "hf_sign:",
+            "  %hf_start = select i1 %hf_negative, i32 1, i32 0",
+            "  %hf_limit = select i1 %hf_negative, i64 2147483648, i64 2147483647",
+            "  br label %hf_loop",
+            "hf_loop:",
+            "  %hf_index = phi i32 [ %hf_start, %hf_sign ], [ %hf_next_index, %hf_continue ]",
+            "  %hf_accumulator = phi i64 [ 0, %hf_sign ], [ %hf_next_accumulator, %hf_continue ]",
+            "  %hf_char_address = getelementptr inbounds i8, i8* %hf_text, i32 %hf_index",
+            "  %hf_char = load i8, i8* %hf_char_address",
+            "  %hf_done = icmp eq i8 %hf_char, 0",
+            "  br i1 %hf_done, label %hf_finish, label %hf_digit_check",
+            "hf_digit_check:",
+            "  %hf_at_least_zero = icmp uge i8 %hf_char, 48",
+            "  %hf_at_most_nine = icmp ule i8 %hf_char, 57",
+            "  %hf_is_digit = and i1 %hf_at_least_zero, %hf_at_most_nine",
+            "  br i1 %hf_is_digit, label %hf_accumulate, label %hf_fallback",
+            "hf_accumulate:",
+            "  %hf_digit = sub i8 %hf_char, 48",
+            "  %hf_digit_i64 = zext i8 %hf_digit to i64",
+            "  %hf_remaining = sub i64 %hf_limit, %hf_digit_i64",
+            "  %hf_threshold = udiv i64 %hf_remaining, 10",
+            "  %hf_would_overflow = icmp ugt i64 %hf_accumulator, %hf_threshold",
+            "  br i1 %hf_would_overflow, label %hf_fallback, label %hf_continue",
+            "hf_continue:",
+            "  %hf_scaled = mul i64 %hf_accumulator, 10",
+            "  %hf_next_accumulator = add i64 %hf_scaled, %hf_digit_i64",
+            "  %hf_next_index = add i32 %hf_index, 1",
+            "  br label %hf_loop",
+            "hf_finish:",
+            "  %hf_has_digits = icmp sgt i32 %hf_index, %hf_start",
+            "  br i1 %hf_has_digits, label %hf_result, label %hf_fallback",
+            "hf_result:",
+            "  %hf_narrow = trunc i64 %hf_accumulator to i32",
+            "  %hf_negative_value = sub i32 0, %hf_narrow",
+            "  %hf_final = select i1 %hf_negative, i32 %hf_negative_value, i32 %hf_narrow",
+            "  ret i32 %hf_final",
+            "hf_fallback:",
+            "  ret i32 %hf_default",
+            "}",
+        ]
 
     def emit_call_values(self, name: str, arguments: list[tuple[str, Type]]) -> tuple[str, Type]:
         function = self.functions.get(name)
@@ -1000,6 +1087,18 @@ class LLVMEmitter:
             lines.append(f"  {result} = {opcode} {type_.llvm} {left}, {right}")
             return result, type_
         if isinstance(expression, CallExpr):
+            if expression.name == _ARG_I32_BUILTIN:
+                if not getattr(self, "current_main_uses_arg_i32", False):
+                    raise HolyFitraError("arg_i32 was emitted outside a compatible main function")
+                position = expression.arguments[0]
+                fallback = expression.arguments[1]
+                if not isinstance(position, IntLiteral) or not isinstance(fallback, IntLiteral):
+                    raise HolyFitraError("arg_i32 requires literal position and fallback arguments")
+                result = self.temp()
+                self.current_lines.append(
+                    f"  {result} = call i32 @hf_arg_i32(i32 %hf_argc, i8** %hf_argv, i32 {position.value}, i32 {fallback.value})"
+                )
+                return result, Type("i32")
             function = self.functions.get(expression.name)
             if function is None:
                 raise HolyFitraError(f"unknown function {expression.name}")
@@ -1023,6 +1122,9 @@ class LLVMEmitter:
         self.variables = {name: f"%{name}.addr" for name, _ in function.parameters}
         self.types = dict(function.parameters)
         parameters = ", ".join(f"{type_.llvm} %{name}" for name, type_ in function.parameters)
+        self.current_main_uses_arg_i32 = function.name == "main" and getattr(self, "main_uses_arg_i32", False)
+        if self.current_main_uses_arg_i32:
+            parameters = ", ".join(filter(None, (parameters, "i32 %hf_argc", "i8** %hf_argv")))
         return_type = "void" if function.return_type.name == "void" else function.return_type.llvm
         effect_comment = f"; effects: {', '.join(function.effects) if function.effects else 'pure'}"
         ownership_comment = "; ownership: " + ", ".join(f"{name}:{type_.mode}" for name, type_ in function.parameters) if function.parameters else "; ownership: none"

@@ -314,6 +314,42 @@ fn main() -> i32 effects [model] { return a() }
             self.assertTrue((cache_dir / f"{original_digest}.json").is_file())
             self.assertTrue((cache_dir / f"{comment_digest}.json").is_file())
 
+    def test_arg_i32_bridge_parses_bounded_decimal_main_arguments(self):
+        source_text = """
+module dynamic_input
+fn main() -> i32 effects [io] { return arg_i32(0, 7) }
+"""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "main.hf"
+            executable = root / "main"
+            source.write_text(source_text, encoding="utf-8")
+            program = parse_native(source_text)
+            validate_native(program)
+            llvm = emit_llvm(program)
+            self.assertIn("define internal i32 @hf_arg_i32", llvm)
+            self.assertIn("define i32 @main(i32 %hf_argc, i8** %hf_argv)", llvm)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(build(source, executable), 0)
+            self.assertEqual(subprocess.run([str(executable)]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "12"]).returncode, 12)
+            self.assertEqual(subprocess.run([str(executable), "12x"]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "2147483648"]).returncode, 7)
+            self.assertEqual(subprocess.run([str(executable), "-9"]).returncode, 247)
+            legacy_llvm = emit_llvm(parse_native(self.SOURCE))
+            self.assertIn("define i32 @main()", legacy_llvm)
+
+    def test_arg_i32_bridge_rejects_missing_io_and_nonliteral_position(self):
+        missing_io = "fn main() -> i32 { return arg_i32(0, 7) }"
+        with self.assertRaisesRegex(HolyFitraError, r"effects \[io\]"):
+            validate_native(parse_native(missing_io))
+        dynamic_position = "fn main() -> i32 effects [io] { let index = 0 return arg_i32(index, 7) }"
+        with self.assertRaisesRegex(HolyFitraError, "literal position"):
+            validate_native(parse_native(dynamic_position))
+        reserved_builtin = "fn arg_i32(x: i32) -> i32 { return x } fn main() -> i32 { return 0 }"
+        with self.assertRaisesRegex(HolyFitraError, "reserved"):
+            validate_native(parse_native(reserved_builtin))
+
     def test_cli_check_emit_build_and_run(self):
         root = Path(__file__).parent
         with tempfile.TemporaryDirectory() as temporary:

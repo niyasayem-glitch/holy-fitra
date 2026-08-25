@@ -20,7 +20,7 @@ The C and C++ difference is small relative to ordinary host noise, so this test 
 
 ## HF-specific result
 
-HF’s functional fixture exercised mutable local state and a `while` loop, compiled through the existing `holyfitra_compiler.py build` route, and returned the expected exit status `45` in every cold-build round. It was deliberately excluded from the dynamic-input runtime ranking because the current native scalar `main` contract is parameterless and does not expose an argv, console, standard-input, or equivalent input primitive. Reporting a timing for a constant or compile-time-known loop would be misleading.
+HF’s original functional fixture exercised mutable local state and a `while` loop, compiled through the existing `holyfitra_compiler.py build` route, and returned the expected exit status `45` in every cold-build round. It was initially excluded from the dynamic-input runtime ranking because the scalar `main` contract had no input primitive. That gap is now addressed by the separately documented bounded `arg_i32` bridge. Its new dynamic LCG result is recorded in `HF_DYNAMIC_INPUT_BRIDGE_RESULTS.md`; it must not be retroactively merged into this loop-only timing table because the metrics differ.
 
 | Cold-build fixture | Mean wall time | Interpretation |
 |---|---:|---|

@@ -12,7 +12,7 @@ holyfitra capabilities
 
 | Layer | Current capability | Evidence status |
 |---|---|---|
-| Language frontend | Modules, functions, scalar types, booleans, comparisons, logical operators, structured control flow, path-sensitive returns, constant folding, ownership modes, effects, task metadata, user-defined hybrid reducers, typed built-in hybrid reducers, and static hybrid inspection | Host regression and compiler tests; scalar native lowering only |
+| Language frontend | Modules, functions, scalar types, booleans, comparisons, logical operators, structured control flow, path-sensitive returns, constant folding, ownership modes, effects, bounded `arg_i32` command-line input for an explicit `io` main, task metadata, user-defined hybrid reducers, typed built-in hybrid reducers, and static hybrid inspection | Host regression and compiler tests; `arg_i32` accepts only bounded literal positions with fallback and does not add general process or device I/O; scalar native lowering only |
 | HyperIR/tensor frontend | Tensor-oriented source parsing, execution-plan lowering, quantization metadata, ragged/dynamic prefill surfaces, and structured contracts | Python contract and numerical test surfaces; not equivalent to full native tensor-language lowering |
 | Compiler | LLVM IR emission, native build/run, cache telemetry, deterministic diagnostics, package manifests, project tests, TUI, and REPL | Host and Termux-compatible gates |
 | Mobile Studio bridge | Versioned bounded Studio package, per-file and workspace fingerprint verification, `holyfitra mobile-inspect` static receipt, and user-controlled Android/iOS JSON export | Cross-contract regression and host native gate; no embedded mobile compiler or device execution claim |

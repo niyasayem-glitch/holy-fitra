@@ -1,0 +1,12 @@
+module hf_lcg32_dynamic
+
+fn main() -> i32 effects [io] {
+    var iterations: i32 = arg_i32(0, 1000000)
+    var state: i32 = arg_i32(1, 123456789)
+    var index: i32 = 0
+    while index < iterations {
+        state = state * 1664525 + 1013904223
+        index = index + 1
+    }
+    return state
+}
