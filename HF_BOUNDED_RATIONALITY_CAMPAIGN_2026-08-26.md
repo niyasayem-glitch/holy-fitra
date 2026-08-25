@@ -17,6 +17,24 @@ The baseline used the repository's rotated nine-sample dynamic-`argv` LCG32 work
 
 The LCG result is a **single host microbenchmark**, not a universal ranking. It does not measure Android, ARM64 CPU execution, allocations, I/O, concurrency, garbage collection, compiler build throughput, model inference, or application workloads.
 
+## Rejected O3 candidate analysis
+
+The O3 candidate was correctly rejected by the retain rule, but the available data does **not** prove that O3 intrinsically regresses Holy Fitra. The two nine-sample runs were separate sessions and record only summary statistics, not paired raw samples.
+
+| Metric | O2 baseline | O3 candidate | Change |
+|---|---:|---:|---:|
+| HF mean wall time | 1.946903 ms | 2.000823 ms | +0.053921 ms / +2.70% |
+| HF median wall time | 1.916459 ms | 1.931452 ms | +0.70% |
+| HF observed range | 0.296438 ms | 0.483784 ms | Wider under O3 |
+| C/Clang mean in the same comparison session | 1.796107 ms | 1.829210 ms | +1.80% session-to-session drift |
+| HF/C mean ratio | 1.0839× | 1.0938× | No positive O3 evidence |
+
+Fresh code-generation comparison explains why a substantial gain was unlikely. O2 had already reduced the loop to an eight-iteration unrolled scalar recurrence using an integer multiply, add, and decrement/test. O3 emitted the same hot-loop body. Its observable difference was only a small entry/preheader control-flow rearrangement, and the full executable text increased from 1,539 to 1,555 bytes. LLVM loop-vectorization remarks reported the same blockers at both levels: the loop-carried state is used outside the loop and the trip count is dynamic, so it is not recognized as a vectorizable reduction.
+
+The benchmark measures **whole-process wall time**, deliberately including process startup and argument parsing. At approximately two milliseconds per run, OS scheduling, frequency state, loader work, and other environmental effects can be comparable to a two-to-three-percent change. The independent C/Clang drift and the O3 run’s wider observed range reinforce that interpretation. Without raw paired samples, a randomized O2/O3 order, and a variance estimate, attributing the 0.053921 ms mean difference solely to the optimization level would be unjustified.
+
+The retained conclusion is therefore narrower: O3 did not pass the evidence gate because it showed no repeatable improvement on this workload. A stronger follow-up should compile O2 and O3 artifacts once from the identical LLVM file, alternate them within every round, retain raw timings, report dispersion and paired confidence intervals, and separately time in-process loop execution versus process startup.
+
 ## Retained fixes
 
 The compiler now centralizes constant signed division in `_signed_truncating_division`. It rejects zero divisors and computes a magnitude quotient before applying the sign, yielding the same truncation direction as generated LLVM signed division. New compiler regressions cover negative dividend, negative divisor, both negative, native executable behavior, and zero-divisor rejection.
