@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from holyfitra_agent import AgentAction, AgentError, AgentPlan, AgentPolicy, CodingAgent, Workspace
-from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain, load_private_provider_env
+from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain, load_private_provider_env, run_hd
 
 
 class HDCopilotTests(unittest.TestCase):
@@ -147,6 +148,84 @@ class HDCopilotTests(unittest.TestCase):
         self.assertNotIn("holyfitra hd", content)
         self.assertNotIn("ai chat", content)
         self.assertNotIn("curl ", content)
+
+    def test_hd_plan_receipt_contains_visible_bounded_create_and_modify_diffs_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("before\n", encoding="utf-8")
+            plan = AgentPlan("visible review", (
+                AgentAction("write_file", "main.txt", "after\n"),
+                AgentAction("write_file", "new.txt", "created\n"),
+                AgentAction("run_check", command=("git", "diff", "--check")),
+                AgentAction("finish", reason="done"),
+            ))
+            receipt = HDCopilot(Workspace(root)).inspect_plan("show changes", plan)
+            previews = {preview.path: preview for preview in receipt.changes}
+            self.assertEqual(previews["main.txt"].operation, "modify")
+            self.assertIn("-before", previews["main.txt"].unified_diff)
+            self.assertIn("+after", previews["main.txt"].unified_diff)
+            self.assertEqual(previews["new.txt"].operation, "create")
+            self.assertIn("/dev/null", previews["new.txt"].unified_diff)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "before\n")
+            self.assertFalse((root / "new.txt").exists())
+
+    def test_hd_advice_is_read_only_and_campaign_requires_explicit_scoped_approval(self):
+        class FakeClient:
+            def __init__(self):
+                self.system = ""
+
+            def chat(self, _prompt, **kwargs):
+                self.system = kwargs["system"]
+                return SimpleNamespace(text="HF explanation")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            agent = CodingAgent(Workspace(root), client=FakeClient())
+            advice = HDCopilot(agent.workspace, agent=agent).advise("Explain main.txt")
+            self.assertEqual(advice["mutation"], "none")
+            self.assertIn("Do not generate an action plan", agent.client.system)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "original")
+            with self.assertRaisesRegex(AgentError, "require --apply"):
+                run_hd(root, "do work", rounds=1, approve_campaign=True)
+            with self.assertRaisesRegex(AgentError, "explicit campaign approval"):
+                run_hd(root, "do work", apply=True, rounds=1)
+
+    def test_hd_campaign_is_bounded_and_stops_after_a_failed_validation_receipt(self):
+        class QueueClient:
+            def __init__(self):
+                def plan(summary, content, test_source):
+                    return json.dumps({
+                        "summary": summary,
+                        "acceptance": ["smoke"],
+                        "actions": [
+                            {"kind": "write_file", "path": "main.txt", "content": content},
+                            {"kind": "write_file", "path": "test_hd_cycle.py", "content": test_source},
+                            {"kind": "run_check", "command": ["python3", "-m", "unittest", "test_hd_cycle"]},
+                            {"kind": "finish", "reason": "done"},
+                        ],
+                    })
+                self.responses = [
+                    plan("first", "first", "import unittest\n\nclass Cycle(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(open('main.txt', encoding='utf-8').read(), 'first')\n"),
+                    plan("second", "second", "import unittest\n\nclass Cycle(unittest.TestCase):\n    def test_value(self):\n        self.fail('intentional')\n"),
+                ]
+
+            def chat(self, _prompt, **_kwargs):
+                return SimpleNamespace(text=self.responses.pop(0))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            policy = AgentPolicy(allow_write=True, allow_commands=True)
+            agent = CodingAgent(Workspace(root, policy), client=QueueClient())
+            campaign = HDCopilot(agent.workspace, agent=agent).campaign("iterate", rounds=3)
+            self.assertEqual(campaign.requested_rounds, 3)
+            self.assertEqual(len(campaign.rounds), 2)
+            self.assertEqual(campaign.rounds[0].agent_run.status, "applied")
+            self.assertEqual(campaign.rounds[1].agent_run.status, "rolled_back")
+            self.assertIn("rolled_back", campaign.stopped_reason)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "first")
+            self.assertTrue(campaign.rounds[0].changes[0].unified_diff)
 
 
 if __name__ == "__main__":

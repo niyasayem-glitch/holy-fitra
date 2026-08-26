@@ -27,6 +27,33 @@ holyfitra hd ./my-project \
   --apply
 ```
 
+Each plan/apply receipt now contains a `changes` list. Every proposed file includes its create/modify operation, before/after SHA-256 identity, byte counts, and a bounded unified diff. The preview is created before apply, so the receipt preserves what HD proposed even when later validation rolls the workspace back.
+
+## Interactive advice and bounded build campaigns
+
+Use `--mode advise` for a conversational, read-only coding explanation. Advice never produces an action plan, runs a command, or changes a workspace.
+
+```bash
+holyfitra hd ./my-project \
+  'Explain how this Fitra module handles imports and what I should change first.' \
+  --mode advise \
+  --vault ./my-notes \
+  --provider openrouter
+```
+
+For a larger feature, HD can run a short foreground campaign. This is an explicit, finite batch of independent plan → visible preview → apply → validation → receipt cycles; it never becomes a background service. The current hard limit is three cycles, and HD stops at the first rejected, failed-validation, or rollback receipt.
+
+```bash
+holyfitra hd ./my-project \
+  'Implement a tested feature in small safe steps.' \
+  --provider openrouter \
+  --apply \
+  --rounds 2 \
+  --approve-campaign
+```
+
+`--rounds` is rejected unless both `--apply` and `--approve-campaign` are present. A campaign-wide approval is not an unrestricted permission: every round still uses workspace confinement, protected-path denial, the write-validation review gate, only allowlisted validation commands, transactional rollback, and a separate receipt. Inspect the resulting per-round `changes`, `agent_run.review`, validation output, and rollback state before requesting another campaign.
+
 The `--vault` argument is optional. HD does not accept a provider secret as a command argument. For a local provider setup, copy the tracked `hd.providers.env.example` to the ignored `hd.providers.env`, enter only newly generated credentials, and pass it explicitly with `--provider-env`.
 
 ```bash
@@ -59,8 +86,10 @@ Every HD response is a `holyfitra.hd/v1` object. Its `knowledge` list contains v
 |---|---|---|
 | Retrieval | Search a local Markdown vault through `ObsidianVaultIndex` | Read-only index, hidden/configuration-path exclusion, bounded note size, deterministic rank/order, and provenance |
 | Planning | Ask a configured provider for JSON actions | Notes are labelled **untrusted context**, action schema is parsed and policy-checked |
-| Inspection | Read/search the selected workspace and show proposed writes/checks | Default mode has no write or command permission |
+| Advice | Explain the selected workspace and bounded second-brain context | `--mode advise` has no plan, write, or command authority |
+| Inspection | Read/search the selected workspace and show proposed writes/checks | Default mode has no write or command permission; `changes` supplies a bounded file-by-file unified diff |
 | Apply | Write workspace-relative files and execute validation | Literal `--apply`, allowlisted command shapes, bounded environment/output/time, and validation after the final write |
+| Campaign | Run a small user-approved foreground sequence of apply cycles | Literal `--apply --rounds N --approve-campaign`, maximum three cycles, stop on any non-applied receipt |
 | Failure | Restore modified files | Transactional rollback receipt records the failure reason and changed-file set |
 
 ## Second-brain boundary
@@ -71,4 +100,4 @@ There is currently no configured external Obsidian connector. Consequently, this
 
 ## Non-goals
 
-HD does not silently apply changes, run indefinitely, execute arbitrary commands, delete source, access `.git` or environment files, read provider keys, call network tools, modify its own policy, or make any claim that a provider plan is correct. A passing allowlisted check is evidence only for that check; it does not certify an entire project or replace human review.
+HD does not silently apply changes, run indefinitely, execute arbitrary commands, delete source, access `.git` or environment files, read provider keys, call network tools, modify its own policy, or make any claim that a provider plan is correct. A campaign runs only in the foreground of the invoking command and never resumes itself. A passing allowlisted check is evidence only for that check; it does not certify an entire project or replace human review.

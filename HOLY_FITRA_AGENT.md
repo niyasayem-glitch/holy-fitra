@@ -40,7 +40,7 @@ This is **supervised self-improvement**, not unrestricted self-modification. The
 
 ## HD second-brain copilot
 
-`holyfitra hd` is the single-round, second-brain-assisted form of the supervised workflow. It accepts an optional `--vault` path, retrieves only bounded local Markdown context through the existing Obsidian index, and returns note provenance plus a deterministic retrieval digest with the normal plan-review receipt. HD retains the same explicit `--apply` rule, transaction, command allowlist, and rollback behavior; it does not add self-improvement rounds, background execution, arbitrary tools, vault-write authority, or an external Obsidian dependency. See [`HOLY_FITRA_HD.md`](HOLY_FITRA_HD.md) for commands and receipt fields.
+`holyfitra hd` is the second-brain-assisted form of the supervised workflow. Its read-only `--mode advise` answers coding questions without creating a plan or gaining mutation authority. Its plan/apply receipt includes a bounded file-by-file unified diff in addition to note provenance, retrieval digest, and the normal plan-review receipt. With the literal `--apply --rounds N --approve-campaign` combination, it can run at most three foreground apply cycles; each remains a separate plan-review, allowlist, validation, and rollback transaction, and the campaign stops after a non-applied receipt. HD still has no background execution, arbitrary tools, vault-write authority, or external Obsidian dependency. See [`HOLY_FITRA_HD.md`](HOLY_FITRA_HD.md) for commands and receipt fields.
 
 ## Allowlisted actions
 

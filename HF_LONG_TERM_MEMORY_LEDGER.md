@@ -129,6 +129,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This does not verify user credentials, provider billing/quota, model availability, response quality, external connector synchronization, or autonomous code application. Three screenshot values could not be safely attributed from prefix alone and were intentionally not implemented as guessed providers. |
 | Sync | Pending Mem authorization. The ledger stores no credential values, prompts, or user source code. |
 
+### `HF-2026-08-26-AI-004`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | Interactive HD advice, visible change previews, and bounded foreground build campaigns |
+| Decision | Retained read-only HD advice, pre-apply per-file unified-diff receipts, and an explicitly approved campaign mode limited to three independent foreground cycles. Campaign cycles use the existing plan review, explicit apply, command allowlist, validation, and rollback transaction and stop on the first non-applied receipt. |
+| Evidence | Focused HD, agent, and compiler suites: 66 tests passed. Full Holy Fitra regression suite: 311 tests passed. CLI help exposed `--mode`, `--rounds`, and `--approve-campaign`. Deterministic fake-provider regressions covered advice no-mutation, visible create/modify diffs, explicit campaign consent, bounded stopping, and failed-validation rollback. |
+| Boundary | This does not establish a live persistent chat service, provider correctness, user-visible Pix Studio integration, background autonomy, an infinite loop, arbitrary tool access, or provider execution. Campaign approval is bounded and foreground-only. |
+| Sync | Pending Mem authorization. No provider key, prompt, or user source is stored in this ledger. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

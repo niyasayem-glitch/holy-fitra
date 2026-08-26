@@ -149,6 +149,18 @@ The `--provider-env` option loads a user-selected local file before HD planning.
 
 Several screenshot strings did not identify a provider with sufficient evidence from their visible prefixes. They were intentionally not routed to a guessed API. Any exposed key must be treated as compromised and replaced with a newly generated credential before it is placed in the ignored local file.
 
+## Interactive HD review and bounded build cycles
+
+HD now supports a read-only advice mode for coding explanations and an auditable visible-change layer for plans. Every planned `write_file` action is normalized into a pre-apply per-file receipt with operation type, before/after digests and byte counts, and a bounded unified diff. The preview has no mutation effect and is retained even if a later validation failure rolls the transaction back.
+
+The optional foreground campaign requires all of `--apply`, a positive `--rounds`, and `--approve-campaign`. Its hard limit is three cycles. Each cycle independently builds a provider proposal, records a visible preview, applies only through the established agent review gate, runs only allowlisted checks, and emits an apply or rollback receipt. The campaign stops at the first non-applied result. It does not wait in the background, resume itself, consume GitHub secrets locally, or turn into an uncontrolled self-improving system.
+
+| Gate | Result | Evidence boundary |
+|---|---|---|
+| Interactive HD focused suite | Pass: 66 tests | Read-only advice, visible create/modify diffs, explicit campaign consent, three-cycle ceiling, success-to-rollback stopping, and inherited agent safeguards using deterministic fake providers only |
+| Refined HD CLI contract | Pass | Help exposes `--mode`, `--rounds`, and `--approve-campaign`; no provider call or workspace mutation occurred |
+| Full Holy Fitra regression suite | Pass: 311 tests | Host-side contract evidence only; no live assistant service, provider execution, Pix Studio integration, Android, or device result implied |
+
 ## Next bounded opportunities
 
 The next justified work is to profile compiler cold-build stages on a larger, real source fixture; remove only measured frontend or process-launch overhead; and add a separate Android NDK/Bionic build receipt. Any architecture-specific kernel work should remain behind numerical equivalence, sanitizer, cross-build, and measured retain gates.
