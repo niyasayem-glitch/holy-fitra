@@ -23,6 +23,7 @@ venv/
 # Local HD provider credentials. Keep values only in these ignored files.
 hd.providers.env
 *.private.env
+*.hfhd-plan.json
 
 # Native and Android build output
 .gradle/

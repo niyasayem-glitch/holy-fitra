@@ -140,6 +140,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This does not establish a live persistent chat service, provider correctness, user-visible Pix Studio integration, background autonomy, an infinite loop, arbitrary tool access, or provider execution. Campaign approval is bounded and foreground-only. |
 | Sync | Pending Mem authorization. No provider key, prompt, or user source is stored in this ledger. |
 
+### `HF-2026-08-26-AI-005`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | HD exact reviewed-plan packet application |
+| Decision | Retained an ignored, bounded `.hfhd-plan.json` review packet that records one accepted plan, visible change receipt, plan digest, and protected workspace digest. A user may apply this exact proposal later with explicit `--apply --apply-plan`; HD rechecks both the workspace digest and plan review before the established transactional write/validation/rollback path. |
+| Evidence | Focused HD/agent suite: 21 tests passed. Full Holy Fitra regression suite: 312 tests passed. CLI syntax and help exposed `--save-plan` and `--apply-plan` without a provider request or workspace mutation. |
+| Boundary | This does not validate provider quality, permit replay after any eligible workspace change, bypass explicit apply or allowlisted validation, enable background work, expose secrets, or establish Pix Studio/Android/device execution. |
+| Sync | Pending Mem authorization. The entry stores no provider key, prompt, or user source code. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

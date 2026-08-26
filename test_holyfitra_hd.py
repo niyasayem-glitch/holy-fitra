@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from holyfitra_agent import AgentAction, AgentError, AgentPlan, AgentPolicy, CodingAgent, Workspace
-from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain, load_private_provider_env, run_hd
+from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain, load_private_provider_env, load_reviewed_plan_packet, run_hd, save_reviewed_plan_packet
 
 
 class HDCopilotTests(unittest.TestCase):
@@ -168,6 +168,38 @@ class HDCopilotTests(unittest.TestCase):
             self.assertIn("/dev/null", previews["new.txt"].unified_diff)
             self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "before\n")
             self.assertFalse((root / "new.txt").exists())
+
+    def test_exact_reviewed_plan_packet_replays_only_the_visible_plan_and_refuses_stale_workspace(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("before\n", encoding="utf-8")
+            (root / "test_hd_packet.py").write_text("import unittest\n\nclass Packet(unittest.TestCase):\n    def test_value(self):\n        self.assertEqual(open('main.txt', encoding='utf-8').read(), 'after\\n')\n", encoding="utf-8")
+            plan = AgentPlan("reviewed exact plan", (
+                AgentAction("write_file", "main.txt", "after\n"),
+                AgentAction("run_check", command=("python3", "-m", "unittest", "test_hd_packet")),
+                AgentAction("finish", reason="done"),
+            ))
+            preview = HDCopilot(Workspace(root)).prepare_review_packet("replace main", plan)
+            packet_path = root / "review.hfhd-plan.json"
+            save_reviewed_plan_packet(packet_path, preview)
+            loaded = load_reviewed_plan_packet(packet_path)
+            self.assertEqual(loaded.plan.digest, plan.digest)
+            self.assertIn("-before", preview.run.changes[0].unified_diff)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "before\n")
+            applied = HDCopilot(Workspace(root, AgentPolicy(allow_write=True, allow_commands=True))).apply_review_packet(loaded)
+            self.assertEqual(applied.agent_run.status, "applied")
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "after\n")
+
+            second_plan = AgentPlan("reviewed stale plan", (
+                AgentAction("write_file", "main.txt", "would-change\n"),
+                AgentAction("run_check", command=("python3", "-m", "unittest", "test_hd_packet")),
+                AgentAction("finish", reason="done"),
+            ))
+            second_packet = HDCopilot(Workspace(root)).prepare_review_packet("stale", second_plan)
+            (root / "main.txt").write_text("user-edit\n", encoding="utf-8")
+            with self.assertRaisesRegex(AgentError, "workspace changed"):
+                HDCopilot(Workspace(root, AgentPolicy(allow_write=True, allow_commands=True))).apply_review_packet(second_packet)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "user-edit\n")
 
     def test_hd_advice_is_read_only_and_campaign_requires_explicit_scoped_approval(self):
         class FakeClient:

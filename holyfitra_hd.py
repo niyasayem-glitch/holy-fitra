@@ -16,11 +16,12 @@ from pathlib import Path
 import re
 from typing import Any, Iterable
 
-from holyfitra_agent import AgentError, AgentPlan, AgentPolicy, AgentRun, CodingAgent, Workspace
+from holyfitra_agent import AgentAction, AgentError, AgentPlan, AgentPolicy, AgentRun, CodingAgent, Workspace
 from holyfitra_obsidian import ObsidianVaultIndex
 
 
 HD_SCHEMA = "holyfitra.hd/v1"
+HD_PLAN_PACKET_SCHEMA = "holyfitra.hd.reviewed-plan/v1"
 MAX_VAULT_FILE_BYTES = 256 * 1024
 MAX_VAULT_CONTEXT_BYTES = 48 * 1024
 MAX_VAULT_MATCHES = 12
@@ -113,6 +114,26 @@ class HDRun:
             "knowledge": [item.body() for item in self.knowledge],
             "changes": [item.body() for item in self.changes],
             "agent_run": self.agent_run.body(),
+        }
+
+
+@dataclass(frozen=True)
+class HDPlanPacket:
+    """A reviewable, portable snapshot of one accepted HD proposal and workspace state."""
+
+    goal: str
+    workspace_digest: str
+    plan: AgentPlan
+    run: HDRun
+
+    def body(self) -> dict[str, object]:
+        return {
+            "schema": HD_PLAN_PACKET_SCHEMA,
+            "goal": self.goal,
+            "workspace_digest": self.workspace_digest,
+            "plan_digest": self.plan.digest,
+            "plan": self.plan.body(),
+            "review": self.run.body(),
         }
 
 
@@ -228,6 +249,15 @@ class HDCopilot:
         matches, context = self.vault.context(goal)
         return matches, context, self.vault.digest(matches)
 
+    def workspace_digest(self) -> str:
+        """Hash only policy-permitted workspace files so review packets detect stale source."""
+        records = []
+        for relative in self.workspace.files():
+            text = self.workspace.read(relative)
+            records.append({"path": relative, "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()})
+        canonical = json.dumps(records, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
     def _change_previews(self, plan: AgentPlan) -> tuple[HDChangePreview, ...]:
         final_writes: dict[str, str] = {}
         for action in plan.actions:
@@ -282,10 +312,26 @@ class HDCopilot:
         matches, _, digest = self._knowledge(goal)
         return HDRun(HD_SCHEMA, goal, digest, matches, self.agent.inspect_plan(plan), self._change_previews(plan))
 
+    def prepare_review_packet(self, goal: str, plan: AgentPlan) -> HDPlanPacket:
+        """Capture an accepted visible review against the exact project state, without mutation."""
+        run = self.inspect_plan(goal, plan)
+        if run.agent_run.status != "planned" or run.agent_run.review is None or not run.agent_run.review.accepted:
+            raise AgentError("HD review packet requires an accepted plan before it can be saved")
+        return HDPlanPacket(goal, self.workspace_digest(), plan, run)
+
     def apply_plan(self, goal: str, plan: AgentPlan) -> HDRun:
         matches, _, digest = self._knowledge(goal)
         changes = self._change_previews(plan)
         return HDRun(HD_SCHEMA, goal, digest, matches, self.agent.apply_plan(goal, plan), changes)
+
+    def apply_review_packet(self, packet: HDPlanPacket) -> HDRun:
+        """Apply the exact reviewed plan only after a stale-workspace and re-review gate."""
+        if self.workspace_digest() != packet.workspace_digest:
+            raise AgentError("HD reviewed plan was not applied because the workspace changed after review")
+        fresh = self.inspect_plan(packet.goal, packet.plan)
+        if fresh.agent_run.status != "planned" or fresh.agent_run.review is None or not fresh.agent_run.review.accepted:
+            raise AgentError("HD reviewed plan was not applied because its validation review is no longer accepted")
+        return self.apply_plan(packet.goal, packet.plan)
 
     def run(self, goal: str, *, apply: bool = False, provider: str | None = None, model: str | None = None) -> HDRun:
         plan, matches, digest = self.build_plan(goal, provider=provider, model=model)
@@ -356,4 +402,49 @@ def run_hd(root: str | os.PathLike[str], goal: str, *, vault: str | os.PathLike[
     return result
 
 
-__all__ = ["HD_SCHEMA", "HDCampaign", "HDChangePreview", "HDCopilot", "HDKnowledgeDocument", "HDKnowledgeMatch", "HDRun", "ObsidianSecondBrain", "load_private_provider_env", "run_hd"]
+def save_reviewed_plan_packet(path: str | os.PathLike[str], packet: HDPlanPacket) -> None:
+    destination = Path(path).expanduser().resolve()
+    encoded = json.dumps(packet.body(), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+    if len(encoded.encode("utf-8")) > MAX_VAULT_CONTEXT_BYTES:
+        raise AgentError("HD reviewed plan packet exceeds the bounded receipt size")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    temporary = destination.with_name(f".{destination.name}.tmp")
+    temporary.write_text(encoded, encoding="utf-8")
+    os.replace(temporary, destination)
+
+
+def load_reviewed_plan_packet(path: str | os.PathLike[str]) -> HDPlanPacket:
+    source = Path(path).expanduser().resolve()
+    if not source.is_file() or source.stat().st_size > MAX_VAULT_CONTEXT_BYTES:
+        raise AgentError("HD reviewed plan packet is unavailable or exceeds the bounded receipt size")
+    try:
+        document = json.loads(source.read_text(encoding="utf-8"))
+        if not isinstance(document, dict) or document.get("schema") != HD_PLAN_PACKET_SCHEMA:
+            raise ValueError("unexpected schema")
+        plan_document = document["plan"]
+        if not isinstance(plan_document, dict):
+            raise ValueError("missing plan")
+        actions = tuple(AgentAction(
+            kind=str(action["kind"]),
+            path=str(action.get("path", "")),
+            content=str(action.get("content", "")),
+            command=tuple(str(item) for item in action.get("command", ())),
+            reason=str(action.get("reason", "")),
+        ) for action in plan_document["actions"])
+        plan = AgentPlan(str(plan_document["summary"]), actions, tuple(str(item) for item in plan_document.get("acceptance", ())))
+        if document.get("plan_digest") != plan.digest:
+            raise ValueError("plan digest mismatch")
+        review_document = document.get("review")
+        if not isinstance(review_document, dict):
+            raise ValueError("missing review")
+        run_document = review_document.get("agent_run")
+        review = run_document.get("review") if isinstance(run_document, dict) else None
+        if not isinstance(review, dict) or not review.get("accepted"):
+            raise ValueError("unaccepted review")
+        placeholder_run = HDRun(HD_SCHEMA, str(document["goal"]), str(review_document.get("knowledge_digest", "")), (), AgentRun("planned", str(document["goal"]), plan, ()), ())
+        return HDPlanPacket(str(document["goal"]), str(document["workspace_digest"]), plan, placeholder_run)
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise AgentError("HD reviewed plan packet is malformed or was altered") from error
+
+
+__all__ = ["HD_PLAN_PACKET_SCHEMA", "HD_SCHEMA", "HDCampaign", "HDChangePreview", "HDCopilot", "HDKnowledgeDocument", "HDKnowledgeMatch", "HDPlanPacket", "HDRun", "ObsidianSecondBrain", "load_private_provider_env", "load_reviewed_plan_packet", "run_hd", "save_reviewed_plan_packet"]

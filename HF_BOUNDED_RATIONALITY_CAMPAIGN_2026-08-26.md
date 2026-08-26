@@ -164,3 +164,15 @@ The optional foreground campaign requires all of `--apply`, a positive `--rounds
 ## Next bounded opportunities
 
 The next justified work is to profile compiler cold-build stages on a larger, real source fixture; remove only measured frontend or process-launch overhead; and add a separate Android NDK/Bionic build receipt. Any architecture-specific kernel work should remain behind numerical equivalence, sanitizer, cross-build, and measured retain gates.
+
+## Exact reviewed-plan HD packets
+
+The prior HD workflow allowed a visible plan receipt followed by a new provider request under `--apply`. That can be awkward for human review because a second provider round-trip may produce a different plan. HD now supports a reviewed-plan packet: `--save-plan <path>.hfhd-plan.json` saves one accepted plan-only review, then `--apply --apply-plan <path>.hfhd-plan.json` applies that exact plan without a second provider call.
+
+The packet is Git-ignored and protected from HD workspace access. It binds the plan to a plan digest and a digest over the eligible project files present at review time. Application fails closed when that workspace digest no longer matches; it also re-runs the existing plan review before it delegates to the normal explicit-apply transaction. The retained regressions prove exact-plan replay, visible-preview retention, stale-workspace rejection before mutation, inherited validation, and rollback semantics. They do not prove provider correctness, persistent autonomy, live assistant service, cloud synchronization, Android execution, or device behavior.
+
+| Gate | Result | Evidence boundary |
+|---|---|---|
+| Reviewed-plan focused HD/agent suite | Pass: 21 tests | Exact plan digest loading, stale-workspace rejection, protected packet file, validation, and rollback contracts; fake/local data only |
+| Full Holy Fitra regression suite | Pass: 312 tests | Host-side unit and integration contracts; no provider call, Android, or device evidence |
+| HD CLI packet surface | Pass | `--save-plan` and `--apply-plan` are visible; help inspection made no provider request or workspace mutation |

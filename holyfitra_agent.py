@@ -27,6 +27,7 @@ MAX_FILE_BYTES = 256 * 1024
 MAX_PLAN_BYTES = 512 * 1024
 MAX_COMMAND_OUTPUT = 32 * 1024
 DENIED_NAMES = frozenset({".env", ".env.local", ".env.production", ".env.development", "hd.providers.env", "id_rsa", "id_ed25519"})
+DENIED_SUFFIXES = (".hfhd-plan.json",)
 DENIED_PARTS = frozenset({".git", ".hg", ".svn", "__pycache__", ".venv", "node_modules"})
 
 
@@ -182,7 +183,7 @@ class Workspace:
         candidate = (self.root / relative).resolve()
         if candidate != self.root and self.root not in candidate.parents:
             raise AgentError(f"workspace path escapes root: {relative}")
-        if any(part in DENIED_PARTS for part in candidate.relative_to(self.root).parts) or candidate.name in DENIED_NAMES:
+        if any(part in DENIED_PARTS for part in candidate.relative_to(self.root).parts) or candidate.name in DENIED_NAMES or candidate.name.endswith(DENIED_SUFFIXES):
             raise AgentError(f"workspace path is protected: {relative}")
         return candidate
 
@@ -212,7 +213,7 @@ class Workspace:
             if not path.is_file():
                 continue
             relative = path.relative_to(self.root)
-            if any(part in DENIED_PARTS for part in relative.parts) or path.name in DENIED_NAMES:
+            if any(part in DENIED_PARTS for part in relative.parts) or path.name in DENIED_NAMES or path.name.endswith(DENIED_SUFFIXES):
                 continue
             try:
                 size = path.stat().st_size

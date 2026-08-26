@@ -17,17 +17,25 @@ holyfitra hd ./my-project \
   --provider openrouter
 ```
 
-Review the JSON receipt. When and only when the proposed write digests, validation commands, and source-note provenance are acceptable, rerun the same bounded request with `--apply`.
+Review the JSON receipt. For an exact inspect-then-apply handoff, ask HD to save an accepted review packet. The packet is ignored by Git, is protected from HD workspace access, includes the reviewed plan and its file-by-file diff, and binds the review to a workspace digest.
 
 ```bash
 holyfitra hd ./my-project \
   'Add a tested project command that preserves existing behavior.' \
   --vault ./my-notes \
   --provider openrouter \
-  --apply
+  --save-plan ./my-project/change.hfhd-plan.json
 ```
 
-Each plan/apply receipt now contains a `changes` list. Every proposed file includes its create/modify operation, before/after SHA-256 identity, byte counts, and a bounded unified diff. The preview is created before apply, so the receipt preserves what HD proposed even when later validation rolls the workspace back.
+After reviewing that packet, apply exactly its reviewed plan with no second provider request. The apply is rejected if any eligible workspace file has changed after review, and the plan is re-checked against the existing policy before transactional apply.
+
+```bash
+holyfitra hd ./my-project \
+  --apply \
+  --apply-plan ./my-project/change.hfhd-plan.json
+```
+
+Each plan/apply receipt contains a `changes` list. Every proposed file includes its create/modify operation, before/after SHA-256 identity, byte counts, and a bounded unified diff. The preview is created before apply, so the receipt preserves what HD proposed even when later validation rolls the workspace back.
 
 ## Interactive advice and bounded build campaigns
 
@@ -88,6 +96,7 @@ Every HD response is a `holyfitra.hd/v1` object. Its `knowledge` list contains v
 | Planning | Ask a configured provider for JSON actions | Notes are labelled **untrusted context**, action schema is parsed and policy-checked |
 | Advice | Explain the selected workspace and bounded second-brain context | `--mode advise` has no plan, write, or command authority |
 | Inspection | Read/search the selected workspace and show proposed writes/checks | Default mode has no write or command permission; `changes` supplies a bounded file-by-file unified diff |
+| Reviewed packet | Save one accepted visible plan for later human approval | Git-ignored `.hfhd-plan.json`, plan digest, workspace digest, and no second provider request on application |
 | Apply | Write workspace-relative files and execute validation | Literal `--apply`, allowlisted command shapes, bounded environment/output/time, and validation after the final write |
 | Campaign | Run a small user-approved foreground sequence of apply cycles | Literal `--apply --rounds N --approve-campaign`, maximum three cycles, stop on any non-applied receipt |
 | Failure | Restore modified files | Transactional rollback receipt records the failure reason and changed-file set |
@@ -100,4 +109,4 @@ There is currently no configured external Obsidian connector. Consequently, this
 
 ## Non-goals
 
-HD does not silently apply changes, run indefinitely, execute arbitrary commands, delete source, access `.git` or environment files, read provider keys, call network tools, modify its own policy, or make any claim that a provider plan is correct. A campaign runs only in the foreground of the invoking command and never resumes itself. A passing allowlisted check is evidence only for that check; it does not certify an entire project or replace human review.
+HD does not silently apply changes, run indefinitely, execute arbitrary commands, delete source, access `.git` or environment files, read provider keys, call network tools, modify its own policy, or make any claim that a provider plan is correct. A reviewed packet is not a bypass: it is rejected on any post-review workspace change and remains subject to the same validation and rollback controls. A campaign runs only in the foreground of the invoking command and never resumes itself. A passing allowlisted check is evidence only for that check; it does not certify an entire project or replace human review.

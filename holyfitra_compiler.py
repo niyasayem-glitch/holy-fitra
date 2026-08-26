@@ -2278,13 +2278,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     agent_parser.add_argument("--model")
     hd_parser = subparsers.add_parser("hd", help="plan or explicitly apply supervised HD copilot changes with an optional Markdown second brain")
     hd_parser.add_argument("root", type=Path)
-    hd_parser.add_argument("goal")
+    hd_parser.add_argument("goal", nargs="?", help="coding goal, or omit when applying a saved reviewed plan")
     hd_parser.add_argument("--vault", type=Path, help="read-only Obsidian-compatible Markdown vault")
     hd_parser.add_argument("--provider-env", type=Path, help="explicit local provider environment file; its values are never printed")
     hd_parser.add_argument("--mode", choices=("plan", "advise"), default="plan", help="plan a visible change review or provide read-only coding advice")
     hd_parser.add_argument("--apply", action="store_true", help="explicitly allow HD writes and allowlisted validation commands")
     hd_parser.add_argument("--rounds", type=int, default=0, help="run a foreground-only bounded HD campaign; requires --apply and --approve-campaign")
     hd_parser.add_argument("--approve-campaign", action="store_true", help="explicitly approve the requested bounded HD campaign budget")
+    hd_parser.add_argument("--save-plan", type=Path, help="save an accepted visible HD plan as an ignored reviewed-plan packet")
+    hd_parser.add_argument("--apply-plan", type=Path, help="apply this exact reviewed-plan packet; requires --apply and makes no provider call")
     hd_parser.add_argument("--provider")
     hd_parser.add_argument("--model")
     campaign_parser = subparsers.add_parser("campaign", help="run a bounded multi-AI coding campaign")
@@ -2364,8 +2366,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "agent":
             return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
         if args.command == "hd":
-            from holyfitra_hd import run_hd
-            print(json.dumps(run_hd(args.root, args.goal, vault=args.vault, provider_env=args.provider_env, apply=args.apply, rounds=args.rounds, approve_campaign=args.approve_campaign, mode=args.mode, provider=args.provider, model=args.model), indent=2, sort_keys=True))
+            from holyfitra_agent import AgentError, AgentPolicy, Workspace
+            from holyfitra_hd import HDCopilot, ObsidianSecondBrain, load_private_provider_env, load_reviewed_plan_packet, run_hd, save_reviewed_plan_packet
+            if args.apply_plan:
+                if args.goal or args.vault or args.provider_env or args.mode != "plan" or args.rounds or args.approve_campaign or args.provider or args.model:
+                    raise AgentError("--apply-plan accepts only root, --apply, and the reviewed plan packet path")
+                if not args.apply:
+                    raise AgentError("--apply-plan requires explicit --apply")
+                packet = load_reviewed_plan_packet(args.apply_plan)
+                result = HDCopilot(Workspace(args.root, AgentPolicy(allow_write=True, allow_commands=True))).apply_review_packet(packet).body()
+                result["reviewed_plan_packet"] = str(args.apply_plan)
+            else:
+                if not args.goal:
+                    raise AgentError("HD goal is required unless --apply-plan is used")
+                if args.save_plan:
+                    if args.apply or args.rounds or args.approve_campaign or args.mode != "plan":
+                        raise AgentError("--save-plan only supports a single plan-only visible review")
+                    loaded = load_private_provider_env(args.provider_env) if args.provider_env else ()
+                    workspace = Workspace(args.root)
+                    copilot = HDCopilot(workspace, ObsidianSecondBrain(args.vault) if args.vault else None)
+                    plan, _, _ = copilot.build_plan(args.goal, provider=args.provider, model=args.model)
+                    packet = copilot.prepare_review_packet(args.goal, plan)
+                    save_reviewed_plan_packet(args.save_plan, packet)
+                    result = packet.body()
+                    result["saved_reviewed_plan_packet"] = str(args.save_plan)
+                    result["loaded_provider_environment"] = list(loaded)
+                else:
+                    result = run_hd(args.root, args.goal, vault=args.vault, provider_env=args.provider_env, apply=args.apply, rounds=args.rounds, approve_campaign=args.approve_campaign, mode=args.mode, provider=args.provider, model=args.model)
+            print(json.dumps(result, indent=2, sort_keys=True))
             return 0
         if args.command == "campaign":
             return campaign_command(args.config, args.goal, args.apply)
