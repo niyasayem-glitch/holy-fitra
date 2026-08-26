@@ -51,6 +51,12 @@ result = registry.invoke(
 
 The read tool returns a `ToolResult` with claim-level evidence and provenance. An agent must still use Holy Fitra’s existing claim verifier before treating a note as support for a tool action. A note is not promoted to `FACT` by the adapter.
 
+## HD copilot integration
+
+The `holyfitra hd` command uses this same local `ObsidianVaultIndex` through a bounded read-only facade. HD records the selected note paths, SHA-256 digests, excerpts, provenance, and deterministic retrieval digest in its `holyfitra.hd/v1` receipt before it asks a provider for a code plan. The resulting plan still enters the supervised agent’s review gate and requires explicit `--apply` before any write or validation command.
+
+HD treats retrieved notes as **untrusted context** rather than executable instructions or verified facts. It does not invoke `obsidian.write`, write to a vault, require the Obsidian desktop application, or connect to a live external Obsidian service. There is no configured external Obsidian connector in this environment; the supported HD path is the privacy-preserving local Markdown vault documented here.
+
 ## Visual and structured exports
 
 The adapter can export the indexed graph as a `.canvas` artifact and a table-oriented `.base` artifact:

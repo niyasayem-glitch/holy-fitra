@@ -1,0 +1,114 @@
+from __future__ import annotations
+
+import tempfile
+import unittest
+from pathlib import Path
+from types import SimpleNamespace
+
+from holyfitra_agent import AgentAction, AgentError, AgentPlan, AgentPolicy, CodingAgent, Workspace
+from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain
+
+
+class HDCopilotTests(unittest.TestCase):
+    def _vault(self, root: Path) -> Path:
+        vault = root / "vault"
+        vault.mkdir()
+        (vault / "hf.md").write_text("# HF Notes\nHD should retain validation receipts and use deterministic imports.\n", encoding="utf-8")
+        (vault / "architecture.md").write_text("# Architecture\nThe HD copilot is supervised and must roll back failed checks.\n", encoding="utf-8")
+        (vault / ".obsidian").mkdir()
+        (vault / ".obsidian" / "private.md").write_text("do not index", encoding="utf-8")
+        return vault
+
+    def test_obsidian_compatible_markdown_retrieval_is_deterministic_and_read_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            vault = self._vault(Path(temporary))
+            brain = ObsidianSecondBrain(vault)
+            first = brain.search("HD validation imports")
+            second = brain.search("HD validation imports")
+            self.assertEqual([item.body() for item in first], [item.body() for item in second])
+            self.assertEqual([item.document.path for item in first], ["hf.md", "architecture.md"])
+            self.assertEqual(brain.digest(first), brain.digest(second))
+
+    def test_hd_inspection_records_knowledge_and_rejects_unvalidated_writes_without_mutation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            plan = AgentPlan("unsafe draft", (AgentAction("write_file", "main.txt", "changed"), AgentAction("finish", reason="done")))
+            hd = HDCopilot(Workspace(root), ObsidianSecondBrain(self._vault(root)))
+            result = hd.inspect_plan("HD validation", plan)
+            self.assertEqual(result.schema, HD_SCHEMA)
+            self.assertEqual(result.agent_run.status, "rejected")
+            self.assertTrue(result.knowledge_digest)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "original")
+
+    def test_hd_apply_requires_explicit_authorization_and_preserves_agent_receipts(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            vault = self._vault(root)
+            plan = AgentPlan("safe draft", (
+                AgentAction("write_file", "main.txt", "changed"),
+                AgentAction("write_file", "test_hd_smoke.py", "import unittest\n\nclass Smoke(unittest.TestCase):\n    def test_change(self):\n        self.assertEqual(open('main.txt', encoding='utf-8').read(), 'changed')\n"),
+                AgentAction("run_check", command=("python3", "-m", "unittest", "test_hd_smoke")),
+                AgentAction("finish", reason="done"),
+            ))
+            with self.assertRaisesRegex(AgentError, "apply mode requires"):
+                HDCopilot(Workspace(root), ObsidianSecondBrain(vault)).apply_plan("HD apply", plan)
+            policy = AgentPolicy(allow_write=True, allow_commands=True)
+            applied = HDCopilot(Workspace(root, policy), ObsidianSecondBrain(vault)).apply_plan("HD apply", plan)
+            self.assertEqual(applied.agent_run.status, "applied")
+            self.assertFalse(applied.agent_run.rolled_back)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "changed")
+            self.assertTrue(applied.agent_run.review and applied.agent_run.review.accepted)
+
+    def test_hd_failed_validation_rolls_back_all_staged_writes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            (root / "test_hd_failure.py").write_text("import unittest\n\nclass Failure(unittest.TestCase):\n    def test_failure(self):\n        self.fail('intentional validation failure')\n", encoding="utf-8")
+            plan = AgentPlan("rollback draft", (
+                AgentAction("write_file", "main.txt", "changed"),
+                AgentAction("write_file", "created.txt", "temporary"),
+                AgentAction("run_check", command=("python3", "-m", "unittest", "test_hd_failure")),
+                AgentAction("finish", reason="done"),
+            ))
+            policy = AgentPolicy(allow_write=True, allow_commands=True)
+            result = HDCopilot(Workspace(root, policy), ObsidianSecondBrain(self._vault(root))).apply_plan("HD rollback", plan)
+            self.assertEqual(result.agent_run.status, "rolled_back")
+            self.assertTrue(result.agent_run.rolled_back)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "original")
+            self.assertFalse((root / "created.txt").exists())
+            self.assertEqual(result.agent_run.observations[-1]["kind"], "rollback")
+
+    def test_hd_provider_plan_receives_bounded_provenance_but_plan_only_mode_cannot_write(self):
+        class FakeClient:
+            def __init__(self):
+                self.prompt = ""
+                self.system = ""
+
+            def chat(self, prompt, **kwargs):
+                self.prompt = prompt
+                self.system = kwargs["system"]
+                return SimpleNamespace(text=(
+                    '{"summary":"draft","acceptance":["smoke"],"actions":['
+                    '{"kind":"write_file","path":"main.txt","content":"changed"},'
+                    '{"kind":"run_check","command":["python3","-m","unittest","test_hd_smoke"]},'
+                    '{"kind":"finish","reason":"done"}]}'
+                ))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "main.txt").write_text("original", encoding="utf-8")
+            (root / "test_hd_smoke.py").write_text("import unittest\n\nclass Smoke(unittest.TestCase):\n    def test_value(self):\n        self.assertTrue(True)\n", encoding="utf-8")
+            client = FakeClient()
+            agent = CodingAgent(Workspace(root), client=client)
+            result = HDCopilot(agent.workspace, ObsidianSecondBrain(self._vault(root)), agent).run("HD validation imports")
+            self.assertEqual(result.agent_run.status, "planned")
+            self.assertIn("Source: hf.md", client.prompt)
+            self.assertIn("sha256:", client.prompt)
+            self.assertIn("untrusted context", client.system)
+            self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "original")
+
+
+if __name__ == "__main__":
+    unittest.main()

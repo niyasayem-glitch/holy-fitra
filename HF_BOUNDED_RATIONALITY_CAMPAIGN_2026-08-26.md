@@ -121,6 +121,20 @@ Validation covered host execution of signed and unsigned widening, equal-width c
 | Attention structural gate | Retained as opt-in; rejected as NLL default | 16-width/16-context/9,744-parameter attention model scored NLL 2.623819122090098 versus order-2 n-gram 1.6326092371555752 on the same in-corpus receipt |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
+## HD supervised second-brain copilot
+
+The retained HD capability is deliberately a supervised workflow rather than a new unrestricted agent. `holyfitra hd` accepts a workspace, a goal, an optional local Obsidian-compatible Markdown vault, and an explicit `--apply` flag. Before a provider plan is considered, HD obtains only a deterministic, bounded retrieval pack from the established local `ObsidianVaultIndex`. Each selected note retains its vault-relative path, SHA-256 digest, excerpt, score, and provenance; the ordered match set is bound by a `knowledge_digest` in the `holyfitra.hd/v1` receipt.
+
+Provider text remains a proposed `AgentPlan`. It is parsed through the existing workspace confinement and command allowlist, reviewed before mutation, and rejected if a write lacks a later validation command. Plan-only HD mode cannot write files or execute commands. Explicit apply delegates to the existing transaction; a failed allowlisted check restores both changed and newly created files and returns a rollback observation.
+
+| Gate | Result | Evidence boundary |
+|---|---|---|
+| HD plus Obsidian focused suite | Pass: 12 tests | Deterministic local vault retrieval, hidden-path exclusion, provenance/digest binding, fake-provider plan context, explicit apply, review rejection, and failed-check rollback only |
+| Full Holy Fitra regression suite | Pass: 302 tests | Host-side unit and integration contracts; no provider, live Obsidian, Mem, Android, or device execution implied |
+| HD CLI and capabilities contract | Pass | Help exposes `--vault`; machine-readable report contains the supervised HD entry; no AI request or workspace mutation performed |
+
+There is no configured external Obsidian connector. Therefore the retained path is local Markdown-vault retrieval, not live synchronization. Connected Mem remains authorization-blocked and the repository ledger is a pending-sync fallback only. HD does not gain background autonomy, vault-write authority, arbitrary shell/network access, source deletion, credential access, or the ability to change its own policy.
+
 ## Next bounded opportunities
 
 The next justified work is to profile compiler cold-build stages on a larger, real source fixture; remove only measured frontend or process-launch overhead; and add a separate Android NDK/Bionic build receipt. Any architecture-specific kernel work should remain behind numerical equivalence, sanitizer, cross-build, and measured retain gates.

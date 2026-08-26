@@ -38,6 +38,10 @@ holyfitra agent ./my-project \
 
 This is **supervised self-improvement**, not unrestricted self-modification. The model cannot grant itself additional capabilities, change protected files, execute arbitrary shell strings, read API keys, call network tools through the validation runner, or silently retain an unvalidated patch.
 
+## HD second-brain copilot
+
+`holyfitra hd` is the single-round, second-brain-assisted form of the supervised workflow. It accepts an optional `--vault` path, retrieves only bounded local Markdown context through the existing Obsidian index, and returns note provenance plus a deterministic retrieval digest with the normal plan-review receipt. HD retains the same explicit `--apply` rule, transaction, command allowlist, and rollback behavior; it does not add self-improvement rounds, background execution, arbitrary tools, vault-write authority, or an external Obsidian dependency. See [`HOLY_FITRA_HD.md`](HOLY_FITRA_HD.md) for commands and receipt fields.
+
 ## Allowlisted actions
 
 The model can propose `read_file`, `search`, `write_file`, `run_check`, and `finish`. Validation commands are restricted to Holy Fitra checks/builds/tests, Python unit tests, the unified Termux test gate, and `git diff --check`. Shell execution uses `shell=False`, a timeout, a bounded environment, and a bounded output buffer.

@@ -2218,6 +2218,7 @@ def capabilities_report() -> dict[str, object]:
             "chat_and_embeddings": "implemented",
             "validated_fitra_generation": "implemented_with_explicit_provider_opt_in",
             "supervised_coding_agent": "implemented_plan_first_apply_opt_in",
+            "supervised_hd_copilot": "implemented_provider_planning_read_only_obsidian_context_explicit_apply_validation_and_rollback_receipts",
             "deterministic_local_causal_baseline": "byte_bigram_sparse_ngram_and_bounded_embedding_attention_training_checkpoint_generation_and_evaluation_host_validated",
             "multi_ai_campaigns": "implemented_high_risk_branch_gate",
             "learning_and_replay": "implemented_python_runtime_components",
@@ -2275,6 +2276,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     agent_parser.add_argument("--improve-rounds", type=int, default=0, help="retain only rounds whose validation passes")
     agent_parser.add_argument("--provider")
     agent_parser.add_argument("--model")
+    hd_parser = subparsers.add_parser("hd", help="plan or explicitly apply supervised HD copilot changes with an optional Markdown second brain")
+    hd_parser.add_argument("root", type=Path)
+    hd_parser.add_argument("goal")
+    hd_parser.add_argument("--vault", type=Path, help="read-only Obsidian-compatible Markdown vault")
+    hd_parser.add_argument("--apply", action="store_true", help="explicitly allow HD writes and allowlisted validation commands")
+    hd_parser.add_argument("--provider")
+    hd_parser.add_argument("--model")
     campaign_parser = subparsers.add_parser("campaign", help="run a bounded multi-AI coding campaign")
     campaign_parser.add_argument("config", type=Path, help="TOML campaign configuration")
     campaign_parser.add_argument("--goal", help="override the goal from the configuration")
@@ -2351,6 +2359,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             return capabilities()
         if args.command == "agent":
             return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
+        if args.command == "hd":
+            from holyfitra_hd import run_hd
+            print(json.dumps(run_hd(args.root, args.goal, vault=args.vault, apply=args.apply, provider=args.provider, model=args.model), indent=2, sort_keys=True))
+            return 0
         if args.command == "campaign":
             return campaign_command(args.config, args.goal, args.apply)
         if args.command == "ai":

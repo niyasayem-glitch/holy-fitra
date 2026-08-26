@@ -328,6 +328,15 @@ holyfitra agent ./my-project 'Add a tested feature to this project.' --provider 
 holyfitra agent ./my-project 'Improve performance without changing behavior.' --provider openai --apply --improve-rounds 3
 ```
 
+For a second-brain-assisted copilot workflow, use **HD** with an optional local Obsidian-compatible Markdown vault. HD returns note provenance, a deterministic retrieval digest, and the standard plan-review receipt before it can write anything. It remains a supervised workflow: `--apply` is required for any workspace mutation or allowlisted validation command.
+
+```bash
+holyfitra hd ./my-project 'Add a tested feature.' --vault ./my-obsidian-vault --provider openrouter
+holyfitra hd ./my-project 'Add a tested feature.' --vault ./my-obsidian-vault --provider openrouter --apply
+```
+
+See [`HOLY_FITRA_HD.md`](HOLY_FITRA_HD.md) for the authority boundary and [`HOLY_FITRA_OBSIDIAN_INTEGRATION.md`](HOLY_FITRA_OBSIDIAN_INTEGRATION.md) for the local-vault format and provenance model. This is local Markdown retrieval, not live Obsidian synchronization or silent autonomous control.
+
 ## Native and Android validation
 
 ```bash

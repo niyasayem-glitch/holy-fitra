@@ -107,6 +107,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | The attention baseline does not establish a production transformer, attention throughput, held-out quality, generalization, language understanding, coding, reasoning, multimodality, Qwen parity, Android execution, or device performance. |
 | Sync | Pending Mem authorization. |
 
+### `HF-2026-08-26-AI-002`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | HD supervised coding copilot and Obsidian-compatible second brain |
+| Decision | Retained `holyfitra hd <workspace> <goal> [--vault <vault>] [--apply]` as a thin supervised facade over the existing transactional coding agent and local `ObsidianVaultIndex`. HD emits a retrieval digest plus vault-relative note provenance and delegates plan review, explicit apply, allowlisted validation, and rollback receipts to the established agent controls. |
+| Evidence | Focused HD plus Obsidian suites: 12 tests passed. Full Holy Fitra regression suite: 302 tests passed. CLI help and machine-readable capability checks passed. Provider-plan context was tested only with a deterministic fake client; no external provider was called. |
+| Boundary | This does not establish live Obsidian synchronization, an external Obsidian connector, Mem synchronization, provider correctness, autonomous background code changes, arbitrary shell/network access, source deletion, or unrestricted model control. A successful check remains evidence only for that check. |
+| Sync | Pending Mem authorization. Do not claim this entry has been sent to or retrieved from Mem. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.
