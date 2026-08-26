@@ -74,6 +74,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | No runtime checked casts, unsigned input bridge, unsigned hybrid reducers, Bionic link, APK, JNI, or device execution is established. |
 | Sync | Pending Mem authorization. |
 
+### `HF-2026-08-26-MODEL-001`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | Deterministic local token language-model baseline |
+| Decision | Retained `holyfitra local-lm`: UTF-8 byte tokenization, one begin token, causal next-byte bigram training, deterministic greedy generation, checksum-bound NumPy checkpoints, and evaluation receipts. |
+| Evidence | 5 focused local-model tests passed; full HF suite passed 292 tests. CLI training/evaluation on repository README and capability documents produced corpus digest `c134ce5aa4f2cda768704485170a16d50c4dfc597cf7bc364606c60210e39935`, model digest `84507886cc2028fe8b071b468f646ead87a49b118e1885948c443badce71527e`, 28,646 transitions, and in-corpus mean NLL `2.624217972399485`. |
+| Boundary | This is a 257-token, one-token-context bigram baseline. It does not demonstrate held-out quality, natural-language understanding, coding, reasoning, long context, transformer attention, quantization quality, tool use, multimodality, Qwen parity, or device performance. |
+| Sync | Pending Mem authorization. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

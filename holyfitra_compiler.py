@@ -2218,6 +2218,7 @@ def capabilities_report() -> dict[str, object]:
             "chat_and_embeddings": "implemented",
             "validated_fitra_generation": "implemented_with_explicit_provider_opt_in",
             "supervised_coding_agent": "implemented_plan_first_apply_opt_in",
+            "deterministic_local_causal_baseline": "byte_bigram_training_checkpoint_generation_and_evaluation_host_validated",
             "multi_ai_campaigns": "implemented_high_risk_branch_gate",
             "learning_and_replay": "implemented_python_runtime_components",
             "qat_and_int4": "implemented_with_numerical_validation_surfaces",
@@ -2297,6 +2298,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     ai_generate_parser.add_argument("--provider")
     ai_generate_parser.add_argument("--model")
     ai_generate_parser.add_argument("--max-tokens", type=int, default=4096)
+    local_lm_parser = subparsers.add_parser("local-lm", help="train, evaluate, or greedily decode the deterministic local causal baseline")
+    local_lm_parser.add_argument("arguments", nargs=argparse.REMAINDER, help="arguments passed to the local-lm command: train, generate, or evaluate")
     tui_parser = subparsers.add_parser("tui", help="open the Holy Fitra terminal workspace UI")
     tui_parser.add_argument("path", nargs="?", type=Path, default=Path("."))
     tui_parser.add_argument("--snapshot", action="store_true")
@@ -2359,6 +2362,9 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return ai_embed(args.texts, args.provider, args.model)
             if args.ai_command == "generate-fitra":
                 return ai_generate_fitra(args.prompt, args.output, args.provider, args.model, args.max_tokens)
+        if args.command == "local-lm":
+            from holyfitra_local_lm import main as local_lm_main
+            return local_lm_main(list(args.arguments))
         if args.command == "tui":
             from holyfitra_tui import run_tui
             return run_tui(args.path, args.snapshot, args.watch_interval)
