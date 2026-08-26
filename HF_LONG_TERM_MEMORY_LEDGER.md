@@ -151,6 +151,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This does not validate provider quality, permit replay after any eligible workspace change, bypass explicit apply or allowlisted validation, enable background work, expose secrets, or establish Pix Studio/Android/device execution. |
 | Sync | Pending Mem authorization. The entry stores no provider key, prompt, or user source code. |
 
+### `HF-2026-08-26-AI-006`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | HD stale-workspace guard and bounded sequential stress investigation |
+| Decision | Retained the exact reviewed-plan workspace digest guard without caching and retained a small Pix Studio terminal string-work reduction. Rejected a direct Termux embedding/copy as outside the current Expo/license/native-build boundary. |
+| Evidence | Real HF workspace digest: 39 eligible files, 258,115 bytes, 100 rounds, 41.5203 ms mean and 46.5507 ms p95. HD/agent focused suite passed 25 sequential runs; the 312-test full HF suite passed 5 sequential runs. Termux assessment cites the official GPLv3-only app license and native/bootstrap/signing constraints. |
+| Boundary | This does not establish provider latency, autonomous improvement, Termux compatibility, a custom Android integration, device-shell access, Android execution, device performance, security certification, or concurrent-load behavior. |
+| Sync | Pending Mem authorization. No credential, provider prompt, or user source code was stored. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.
