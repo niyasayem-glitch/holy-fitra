@@ -117,6 +117,8 @@ Validation covered host execution of signed and unsigned widening, equal-width c
 | Local documentation-corpus receipt | Pass | 28,646 in-corpus transitions and NLL 2.624217972399485; sanity receipt only, not held-out quality or model-capability benchmark |
 | Sparse n-gram focused suite | Pass: 6 tests | Matched-NLL behavior, interpolation fallback, checkpoint round-trip, context bound, and CLI order selection |
 | Sparse n-gram matched retention gate | Retained | Current identical documentation corpus: order-1 NLL 2.6247765502432703; order-2 NLL 1.6327421523496604; 37.79500383% relative in-corpus reduction only |
+| Embedding-attention focused suite | Pass: 4 tests | Causal-mask invariance, deterministic training, checkpoint integrity, bounds, and CLI dispatch |
+| Attention structural gate | Retained as opt-in; rejected as NLL default | 16-width/16-context/9,744-parameter attention model scored NLL 2.623819122090098 versus order-2 n-gram 1.6326092371555752 on the same in-corpus receipt |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

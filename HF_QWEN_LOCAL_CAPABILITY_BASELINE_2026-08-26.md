@@ -32,6 +32,12 @@ On 2026-08-26, the CLI trained and evaluated the baseline on the repository’s 
 
 On the identical current repository-document corpus, the order-1 bigram produced mean NLL `2.6247765502432703`; order 2 produced `1.6327421523496604`. The absolute reduction was `0.9920343978936099` NLL, or `37.79500383%` relative to the bigram. Both receipts covered the same 2 documents, 28,855 transitions, and corpus digest `7352350aefb7778ee19e6f1427887f5fde69c72f03c443732231e83de7c34a5b`. This is retained as an **in-corpus conditional-likelihood improvement only**. It does not measure held-out quality, generalization, language understanding, coding, reasoning, or Qwen comparability.
 
+### Retained structural attention baseline; rejected as NLL default
+
+HF now also exposes `holyfitra local-lm train --architecture attention`. It is a deterministic, trainable single-head causal self-attention reference with learned byte embeddings, learned positions, `Q/K/V/O` matrices, residual output, and a next-byte projection. Its bounds are intentionally small: 257 vocabulary entries, context 2–32, embedding width 4–64, 1–16 epochs, and at most 160,000 parameters. Causal-mask tests confirm that adding a future token does not change any prior logits; checkpoints persist all weights and a digest.
+
+On the same then-current two-document corpus (`ff31abb84e39ba90ebc9a3e7cadf64e7b88406d824adb8916fa93a1c5ee160d0`, 28,905 transitions), the bounded configuration with width 16, context 16, 9,744 parameters, seed 17, learning rate 0.1, and 12 epochs produced in-corpus NLL `2.623819122090098`. The retained sparse order-2 n-gram scored `1.6326092371555752` on that same corpus. Therefore attention is retained as an **opt-in structural and causal-training baseline**, but rejected as the default NLL model. This does not establish transformer-scale training, attention efficiency, generalization, or Qwen comparability.
+
 ## Measurement protocol
 
 Each future retained model result must declare model architecture, parameter count, vocabulary, context length, tokenizer, dataset provenance and license, split hashes, precision, seed, training steps, hardware, wall time, peak memory, decoding settings, and the exact task harness. Compare only identical task sets and report failures as well as successes.

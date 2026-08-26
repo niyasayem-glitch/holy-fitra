@@ -96,6 +96,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This is an in-corpus NLL comparison only. It does not establish held-out quality, generalization, natural-language understanding, coding, reasoning, transformer equivalence, Qwen parity, resource efficiency, or device performance. |
 | Sync | Pending Mem authorization. |
 
+### `HF-2026-08-26-MODEL-003`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | Bounded trainable causal embedding-attention local model |
+| Decision | Retained an opt-in single-head causal byte-attention reference with learned embeddings, positions, `Q/K/V/O`, residual output, deterministic SGD, bounded architecture, causal-mask proof, and digest-checked checkpoints. Rejected it as the default NLL model. |
+| Evidence | Focused attention/local-model suites: 10 tests passed. Causal invariance test confirms future tokens do not change prior logits. The 16-width, 16-context, 9,744-parameter, 12-epoch configuration reached in-corpus NLL `2.623819122090098` on the 28,905-transition corpus digest `ff31abb84e39ba90ebc9a3e7cadf64e7b88406d824adb8916fa93a1c5ee160d0`; retained order-2 n-gram NLL was `1.6326092371555752` on the same corpus. |
+| Boundary | The attention baseline does not establish a production transformer, attention throughput, held-out quality, generalization, language understanding, coding, reasoning, multimodality, Qwen parity, Android execution, or device performance. |
+| Sync | Pending Mem authorization. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

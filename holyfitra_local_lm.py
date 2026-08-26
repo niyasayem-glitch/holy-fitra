@@ -90,6 +90,7 @@ class LocalLMTrainingReceipt:
     architecture: str = "causal-bigram"
     context_tokens: int = 1
     context_rows: int = VOCAB_SIZE
+    parameter_count: int = 0
     schema: str = SCHEMA
 
     def body(self) -> dict[str, object]:
@@ -105,6 +106,7 @@ class LocalLMTrainingReceipt:
             "vocabulary_size": VOCAB_SIZE,
             "context_tokens": self.context_tokens,
             "context_rows": self.context_rows,
+            "parameter_count": self.parameter_count,
             "architecture": self.architecture,
         }
 
@@ -120,6 +122,7 @@ class LocalLMEvaluationReceipt:
     architecture: str = "causal-bigram"
     context_tokens: int = 1
     context_rows: int = VOCAB_SIZE
+    parameter_count: int = 0
     schema: str = SCHEMA
 
     def body(self) -> dict[str, object]:
@@ -134,6 +137,7 @@ class LocalLMEvaluationReceipt:
             "architecture": self.architecture,
             "context_tokens": self.context_tokens,
             "context_rows": self.context_rows,
+            "parameter_count": self.parameter_count,
         }
 
 
@@ -405,7 +409,7 @@ def _read_documents(paths: Iterable[Path]) -> tuple[str, ...]:
     return tuple(documents)
 
 
-def load_local_language_model(checkpoint: Path) -> CausalBigramLanguageModel | CausalNgramLanguageModel:
+def load_local_language_model(checkpoint: Path) -> object:
     try:
         with np.load(Path(checkpoint), allow_pickle=False) as payload:
             metadata = json.loads(str(payload["metadata"].item()))
@@ -416,6 +420,9 @@ def load_local_language_model(checkpoint: Path) -> CausalBigramLanguageModel | C
         return CausalBigramLanguageModel.load(checkpoint)
     if schema == NGRAM_SCHEMA:
         return CausalNgramLanguageModel.load(checkpoint)
+    from holyfitra_attention_lm import ATTENTION_SCHEMA, CausalEmbeddingAttentionLanguageModel
+    if schema == ATTENTION_SCHEMA:
+        return CausalEmbeddingAttentionLanguageModel.load(checkpoint)
     raise LocalLanguageModelError("checkpoint schema is unsupported")
 
 
@@ -425,9 +432,15 @@ def main(argv: list[str] | None = None) -> int:
     train = commands.add_parser("train")
     train.add_argument("corpus", nargs="+", type=Path)
     train.add_argument("--output", required=True, type=Path)
+    train.add_argument("--architecture", choices=["ngram", "attention"], default="ngram", help="bounded local model family")
     train.add_argument("--smoothing", type=float, default=0.1)
     train.add_argument("--order", type=int, default=1, help=f"causal context tokens: 1 for bigram, 2-{MAX_NGRAM_ORDER} for sparse n-gram")
     train.add_argument("--max-contexts", type=int, default=MAX_NGRAM_CONTEXTS, help="upper bound for sparse n-gram contexts")
+    train.add_argument("--d-model", type=int, default=16, help="attention embedding width")
+    train.add_argument("--context-tokens", type=int, default=16, help="attention causal context limit")
+    train.add_argument("--learning-rate", type=float, default=0.05, help="attention SGD learning rate")
+    train.add_argument("--epochs", type=int, default=4, help="attention training epochs")
+    train.add_argument("--seed", type=int, default=17, help="attention initialization seed")
     generate = commands.add_parser("generate")
     generate.add_argument("checkpoint", type=Path)
     generate.add_argument("prompt")
@@ -438,7 +451,11 @@ def main(argv: list[str] | None = None) -> int:
     arguments = parser.parse_args(argv)
     try:
         if arguments.command == "train":
-            model = CausalBigramLanguageModel(smoothing=arguments.smoothing) if arguments.order == 1 else CausalNgramLanguageModel(order=arguments.order, smoothing=arguments.smoothing, max_contexts=arguments.max_contexts)
+            if arguments.architecture == "attention":
+                from holyfitra_attention_lm import CausalEmbeddingAttentionLanguageModel
+                model = CausalEmbeddingAttentionLanguageModel(d_model=arguments.d_model, context_tokens=arguments.context_tokens, learning_rate=arguments.learning_rate, epochs=arguments.epochs, seed=arguments.seed)
+            else:
+                model = CausalBigramLanguageModel(smoothing=arguments.smoothing) if arguments.order == 1 else CausalNgramLanguageModel(order=arguments.order, smoothing=arguments.smoothing, max_contexts=arguments.max_contexts)
             receipt = model.fit(_read_documents(arguments.corpus))
             model.save(arguments.output)
             print(json.dumps({"ok": True, "checkpoint": str(arguments.output), "receipt": receipt.body()}, sort_keys=True))
