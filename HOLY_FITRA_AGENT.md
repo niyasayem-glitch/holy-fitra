@@ -46,7 +46,7 @@ This is **supervised self-improvement**, not unrestricted self-modification. The
 
 The model can propose `read_file`, `search`, `write_file`, `run_check`, and `finish`. Validation commands are restricted to Holy Fitra checks/builds/tests, Python unit tests, the unified Termux test gate, and `git diff --check`. Shell execution uses `shell=False`, a timeout, a bounded environment, and a bounded output buffer.
 
-Workspace reads exclude `.git`, virtual environments, dependency trees, caches, environment files, and common private-key filenames. File paths are canonicalized before access, and traversal outside the selected project is rejected. Generated files are written through a temporary file and atomic replacement.
+Workspace reads exclude `.git`, virtual environments, dependency trees, caches, environment files, the local HD `hd.providers.env` credential file, and common private-key filenames. File paths are canonicalized before access, and traversal outside the selected project is rejected. Generated files are written through a temporary file and atomic replacement.
 
 ## Relationship to the AI provider layer
 

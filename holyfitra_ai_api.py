@@ -321,6 +321,50 @@ class AnthropicProvider(AIProvider):
         return AIResponse(self.name, str(response.get("model", request.model)), text, response.get("stop_reason"), headers.get("request-id"), dict(response.get("usage", {})), response)
 
 
+class CohereProvider(AIProvider):
+    """Cohere v2 Chat and Embed provider with explicit no-streaming normalization."""
+
+    name = "cohere"
+    kind = "cohere-v2"
+    credential_env = "COHERE_API_KEY"
+    default_model = "command-a-plus-05-2026"
+
+    def __init__(self, *, base_url: str | None = None, http: _HTTP | None = None) -> None:
+        super().__init__(http)
+        self.base_url = (base_url or os.environ.get("COHERE_BASE_URL", "https://api.cohere.com")).rstrip("/")
+        self.endpoint = self.base_url
+        self.default_model = os.environ.get("COHERE_MODEL", self.default_model)
+
+    def _headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {_credential(self.credential_env or 'COHERE_API_KEY')}", "X-Client-Name": "holyfitra"}
+
+    def chat(self, request: AIRequest) -> AIResponse:
+        if request.tools:
+            raise AIConfigurationError("Cohere tool calls are not enabled in the supervised HD provider path")
+        messages = [{"role": str(message.get("role", "user")), "content": _content_to_text(message.get("content", ""))} for message in request.messages]
+        payload: dict[str, Any] = {"stream": False, "model": request.model, "messages": messages, "max_tokens": request.max_tokens}
+        if request.temperature is not None:
+            payload["temperature"] = request.temperature
+        if request.response_format is not None:
+            payload["response_format"] = request.response_format
+        response, headers = self.http.post_json(f"{self.base_url}/v2/chat", payload, self._headers(), timeout=request.timeout_seconds)
+        try:
+            text = _content_to_text(response["message"].get("content", ""))
+        except (KeyError, TypeError) as error:
+            raise AIProviderError("Cohere response has no message.content") from error
+        return AIResponse(self.name, request.model, text, response.get("finish_reason"), headers.get("x-request-id"), dict(response.get("usage", {})), response)
+
+    def embed(self, texts: tuple[str, ...], *, model: str, timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> tuple[tuple[float, ...], ...]:
+        if not texts or any(not isinstance(text, str) or not text for text in texts):
+            raise AIConfigurationError("embedding inputs must be non-empty strings")
+        payload = {"model": model, "input_type": "search_document", "texts": list(texts), "embedding_types": ["float"]}
+        response, _ = self.http.post_json(f"{self.base_url}/v2/embed", payload, self._headers(), timeout=timeout_seconds)
+        try:
+            return tuple(tuple(float(value) for value in vector) for vector in response["embeddings"]["float"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise AIProviderError("Cohere embedding response is invalid") from error
+
+
 class ProviderRegistry:
     """Registry for direct providers, OpenAI-compatible gateways, and local models."""
 
@@ -331,6 +375,9 @@ class ProviderRegistry:
                 GeminiProvider(),
                 AnthropicProvider(),
                 OpenAICompatibleProvider("openrouter", base_url=os.environ.get("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"), api_key_env="OPENROUTER_API_KEY", default_model=os.environ.get("OPENROUTER_MODEL", "openai/gpt-4o-mini")),
+                OpenAICompatibleProvider("cerebras", base_url=os.environ.get("CEREBRAS_BASE_URL", "https://api.cerebras.ai/v1"), api_key_env="CEREBRAS_API_KEY", default_model=os.environ.get("HOLYFITRA_CEREBRAS_MODEL", "gpt-oss-120b")),
+                OpenAICompatibleProvider("groq", base_url=os.environ.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1"), api_key_env="GROQ_API_KEY", default_model=os.environ.get("HOLYFITRA_GROQ_MODEL", "llama-3.3-70b-versatile")),
+                CohereProvider(),
                 OpenAICompatibleProvider("ollama", base_url=os.environ.get("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1"), default_model=os.environ.get("OLLAMA_MODEL", "llama3.2")),
                 OpenAICompatibleProvider("lmstudio", base_url=os.environ.get("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1"), default_model=os.environ.get("LMSTUDIO_MODEL", "local-model")),
             )
@@ -427,6 +474,7 @@ __all__ = [
     "AIResponse",
     "AIProvider",
     "AnthropicProvider",
+    "CohereProvider",
     "GeminiProvider",
     "OpenAICompatibleProvider",
     "ProviderRegistry",

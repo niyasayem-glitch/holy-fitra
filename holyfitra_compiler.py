@@ -2280,6 +2280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     hd_parser.add_argument("root", type=Path)
     hd_parser.add_argument("goal")
     hd_parser.add_argument("--vault", type=Path, help="read-only Obsidian-compatible Markdown vault")
+    hd_parser.add_argument("--provider-env", type=Path, help="explicit local provider environment file; its values are never printed")
     hd_parser.add_argument("--apply", action="store_true", help="explicitly allow HD writes and allowlisted validation commands")
     hd_parser.add_argument("--provider")
     hd_parser.add_argument("--model")
@@ -2361,7 +2362,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             return agent_command(args.root, args.goal, args.apply, args.improve_rounds, args.provider, args.model)
         if args.command == "hd":
             from holyfitra_hd import run_hd
-            print(json.dumps(run_hd(args.root, args.goal, vault=args.vault, apply=args.apply, provider=args.provider, model=args.model), indent=2, sort_keys=True))
+            print(json.dumps(run_hd(args.root, args.goal, vault=args.vault, provider_env=args.provider_env, apply=args.apply, provider=args.provider, model=args.model), indent=2, sort_keys=True))
             return 0
         if args.command == "campaign":
             return campaign_command(args.config, args.goal, args.apply)

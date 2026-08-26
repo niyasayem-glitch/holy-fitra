@@ -118,6 +118,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This does not establish live Obsidian synchronization, an external Obsidian connector, Mem synchronization, provider correctness, autonomous background code changes, arbitrary shell/network access, source deletion, or unrestricted model control. A successful check remains evidence only for that check. |
 | Sync | Pending Mem authorization. Do not claim this entry has been sent to or retrieved from Mem. |
 
+### `HF-2026-08-26-AI-003`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | HD provider adapters and local credential isolation |
+| Decision | Retained verified HD paths for the existing Gemini and OpenRouter providers plus new Cerebras, Groq, and Cohere providers. Retained an explicit `--provider-env` loader for an ignored local `hd.providers.env` file, a tracked value-free template, an allowlist of provider-only variables, and supervised-workspace protection for the credential filename. |
+| Evidence | Focused AI provider, agent, HD, and compiler suites: 72 tests passed. Full Holy Fitra regression suite: 307 tests passed. Provider discovery listed Cerebras, Groq, and Cohere; CLI help exposed `--provider-env`. No actual credential value or external provider call was used during validation. |
+| Boundary | This does not verify user credentials, provider billing/quota, model availability, response quality, external connector synchronization, or autonomous code application. Three screenshot values could not be safely attributed from prefix alone and were intentionally not implemented as guessed providers. |
+| Sync | Pending Mem authorization. The ledger stores no credential values, prompts, or user source code. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

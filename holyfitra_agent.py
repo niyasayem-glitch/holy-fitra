@@ -26,7 +26,7 @@ MAX_CONTEXT_BYTES = 256 * 1024
 MAX_FILE_BYTES = 256 * 1024
 MAX_PLAN_BYTES = 512 * 1024
 MAX_COMMAND_OUTPUT = 32 * 1024
-DENIED_NAMES = frozenset({".env", ".env.local", ".env.production", ".env.development", "id_rsa", "id_ed25519"})
+DENIED_NAMES = frozenset({".env", ".env.local", ".env.production", ".env.development", "hd.providers.env", "id_rsa", "id_ed25519"})
 DENIED_PARTS = frozenset({".git", ".hg", ".svn", "__pycache__", ".venv", "node_modules"})
 
 

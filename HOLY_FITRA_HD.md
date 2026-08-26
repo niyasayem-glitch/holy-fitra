@@ -27,7 +27,15 @@ holyfitra hd ./my-project \
   --apply
 ```
 
-The `--vault` argument is optional. A provider must already be configured through Holy Fitra’s provider-neutral AI layer; HD does not accept provider secrets as command arguments.
+The `--vault` argument is optional. HD does not accept a provider secret as a command argument. For a local provider setup, copy the tracked `hd.providers.env.example` to the ignored `hd.providers.env`, enter only newly generated credentials, and pass it explicitly with `--provider-env`.
+
+```bash
+holyfitra hd ./my-project 'Draft a tested change.' \
+  --provider cohere \
+  --provider-env ./hd.providers.env
+```
+
+The loader accepts only the supported provider keys, model selectors, and HTTPS base-URL overrides. It prints no credential value, reports only the names of loaded variables, and the supervised workspace treats `hd.providers.env` as a protected file. See [`HOLY_FITRA_AI.md`](HOLY_FITRA_AI.md) for the supported provider matrix and local-file template.
 
 ## Receipt contract
 

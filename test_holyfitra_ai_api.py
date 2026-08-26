@@ -12,6 +12,7 @@ from holyfitra_ai_api import (
     AIConfigurationError,
     AIRequest,
     AnthropicProvider,
+    CohereProvider,
     GeminiProvider,
     OpenAICompatibleProvider,
     ProviderRegistry,
@@ -99,6 +100,28 @@ class AIProviderTests(unittest.TestCase):
         self.assertEqual(response.request_id, "anthropic-test")
         self.assertIn("/v1/messages", opener.urls[0])
         self.assertNotIn("anthropic-secret", opener.urls[0])
+
+    def test_cohere_chat_and_embedding_normalization(self) -> None:
+        opener = FakeOpener({"id": "cohere-id", "finish_reason": "COMPLETE", "message": {"content": [{"type": "text", "text": "cohere"}]}, "usage": {"tokens": {"output_tokens": 1}}})
+        provider = CohereProvider(base_url="https://example.test", http=_HTTP(opener))
+        with patch.dict(os.environ, {"COHERE_API_KEY": "cohere-secret"}, clear=False):
+            response = provider.chat(AIRequest("cohere-test", ({"role": "user", "content": "hi"},)))
+        self.assertEqual(response.text, "cohere")
+        self.assertIn("/v2/chat", opener.urls[0])
+        self.assertNotIn("cohere-secret", opener.urls[0])
+
+        embedding_opener = FakeOpener({"embeddings": {"float": [[0.25, 0.5]]}})
+        embedding_provider = CohereProvider(base_url="https://example.test", http=_HTTP(embedding_opener))
+        with patch.dict(os.environ, {"COHERE_API_KEY": "cohere-secret"}, clear=False):
+            vectors = embedding_provider.embed(("a",), model="embed-test")
+        self.assertEqual(vectors, ((0.25, 0.5),))
+        self.assertIn("/v2/embed", embedding_opener.urls[0])
+
+    def test_registry_includes_verified_openai_compatible_provider_routes(self) -> None:
+        statuses = {item["name"]: item for item in provider_status_json(ProviderRegistry())}
+        self.assertEqual(statuses["cerebras"]["credential_env"], "CEREBRAS_API_KEY")
+        self.assertEqual(statuses["groq"]["credential_env"], "GROQ_API_KEY")
+        self.assertEqual(statuses["cohere"]["credential_env"], "COHERE_API_KEY")
 
     def test_local_loopback_and_remote_http_policy(self) -> None:
         _HTTP._validate_url("http://127.0.0.1:11434/v1/chat/completions")

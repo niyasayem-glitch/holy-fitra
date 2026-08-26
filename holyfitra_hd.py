@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 from typing import Any, Iterable
 
 from holyfitra_agent import AgentError, AgentPlan, AgentPolicy, AgentRun, CodingAgent, Workspace
@@ -22,6 +23,29 @@ HD_SCHEMA = "holyfitra.hd/v1"
 MAX_VAULT_FILE_BYTES = 256 * 1024
 MAX_VAULT_CONTEXT_BYTES = 48 * 1024
 MAX_VAULT_MATCHES = 12
+MAX_PROVIDER_ENV_BYTES = 32 * 1024
+_PROVIDER_ENV_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+_ALLOWED_PROVIDER_ENV_NAMES = frozenset({
+    "HOLYFITRA_AI_PROVIDER",
+    "OPENAI_API_KEY",
+    "OPENAI_MODEL",
+    "OPENROUTER_API_KEY",
+    "OPENROUTER_MODEL",
+    "OPENROUTER_BASE_URL",
+    "GEMINI_API_KEY",
+    "GEMINI_MODEL",
+    "ANTHROPIC_API_KEY",
+    "ANTHROPIC_MODEL",
+    "CEREBRAS_API_KEY",
+    "CEREBRAS_BASE_URL",
+    "HOLYFITRA_CEREBRAS_MODEL",
+    "GROQ_API_KEY",
+    "GROQ_BASE_URL",
+    "HOLYFITRA_GROQ_MODEL",
+    "COHERE_API_KEY",
+    "COHERE_BASE_URL",
+    "COHERE_MODEL",
+})
 
 
 @dataclass(frozen=True)
@@ -115,6 +139,32 @@ class ObsidianSecondBrain:
         return matches, "\n".join(sections)
 
 
+def load_private_provider_env(path: str | os.PathLike[str]) -> tuple[str, ...]:
+    """Load a selected local provider file without printing, parsing, or persisting secret values."""
+    source = Path(path).expanduser().resolve()
+    if not source.is_file():
+        raise AgentError(f"HD provider environment file is not a file: {source}")
+    if source.stat().st_size > MAX_PROVIDER_ENV_BYTES:
+        raise AgentError(f"HD provider environment file exceeds {MAX_PROVIDER_ENV_BYTES} bytes")
+    loaded: list[str] = []
+    for line_number, raw_line in enumerate(source.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if "=" not in line:
+            raise AgentError(f"HD provider environment line {line_number} must use NAME=VALUE")
+        name, value = line.split("=", 1)
+        name = name.strip()
+        if not _PROVIDER_ENV_NAME.fullmatch(name) or name not in _ALLOWED_PROVIDER_ENV_NAMES:
+            raise AgentError(f"HD provider environment variable is not allowed: {name or '<empty>'}")
+        if "\x00" in value:
+            raise AgentError(f"HD provider environment line {line_number} contains NUL")
+        if value:
+            os.environ[name] = value
+            loaded.append(name)
+    return tuple(sorted(set(loaded)))
+
+
 class HDCopilot:
     """Provider-planned, user-authorized HD wrapper over the transactional coding agent."""
 
@@ -161,10 +211,13 @@ class HDCopilot:
         return HDRun(HD_SCHEMA, goal, digest, matches, agent_run)
 
 
-def run_hd(root: str | os.PathLike[str], goal: str, *, vault: str | os.PathLike[str] | None = None, apply: bool = False, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+def run_hd(root: str | os.PathLike[str], goal: str, *, vault: str | os.PathLike[str] | None = None, provider_env: str | os.PathLike[str] | None = None, apply: bool = False, provider: str | None = None, model: str | None = None) -> dict[str, Any]:
+    loaded_names = load_private_provider_env(provider_env) if provider_env is not None else ()
     policy = AgentPolicy(allow_write=apply, allow_commands=apply)
     brain = ObsidianSecondBrain(vault) if vault is not None else None
-    return HDCopilot(Workspace(root, policy), brain).run(goal, apply=apply, provider=provider, model=model).body()
+    result = HDCopilot(Workspace(root, policy), brain).run(goal, apply=apply, provider=provider, model=model).body()
+    result["loaded_provider_environment"] = list(loaded_names)
+    return result
 
 
-__all__ = ["HD_SCHEMA", "HDCopilot", "HDKnowledgeDocument", "HDKnowledgeMatch", "HDRun", "ObsidianSecondBrain", "run_hd"]
+__all__ = ["HD_SCHEMA", "HDCopilot", "HDKnowledgeDocument", "HDKnowledgeMatch", "HDRun", "ObsidianSecondBrain", "load_private_provider_env", "run_hd"]

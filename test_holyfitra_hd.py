@@ -4,9 +4,10 @@ import tempfile
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from holyfitra_agent import AgentAction, AgentError, AgentPlan, AgentPolicy, CodingAgent, Workspace
-from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain
+from holyfitra_hd import HD_SCHEMA, HDCopilot, ObsidianSecondBrain, load_private_provider_env
 
 
 class HDCopilotTests(unittest.TestCase):
@@ -108,6 +109,29 @@ class HDCopilotTests(unittest.TestCase):
             self.assertIn("sha256:", client.prompt)
             self.assertIn("untrusted context", client.system)
             self.assertEqual((root / "main.txt").read_text(encoding="utf-8"), "original")
+
+    def test_private_provider_environment_is_explicitly_loaded_without_disclosure_and_is_not_workspace_readable(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            secret_file = root / "hd.providers.env"
+            secret_file.write_text("# local only\nOPENROUTER_API_KEY=not-a-real-value\nHOLYFITRA_AI_PROVIDER=openrouter\n", encoding="utf-8")
+            with patch.dict("os.environ", {}, clear=False):
+                names = load_private_provider_env(secret_file)
+            self.assertEqual(names, ("HOLYFITRA_AI_PROVIDER", "OPENROUTER_API_KEY"))
+            with self.assertRaisesRegex(AgentError, "protected"):
+                Workspace(root).read("hd.providers.env")
+
+    def test_private_provider_environment_rejects_unrelated_variables(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "hd.providers.env"
+            source.write_text("PATH=unsafe\n", encoding="utf-8")
+            with self.assertRaisesRegex(AgentError, "not allowed"):
+                load_private_provider_env(source)
+
+    def test_private_provider_filename_is_ignored_but_the_template_is_tracked(self):
+        repository = Path(__file__).with_name(".gitignore")
+        self.assertIn("\nhd.providers.env\n", repository.read_text(encoding="utf-8"))
+        self.assertTrue(Path(__file__).with_name("hd.providers.env.example").is_file())
 
 
 if __name__ == "__main__":

@@ -10,10 +10,26 @@ Holy Fitra now includes a provider-neutral AI API layer in `holyfitra_ai_api.py`
 | OpenRouter | OpenAI-compatible chat completions and embeddings | `OPENROUTER_API_KEY`, optional `OPENROUTER_BASE_URL` | `openai/gpt-4o-mini` |
 | Gemini | `generateContent` and `embedContent` REST APIs | `GEMINI_API_KEY` | `gemini-2.0-flash` and `text-embedding-004` |
 | Anthropic | Claude Messages API | `ANTHROPIC_API_KEY` | `claude-3-5-sonnet-latest` |
+| Cerebras | OpenAI-compatible chat completions | `CEREBRAS_API_KEY`, optional `CEREBRAS_BASE_URL` | `gpt-oss-120b` |
+| Groq | OpenAI-compatible chat completions | `GROQ_API_KEY`, optional `GROQ_BASE_URL` | `llama-3.3-70b-versatile` |
+| Cohere | Cohere v2 Chat and Embed REST APIs | `COHERE_API_KEY`, optional `COHERE_BASE_URL` | `command-a-plus-05-2026` |
 | Ollama | Local OpenAI-compatible endpoint | `OLLAMA_BASE_URL`, default `http://127.0.0.1:11434/v1` | `llama3.2` |
 | LM Studio | Local OpenAI-compatible endpoint | `LMSTUDIO_BASE_URL`, default `http://127.0.0.1:1234/v1` | `local-model` |
 
 The provider registry is deliberately extensible. Any service that implements the OpenAI-compatible `/chat/completions` and `/embeddings` shapes can be registered with a base URL and credential environment variable without changing the Fitra compiler.
+
+## Secure HD provider file
+
+HD can explicitly load a small local provider file before requesting a plan. Copy `hd.providers.env.example` to `hd.providers.env`, enter only newly generated credentials, and keep the copied file private. The exact local filename is ignored by Git and blocked from supervised agent workspace reads, searches, and writes.
+
+```bash
+cp hd.providers.env.example hd.providers.env
+holyfitra hd ./my-project 'Draft a tested change.' \
+  --provider groq \
+  --provider-env ./hd.providers.env
+```
+
+The file accepts only documented HD provider/model/base-URL variables. It never accepts `PATH`, shell flags, arbitrary environment names, or command strings. HD reports at most the names of non-empty variables loaded; it never prints their values. It still requires `--apply` before any project write or validation command.
 
 ## CLI usage
 
@@ -102,3 +118,10 @@ The existing `ToolRegistry`, capability grants, evidence ledger, claim verifier,
 ## Current boundary
 
 The provider layer supports text chat, structured JSON request hints, function/tool declarations, embeddings, and validated native Fitra generation. It does not yet add an `ai.chat` expression to the compiled Fitra language itself, and it does not claim compatibility with every provider-specific batch, realtime, video, image-generation, speech, or managed-agent API. Those features require separate normalized contracts and should be added without weakening the current parser, capability, and evidence gates.
+
+## References
+
+[1]: https://inference-docs.cerebras.ai/api-reference/authentication "Cerebras API Authentication"
+[2]: https://console.groq.com/docs/openai "Groq OpenAI Compatibility"
+[3]: https://docs.cohere.com/reference/chat "Cohere Chat API v2"
+[4]: https://openrouter.ai/docs/api_reference/authentication "OpenRouter API Authentication"

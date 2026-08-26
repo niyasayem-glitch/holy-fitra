@@ -135,6 +135,20 @@ Provider text remains a proposed `AgentPlan`. It is parsed through the existing 
 
 There is no configured external Obsidian connector. Therefore the retained path is local Markdown-vault retrieval, not live synchronization. Connected Mem remains authorization-blocked and the repository ledger is a pending-sync fallback only. HD does not gain background autonomy, vault-write authority, arbitrary shell/network access, source deletion, credential access, or the ability to change its own policy.
 
+## HD provider routes and credential isolation
+
+HD now reuses the provider-neutral layer for Gemini and OpenRouter and adds direct paths for Cerebras and Groq through their documented OpenAI-compatible chat-completions routes, plus Cohere through its v2 Chat/Embed API. Provider availability is reported by name, endpoint, credential-variable name, and default model only; credential values are never surfaced in provider status, errors, or HD receipts.
+
+The `--provider-env` option loads a user-selected local file before HD planning. The recommended `hd.providers.env` filename is ignored by Git, has a tracked value-free template, accepts only an explicit provider-variable allowlist, and is denied to supervised workspace reads/searches/writes. This reduces accidental source-control exposure but is not a replacement for provider-side key rotation or access controls.
+
+| Gate | Result | Evidence boundary |
+|---|---|---|
+| Provider/agent/HD/compiler focused suite | Pass: 72 tests | Offline request-shape, response-normalization, credential-name, loader allowlist, protected path, HD policy, and compiler contracts; no live key validation |
+| Full Holy Fitra regression suite | Pass: 307 tests | Host-only contracts; no provider billing/quota/model availability, external connector sync, Android, or device evidence |
+| Provider discovery and HD CLI contract | Pass | Cerebras, Groq, and Cohere are listed without key values; `--provider-env` is exposed; no provider request was made |
+
+Several screenshot strings did not identify a provider with sufficient evidence from their visible prefixes. They were intentionally not routed to a guessed API. Any exposed key must be treated as compromised and replaced with a newly generated credential before it is placed in the ignored local file.
+
 ## Next bounded opportunities
 
 The next justified work is to profile compiler cold-build stages on a larger, real source fixture; remove only measured frontend or process-launch overhead; and add a separate Android NDK/Bionic build receipt. Any architecture-specific kernel work should remain behind numerical equivalence, sanitizer, cross-build, and measured retain gates.
