@@ -37,6 +37,20 @@ holyfitra hd ./my-project 'Draft a tested change.' \
 
 The loader accepts only the supported provider keys, model selectors, and HTTPS base-URL overrides. It prints no credential value, reports only the names of loaded variables, and the supervised workspace treats `hd.providers.env` as a protected file. See [`HOLY_FITRA_AI.md`](HOLY_FITRA_AI.md) for the supported provider matrix and local-file template.
 
+## GitHub repository secrets
+
+For credentials that should be entered directly in GitHub rather than shared with HD, the repository includes a manual-only **HD provider secret check** workflow. Add new, rotated values in GitHub’s **Settings → Secrets and variables → Actions** under the exact names below. The workflow verifies only whether the selected secret is available; it does not call a provider, print a value, write a file, run on `push`, or run on pull requests.
+
+| Provider | GitHub Actions repository secret |
+|---|---|
+| OpenRouter | `HD_OPENROUTER_API_KEY` |
+| Gemini | `HD_GEMINI_API_KEY` |
+| Cerebras | `HD_CEREBRAS_API_KEY` |
+| Groq | `HD_GROQ_API_KEY` |
+| Cohere | `HD_COHERE_API_KEY` |
+
+After entering a secret directly in GitHub, open **Actions → HD provider secret check → Run workflow**, select the matching provider, and run the check. A successful run confirms only secret availability; it does not validate quota, billing, model access, or response quality.
+
 ## Receipt contract
 
 Every HD response is a `holyfitra.hd/v1` object. Its `knowledge` list contains vault-relative note paths, note SHA-256 digests, deterministic relevance scores, excerpts, and Obsidian provenance. Its `knowledge_digest` binds the selected retrieval result. The nested `agent_run.review` is the existing plan-review receipt: it binds proposed file contents by SHA-256 digest and identifies the proposed allowlisted validation commands.

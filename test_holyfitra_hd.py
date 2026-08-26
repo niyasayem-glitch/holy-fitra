@@ -133,6 +133,21 @@ class HDCopilotTests(unittest.TestCase):
         self.assertIn("\nhd.providers.env\n", repository.read_text(encoding="utf-8"))
         self.assertTrue(Path(__file__).with_name("hd.providers.env.example").is_file())
 
+    def test_github_secret_workflow_is_manual_only_and_never_calls_a_provider(self):
+        workflow = Path(__file__).parent / ".github" / "workflows" / "hd-provider-secret-check.yml"
+        content = workflow.read_text(encoding="utf-8")
+        self.assertIn("workflow_dispatch:", content)
+        self.assertNotIn("push:", content)
+        self.assertNotIn("pull_request:", content)
+        self.assertIn("HD_OPENROUTER_API_KEY: ${{ secrets.HD_OPENROUTER_API_KEY }}", content)
+        self.assertIn("HD_GEMINI_API_KEY: ${{ secrets.HD_GEMINI_API_KEY }}", content)
+        self.assertIn("HD_CEREBRAS_API_KEY: ${{ secrets.HD_CEREBRAS_API_KEY }}", content)
+        self.assertIn("HD_GROQ_API_KEY: ${{ secrets.HD_GROQ_API_KEY }}", content)
+        self.assertIn("HD_COHERE_API_KEY: ${{ secrets.HD_COHERE_API_KEY }}", content)
+        self.assertNotIn("holyfitra hd", content)
+        self.assertNotIn("ai chat", content)
+        self.assertNotIn("curl ", content)
+
 
 if __name__ == "__main__":
     unittest.main()
