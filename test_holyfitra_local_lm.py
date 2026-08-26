@@ -6,7 +6,7 @@ import contextlib
 import io
 from pathlib import Path
 
-from holyfitra_local_lm import BOS_TOKEN, CausalBigramLanguageModel, ByteTokenizer, LocalLanguageModelError, VOCAB_SIZE
+from holyfitra_local_lm import BOS_TOKEN, CausalBigramLanguageModel, CausalNgramLanguageModel, ByteTokenizer, LocalLanguageModelError, NGRAM_SCHEMA, VOCAB_SIZE, load_local_language_model
 from holyfitra_compiler import main as compiler_main
 
 
@@ -47,6 +47,27 @@ class LocalLanguageModelTests(unittest.TestCase):
             with self.assertRaisesRegex(LocalLanguageModelError, "invalid local-language-model checkpoint"):
                 CausalBigramLanguageModel.load(checkpoint)
 
+    def test_higher_order_context_improves_matched_nll_and_round_trips(self):
+        corpus = ("xayaxayaxayaxayaxaya",)
+        bigram = CausalBigramLanguageModel(smoothing=0.1)
+        bigram.fit(corpus)
+        ngram = CausalNgramLanguageModel(order=2, smoothing=0.1)
+        training = ngram.fit(corpus)
+        self.assertEqual(training.architecture, "causal-sparse-ngram")
+        self.assertEqual(training.context_tokens, 2)
+        self.assertLess(ngram.evaluate(corpus).mean_nll, bigram.evaluate(corpus).mean_nll)
+        self.assertEqual(ngram.generate("xa", max_new_tokens=4), "yaxa")
+        self.assertEqual(len(ngram.generate("q", max_new_tokens=1)), 1)
+        with tempfile.TemporaryDirectory() as temporary:
+            checkpoint = Path(temporary) / "ngram.hflm"
+            ngram.save(checkpoint)
+            restored = load_local_language_model(checkpoint)
+            self.assertIsInstance(restored, CausalNgramLanguageModel)
+            self.assertEqual(restored.model_sha256, ngram.model_sha256)
+            self.assertEqual(restored.generate("xa", max_new_tokens=4), "yaxa")
+        with self.assertRaisesRegex(LocalLanguageModelError, "context limit"):
+            CausalNgramLanguageModel(order=2, max_contexts=1).fit(("abc",))
+
     def test_training_and_generation_reject_invalid_bounds(self):
         model = CausalBigramLanguageModel()
         with self.assertRaisesRegex(LocalLanguageModelError, "must not be empty"):
@@ -68,6 +89,9 @@ class LocalLanguageModelTests(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 self.assertEqual(compiler_main(["local-lm", "generate", str(checkpoint), "a", "--max-new-tokens", "4"]), 0)
             self.assertIn('"text": "baba"', output.getvalue())
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(compiler_main(["local-lm", "train", str(corpus), "--output", str(checkpoint), "--order", "2"]), 0)
+            self.assertIn(NGRAM_SCHEMA, output.getvalue())
 
 
 if __name__ == "__main__":

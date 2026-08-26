@@ -26,6 +26,12 @@ HF now implements that prerequisite as `holyfitra local-lm`: a UTF-8 byte tokeni
 
 On 2026-08-26, the CLI trained and evaluated the baseline on the repository’s `README.md` and `HOLY_FITRA_CAPABILITIES.md` documents. The receipt covered 2 documents, 28,646 UTF-8 bytes and transitions, model digest `84507886cc2028fe8b071b468f646ead87a49b118e1885948c443badce71527e`, and in-corpus mean next-byte NLL `2.624217972399485`. This is a **sanity receipt on training data**, not a held-out quality result, a language-understanding score, a coding benchmark, a throughput metric, or a comparison with Qwen.
 
+### Retained bounded context expansion
+
+`holyfitra local-lm train --order 2` now builds a sparse causal n-gram table with deterministic longest-context interpolation plus a global fallback for unseen prompts. Context order is bounded to 2–4 and stored contexts are bounded to 32,768. Checkpoints encode the order, context limit, context keys, counts, receipt schema, and a digest over all of those values. The feature does not enable arbitrary unbounded context, attention, embeddings, transformer layers, or model capabilities beyond next-byte statistics.
+
+On the identical current repository-document corpus, the order-1 bigram produced mean NLL `2.6247765502432703`; order 2 produced `1.6327421523496604`. The absolute reduction was `0.9920343978936099` NLL, or `37.79500383%` relative to the bigram. Both receipts covered the same 2 documents, 28,855 transitions, and corpus digest `7352350aefb7778ee19e6f1427887f5fde69c72f03c443732231e83de7c34a5b`. This is retained as an **in-corpus conditional-likelihood improvement only**. It does not measure held-out quality, generalization, language understanding, coding, reasoning, or Qwen comparability.
+
 ## Measurement protocol
 
 Each future retained model result must declare model architecture, parameter count, vocabulary, context length, tokenizer, dataset provenance and license, split hashes, precision, seed, training steps, hardware, wall time, peak memory, decoding settings, and the exact task harness. Compare only identical task sets and report failures as well as successes.

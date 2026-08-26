@@ -709,7 +709,7 @@ fn main() -> i32 effects [io] {
         report = capabilities_report()
         self.assertEqual(report["schema"], "holyfitra.capabilities/v1")
         self.assertEqual(report["language"]["native_scalar_integer_conversions"], "explicit_i32_u32_i64_u64_host_and_aarch64_object_validated")
-        self.assertEqual(report["ai"]["deterministic_local_causal_baseline"], "byte_bigram_training_checkpoint_generation_and_evaluation_host_validated")
+        self.assertEqual(report["ai"]["deterministic_local_causal_baseline"], "byte_bigram_and_bounded_sparse_ngram_training_checkpoint_generation_and_evaluation_host_validated")
         self.assertEqual(report["android"]["supported_abi"], "arm64-v8a")
         self.assertTrue(report["evidence_boundaries"]["host_regression"])
         self.assertFalse(report["evidence_boundaries"]["thermal_throttling_device_run"])

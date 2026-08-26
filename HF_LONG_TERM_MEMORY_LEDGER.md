@@ -85,6 +85,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | This is a 257-token, one-token-context bigram baseline. It does not demonstrate held-out quality, natural-language understanding, coding, reasoning, long context, transformer attention, quantization quality, tool use, multimodality, Qwen parity, or device performance. |
 | Sync | Pending Mem authorization. |
 
+### `HF-2026-08-26-MODEL-002`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | Bounded sparse local n-gram context expansion |
+| Decision | Retained `holyfitra local-lm train --order 2` through `--order 4`, with sparse bounded contexts, hierarchical interpolation from global to longest observed context, deterministic greedy decode, and tamper-detecting checkpoints. |
+| Evidence | Focused local-model suite: 6 tests passed. On the matched current repository-document corpus (2 documents, 28,855 transitions, digest `7352350aefb7778ee19e6f1427887f5fde69c72f03c443732231e83de7c34a5b`), order-1 NLL was `2.6247765502432703` and order-2 NLL was `1.6327421523496604`: absolute reduction `0.9920343978936099`, relative reduction `37.79500383%`. |
+| Boundary | This is an in-corpus NLL comparison only. It does not establish held-out quality, generalization, natural-language understanding, coding, reasoning, transformer equivalence, Qwen parity, resource efficiency, or device performance. |
+| Sync | Pending Mem authorization. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

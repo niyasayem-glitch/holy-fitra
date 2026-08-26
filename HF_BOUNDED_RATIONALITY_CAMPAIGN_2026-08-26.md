@@ -115,6 +115,8 @@ Validation covered host execution of signed and unsigned widening, equal-width c
 | Local causal baseline focused suite | Pass: 5 tests | Tokenization, deterministic training/generation, checkpoint integrity, bounds, and primary CLI dispatch |
 | Full Holy Fitra regression suite after local baseline | Pass: 292 tests | Host-only unit and integration contracts; no Qwen comparison, external provider, Android, or device execution implied |
 | Local documentation-corpus receipt | Pass | 28,646 in-corpus transitions and NLL 2.624217972399485; sanity receipt only, not held-out quality or model-capability benchmark |
+| Sparse n-gram focused suite | Pass: 6 tests | Matched-NLL behavior, interpolation fallback, checkpoint round-trip, context bound, and CLI order selection |
+| Sparse n-gram matched retention gate | Retained | Current identical documentation corpus: order-1 NLL 2.6247765502432703; order-2 NLL 1.6327421523496604; 37.79500383% relative in-corpus reduction only |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

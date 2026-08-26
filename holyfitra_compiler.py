@@ -2218,7 +2218,7 @@ def capabilities_report() -> dict[str, object]:
             "chat_and_embeddings": "implemented",
             "validated_fitra_generation": "implemented_with_explicit_provider_opt_in",
             "supervised_coding_agent": "implemented_plan_first_apply_opt_in",
-            "deterministic_local_causal_baseline": "byte_bigram_training_checkpoint_generation_and_evaluation_host_validated",
+            "deterministic_local_causal_baseline": "byte_bigram_and_bounded_sparse_ngram_training_checkpoint_generation_and_evaluation_host_validated",
             "multi_ai_campaigns": "implemented_high_risk_branch_gate",
             "learning_and_replay": "implemented_python_runtime_components",
             "qat_and_int4": "implemented_with_numerical_validation_surfaces",
