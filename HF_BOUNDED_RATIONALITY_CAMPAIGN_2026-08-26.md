@@ -79,6 +79,14 @@ Imported functions join one explicit global native function namespace. This firs
 
 Validation exercised a transitive three-module call that returned the expected host status, repeated resolution with stable module order/digest/LLVM, imported-source cache invalidation, root-escape rejection, duplicate-import rejection, cycle rejection, imported-main rejection, the `check` receipt, and an AArch64 Android-21 object emission. The cross-object gate establishes neither Android Bionic linking nor physical-device execution.
 
+## Cycle six: explicit integer conversions and unsigned widths
+
+The native scalar frontend now supports `u32` and `u64` in addition to `i32` and `i64`. Conversion is explicit through `to_i32`, `to_u32`, `to_i64`, and `to_u64`; there is no implicit widening or signedness change. Equal-width signedness conversions preserve the fixed-width bit pattern, while widening uses sign extension from signed values and zero extension from unsigned values. Direct literals are checked against the requested target range. Runtime narrowing from 64 to 32 bits is rejected rather than silently truncating, so callers must establish an application-level bound before conversion.
+
+Unsigned arithmetic is fixed-width and follows LLVM’s non-`nuw` wrapping behavior for addition, subtraction, and multiplication. Unsigned division and relational comparisons lower to `udiv` and unsigned `icmp` predicates. Constant unsigned arithmetic follows the same fixed-width wrap behavior; negative unsigned literals remain invalid. This wave deliberately does not add runtime checked casts, bitwise operators, unsigned command-line input, unsigned hybrid reducers, tensor dtypes, Bionic linking, or device execution claims.
+
+Validation covered host execution of signed and unsigned widening, equal-width conversion, unsigned wrap, unsigned comparison, static range rejection, runtime-narrowing rejection, non-integer rejection, intrinsic-name reservation, and no-implicit-mixed-width arithmetic. The full suite then passed and the stored fixture emitted an AArch64 Android-21 object; that is cross-object evidence only.
+
 ## Validation record
 
 | Gate | Result | Evidence boundary |
@@ -101,6 +109,9 @@ Validation exercised a transitive three-module call that returned the expected h
 | Imported-module AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
 | AI plan-review focused suite | Pass: 22 tests | Deterministic review receipt, zero-mutation rejection, provider normalization, and campaign contracts |
 | Full Holy Fitra regression suite after AI review gate | Pass: 286 tests | Host-only unit and integration contracts; no external model, Android, or device execution implied |
+| Unsigned-conversion focused compiler suite | Pass: 46 tests | Host execution, LLVM `sext`/`zext`/`udiv`/unsigned-comparison checks, and diagnostics |
+| Full Holy Fitra regression suite after cycle six | Pass: 287 tests | Host-only unit and integration contracts; no Android or device execution implied |
+| Unsigned-conversion AArch64 Android-21 object | Pass | Cross-object only; no Bionic, APK, or device-execution claim |
 | Full aggregate Termux runner | Initially exposed declaration error | Its Python phase completed 280 tests; its stale AArch64 object gate failed before the repair and was replaced by the focused post-repair cross-object gate above |
 
 ## Next bounded opportunities

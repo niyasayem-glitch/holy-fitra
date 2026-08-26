@@ -51,6 +51,9 @@ _MAX_NATIVE_IMPORTS = 64
 _ARG_I32_BUILTIN = "arg_i32"
 _ARG_I64_BUILTIN = "arg_i64"
 _NATIVE_INPUT_BUILTINS = frozenset({_ARG_I32_BUILTIN, _ARG_I64_BUILTIN})
+_INTEGER_TYPE_NAMES = frozenset({"i32", "u32", "i64", "u64"})
+_UNSIGNED_INTEGER_TYPES = frozenset({"u32", "u64"})
+_CONVERSION_BUILTINS = frozenset({"to_i32", "to_u32", "to_i64", "to_u64"})
 
 
 def _termux_prefix() -> str | None:
@@ -126,10 +129,29 @@ class Type:
 
     @property
     def llvm(self) -> str:
-        mapping = {"i32": "i32", "i64": "i64", "bool": "i1"}
+        mapping = {"i32": "i32", "u32": "i32", "i64": "i64", "u64": "i64", "bool": "i1"}
         if self.name not in mapping:
             raise HolyFitraError(f"native LLVM backend does not yet support type {self.name}")
         return mapping[self.name]
+
+
+def _integer_width(type_: Type) -> int:
+    if type_.name not in _INTEGER_TYPE_NAMES:
+        raise HolyFitraError(f"expected an integer type, got {type_.name}")
+    return 64 if type_.name.endswith("64") else 32
+
+
+def _integer_bounds(type_: Type) -> tuple[int, int]:
+    width = _integer_width(type_)
+    if type_.name in _UNSIGNED_INTEGER_TYPES:
+        return 0, 2 ** width - 1
+    return -(2 ** (width - 1)), 2 ** (width - 1) - 1
+
+
+def _conversion_target(name: str) -> Type:
+    if name not in _CONVERSION_BUILTINS:
+        raise HolyFitraError(f"unknown conversion intrinsic {name}")
+    return Type(name.removeprefix("to_"))
 
 
 @dataclass(frozen=True)
@@ -706,13 +728,11 @@ def _same_value_type(left: Type, right: Type) -> bool:
 
 
 def _integer_literal_type(value: int, expected: Type | None = None) -> Type:
-    target = expected.name if expected is not None and expected.name in {"i32", "i64"} else "i32"
-    width = 32 if target == "i32" else 64
-    minimum = -(2 ** (width - 1))
-    maximum = 2 ** (width - 1) - 1
+    target = expected if expected is not None and expected.name in _INTEGER_TYPE_NAMES else Type("i32")
+    minimum, maximum = _integer_bounds(target)
     if not minimum <= value <= maximum:
-        raise HolyFitraError(f"integer literal {value} does not fit {target}")
-    return Type(target)
+        raise HolyFitraError(f"integer literal {value} does not fit {target.name}")
+    return Type(target.name)
 
 
 def _signed_truncating_division(left: int, right: int) -> int:
@@ -724,15 +744,19 @@ def _signed_truncating_division(left: int, right: int) -> int:
 
 
 def _constant_integer_binary(operator: str, left: int, right: int, result_type: Type) -> int:
+    if operator == "/" and right == 0:
+        raise HolyFitraError("division by zero in constant expression")
     operations = {
         "+": lambda: left + right,
         "-": lambda: left - right,
         "*": lambda: left * right,
-        "/": lambda: _signed_truncating_division(left, right),
+        "/": lambda: left // right if result_type.name in _UNSIGNED_INTEGER_TYPES else _signed_truncating_division(left, right),
     }
     if operator not in operations:
         raise HolyFitraError(f"unsupported constant integer operator {operator}")
     value = operations[operator]()
+    if result_type.name in _UNSIGNED_INTEGER_TYPES and operator in {"+", "-", "*"}:
+        value %= 2 ** _integer_width(result_type)
     _integer_literal_type(value, result_type)
     return value
 
@@ -780,7 +804,7 @@ def _effect_call_graph(program: Program) -> tuple[dict[str, set[str]], dict[str,
             set(function.hybrid.components)
             | ({function.hybrid.reducer} if function.hybrid.reducer and _builtin_hybrid_reducer(function.hybrid.reducer) is None else set())
             if function.hybrid is not None
-            else _direct_calls_block(function.body) - _NATIVE_INPUT_BUILTINS
+            else _direct_calls_block(function.body) - _NATIVE_INPUT_BUILTINS - _CONVERSION_BUILTINS
         )
         for name, function in functions.items()
     }
@@ -837,7 +861,7 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
             raise HolyFitraError(f"unknown value {expr.name}")
         return variables[expr.name]
     if isinstance(expr, BinaryExpr):
-        numeric_expected = expected if expected is not None and expected.name in {"i32", "i64"} else None
+        numeric_expected = expected if expected is not None and expected.name in _INTEGER_TYPE_NAMES else None
         if isinstance(expr.left, IntLiteral) and not isinstance(expr.right, IntLiteral):
             right = _infer_expression(expr.right, variables, functions)
             left = _infer_expression(expr.left, variables, functions, right)
@@ -854,15 +878,28 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
                 raise HolyFitraError(f"logical operator {expr.operator} requires bool operands")
             return Type("bool")
         if expr.operator in {"==", "!=", "<", "<=", ">", ">="}:
-            if left.name not in {"i32", "i64", "bool"}:
+            if left.name not in _INTEGER_TYPE_NAMES | {"bool"}:
                 raise HolyFitraError(f"comparison does not support {left.name}")
             return Type("bool")
-        if left.name not in {"i32", "i64"}:
-            raise HolyFitraError(f"native arithmetic currently supports i32 and i64, not {left.name}")
+        if left.name not in _INTEGER_TYPE_NAMES:
+            raise HolyFitraError(f"native arithmetic currently supports fixed-width integers, not {left.name}")
         if isinstance(expr.left, IntLiteral) and isinstance(expr.right, IntLiteral):
             _constant_integer_binary(expr.operator, expr.left.value, expr.right.value, left)
         return left
     if isinstance(expr, CallExpr):
+        if expr.name in _CONVERSION_BUILTINS:
+            if len(expr.arguments) != 1:
+                raise HolyFitraError(f"{expr.name} requires exactly one integer argument")
+            target = _conversion_target(expr.name)
+            argument = expr.arguments[0]
+            actual = _infer_expression(argument, variables, functions, target if isinstance(argument, IntLiteral) else None)
+            if actual.name not in _INTEGER_TYPE_NAMES:
+                raise HolyFitraError(f"{expr.name} requires an integer argument, got {actual.name}")
+            if _integer_width(actual) > _integer_width(target):
+                if not isinstance(argument, IntLiteral):
+                    raise HolyFitraError(f"{expr.name} rejects runtime narrowing; compare bounds before converting")
+                _integer_literal_type(argument.value, target)
+            return target
         if expr.name in _NATIVE_INPUT_BUILTINS:
             if len(expr.arguments) != 2 or not all(isinstance(argument, IntLiteral) for argument in expr.arguments):
                 raise HolyFitraError(f"{expr.name} requires literal position and fallback arguments")
@@ -889,9 +926,9 @@ def _infer_expression(expr: Expr, variables: dict[str, Type], functions: dict[st
 
 def validate_native(program: Program) -> None:
     functions = _function_map(program)
-    reserved_input_builtins = sorted(_NATIVE_INPUT_BUILTINS & functions.keys())
-    if reserved_input_builtins:
-        raise HolyFitraError(f"{reserved_input_builtins[0]} is reserved for the native input bridge")
+    reserved_builtins = sorted((_NATIVE_INPUT_BUILTINS | _CONVERSION_BUILTINS) & functions.keys())
+    if reserved_builtins:
+        raise HolyFitraError(f"{reserved_builtins[0]} is reserved for a native intrinsic")
     direct_calls, effective_effects = _effect_call_graph(program)
     allowed_effects = {"io", "network", "tool", "model", "memory", "thermal", "random", "unsafe"}
     for function in program.functions:
@@ -921,7 +958,7 @@ def validate_native(program: Program) -> None:
                 raise HolyFitraError(f"function {function.name} task capacity must be positive")
             if function.task.deadline_ms is not None and function.task.deadline_ms <= 0:
                 raise HolyFitraError(f"function {function.name} task deadline must be positive")
-        if function.return_type.name not in {"i32", "i64", "bool", "void"}:
+        if function.return_type.name not in _INTEGER_TYPE_NAMES | {"bool", "void"}:
             raise HolyFitraError(f"function {function.name} has unsupported return type {function.return_type.name}")
         if function.hybrid is not None:
             if len(function.hybrid.components) < 2:
@@ -1332,7 +1369,7 @@ class LLVMEmitter:
                 self.current_lines.append(f"{merge_label}:")
                 self.current_lines.append(f"  {result} = phi i1 [ {right}, %{rhs_label} ], [ {short_value}, %{short_label} ]")
                 return result, Type("bool")
-            numeric_expected = expected if expected is not None and expected.name in {"i32", "i64"} else None
+            numeric_expected = expected if expected is not None and expected.name in _INTEGER_TYPE_NAMES else None
             if isinstance(expression.left, IntLiteral) and not isinstance(expression.right, IntLiteral):
                 right, right_type = self.emit_expr(expression.right)
                 left, type_ = self.emit_expr(expression.left, right_type)
@@ -1345,11 +1382,12 @@ class LLVMEmitter:
             if not _same_value_type(type_, right_type):
                 raise HolyFitraError("binary operands have different types")
             if expression.operator in {"==", "!=", "<", "<=", ">", ">="}:
-                predicates = {"==": "eq", "!=": "ne", "<": "slt", "<=": "sle", ">": "sgt", ">=": "sge"}
+                signed = type_.name not in _UNSIGNED_INTEGER_TYPES
+                predicates = {"==": "eq", "!=": "ne", "<": "slt" if signed else "ult", "<=": "sle" if signed else "ule", ">": "sgt" if signed else "ugt", ">=": "sge" if signed else "uge"}
                 result = self.temp()
                 self.current_lines.append(f"  {result} = icmp {predicates[expression.operator]} {type_.llvm} {left}, {right}")
                 return result, Type("bool")
-            opcode = {"+": "add", "-": "sub", "*": "mul", "/": "sdiv"}[expression.operator]
+            opcode = {"+": "add", "-": "sub", "*": "mul", "/": "udiv" if type_.name in _UNSIGNED_INTEGER_TYPES else "sdiv"}[expression.operator]
             result = self.temp()
             lines = getattr(self, "current_lines", None)
             if lines is None:
@@ -1357,6 +1395,24 @@ class LLVMEmitter:
             lines.append(f"  {result} = {opcode} {type_.llvm} {left}, {right}")
             return result, type_
         if isinstance(expression, CallExpr):
+            if expression.name in _CONVERSION_BUILTINS:
+                if len(expression.arguments) != 1:
+                    raise HolyFitraError(f"{expression.name} requires exactly one integer argument")
+                target = _conversion_target(expression.name)
+                argument = expression.arguments[0]
+                value, actual = self.emit_expr(argument, target if isinstance(argument, IntLiteral) else None)
+                if actual.name not in _INTEGER_TYPE_NAMES:
+                    raise HolyFitraError(f"{expression.name} requires an integer argument, got {actual.name}")
+                if _integer_width(actual) > _integer_width(target):
+                    if not isinstance(argument, IntLiteral):
+                        raise HolyFitraError(f"{expression.name} rejects runtime narrowing; compare bounds before converting")
+                    _integer_literal_type(argument.value, target)
+                if _integer_width(actual) == _integer_width(target):
+                    return value, target
+                result = self.temp()
+                extension = "zext" if actual.name in _UNSIGNED_INTEGER_TYPES else "sext"
+                self.current_lines.append(f"  {result} = {extension} {actual.llvm} {value} to {target.llvm}")
+                return result, target
             if expression.name in _NATIVE_INPUT_BUILTINS:
                 if not getattr(self, "current_main_uses_native_input", False):
                     raise HolyFitraError(f"{expression.name} was emitted outside a compatible main function")
@@ -1672,8 +1728,8 @@ def build(source_path: Path, output: Path, target: str | None = None, keep_llvm:
             except OSError:
                 pass
     main = next((function for function in program.functions if function.name == "main"), None)
-    if main is None or main.parameters or main.return_type.name not in {"i32", "i64"}:
-        raise HolyFitraError("build/run requires fn main() -> i32 or fn main() -> i64")
+    if main is None or main.parameters or main.return_type.name not in _INTEGER_TYPE_NAMES:
+        raise HolyFitraError("build/run requires parameterless fn main() returning i32, u32, i64, or u64")
     with tempfile.TemporaryDirectory(prefix="holyfitra-") as temporary:
         llvm_path = Path(temporary) / f"{source_path.stem}.ll"
         llvm_path.write_text(llvm, encoding="utf-8")
@@ -2148,6 +2204,7 @@ def capabilities_report() -> dict[str, object]:
             "native_scalar_frontend": "implemented_and_host_validated",
             "native_scalar_control_flow": "if_while_break_continue_host_and_aarch64_object_validated",
             "native_scalar_modules": "deterministic_relative_imports_host_and_aarch64_object_validated",
+            "native_scalar_integer_conversions": "explicit_i32_u32_i64_u64_host_and_aarch64_object_validated",
             "hyperir_tensor_effect_frontend": "implemented_and_contract_validated",
             "self_hosted_bootstrap_states": "states_1_to_9_validated",
             "ownership_modes": ["owned", "borrow", "borrow_mut", "shared"],

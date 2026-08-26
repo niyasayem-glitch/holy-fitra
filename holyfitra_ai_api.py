@@ -378,7 +378,7 @@ class AIClient:
     def generate_fitra(self, request: str, *, provider: str | None = None, model: str | None = None, max_tokens: int = 4096) -> AIResponse:
         system = (
             "You are a Holy Fitra programming assistant. Return only one complete Holy Fitra source file in a fenced ```holyfitra block. "
-            "Use the currently supported native subset: module declarations, i32/i64/bool/void, typed functions, locals, arithmetic, comparisons, if/else, while, direct calls, and returns. "
+            "Use the currently supported native subset: module declarations, i32/u32/i64/u64/bool/void, explicit to_i32/to_u32/to_i64/to_u64 conversions, typed functions, locals, arithmetic, comparisons, if/else, while, direct calls, and returns. "
             "The executable entry point must be fn main() -> i32 with no parameters. Do not invent imports, libraries, or unsupported tensor syntax."
         )
         return self.chat(request, provider=provider, model=model, system=system, temperature=0.1, max_tokens=max_tokens)

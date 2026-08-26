@@ -63,6 +63,17 @@ It is not a replacement for the user’s connected long-term memory. It is a ver
 | Boundary | No external model was called for this receipt. The gate does not prove model correctness, guarantee a passing validation command detects every defect, authorize automatic writes, or provide continuous background memory synchronization. |
 | Sync | Pending Mem authorization. |
 
+### `HF-2026-08-26-LANG-006`
+
+| Field | Value |
+|---|---|
+| Status | `validated` |
+| Scope | Explicit signed and unsigned native scalar conversions |
+| Decision | Retained `u32`/`u64` types and explicit `to_i32`/`to_u32`/`to_i64`/`to_u64` intrinsics. Same-width signedness changes preserve bits; widening uses `sext` or `zext`; direct-literal range checks apply; runtime 64-to-32 narrowing is rejected. |
+| Evidence | Focused compiler suite: 46 tests passed. Full Holy Fitra regression suite: 287 tests passed. The persisted fixture emitted an AArch64 Android-21 object. |
+| Boundary | No runtime checked casts, unsigned input bridge, unsigned hybrid reducers, Bionic link, APK, JNI, or device execution is established. |
+| Sync | Pending Mem authorization. |
+
 ## Logging protocol
 
 Before a major HF wave, retrieve the latest relevant long-term entry if Mem access is authorized. After a retained or rejected wave, append one compact entry with exact commit, test counts, and boundaries. Do not store credentials, user source code, provider prompts, or unverified performance claims. Do not present local logging as automatic background synchronization.

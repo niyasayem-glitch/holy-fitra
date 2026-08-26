@@ -80,6 +80,45 @@ fn main() -> i32 effects [io] {
             with self.assertRaisesRegex(HolyFitraError, pattern):
                 validate_native(parse_native(source))
 
+    def test_explicit_signed_and_unsigned_integer_conversions(self):
+        source = """
+module unsigned_scalars
+fn widen_signed(value: i32) -> i64 { return to_i64(value) }
+fn widen_unsigned(value: u32) -> u64 { return to_u64(value) }
+fn main() -> i32 {
+    let largest: u32 = to_u32(4294967295)
+    let wrapped: u32 = largest + 1
+    let negative: i32 = -1
+    let bits: u32 = to_u32(negative)
+    let wide: u64 = widen_unsigned(bits)
+    let signed: i64 = widen_signed(negative)
+    if (wrapped == 0) && (bits > to_u32(0)) && (wide == to_u64(4294967295)) && (signed == -1) { return 0 } else { return 1 }
+}
+"""
+        program = parse_native(source)
+        validate_native(program)
+        llvm = emit_llvm(program)
+        self.assertIn("zext i32", llvm)
+        self.assertIn("sext i32", llvm)
+        self.assertIn("icmp ugt i32", llvm)
+        with tempfile.TemporaryDirectory() as temporary:
+            source_path = Path(temporary) / "unsigned.hf"
+            executable = Path(temporary) / "unsigned"
+            source_path.write_text(source, encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                build(source_path, executable)
+            self.assertEqual(subprocess.run([str(executable)], timeout=5).returncode, 0)
+
+        for invalid_source, pattern in (
+            ("fn main() -> i32 { let value: u32 = -1 return 0 }", "does not fit u32"),
+            ("fn main() -> i32 { let wide: i64 = 1 return to_i32(wide) }", "rejects runtime narrowing"),
+            ("fn main() -> i32 { return to_u32(true) }", "requires an integer argument"),
+            ("fn to_u32(value: i32) -> i32 { return value } fn main() -> i32 { return 0 }", "reserved for a native intrinsic"),
+            ("fn main() -> i32 { let left: i32 = 1 let right: u32 = to_u32(1) return left + right }", "requires matching types"),
+        ):
+            with self.assertRaisesRegex(HolyFitraError, pattern):
+                validate_native(parse_native(invalid_source))
+
     def test_native_expression_precedence_matches_arithmetic_comparison_and_logic(self):
         source = """
 module expression_precedence
@@ -669,6 +708,7 @@ fn main() -> i32 effects [io] {
     def test_capabilities_report_has_explicit_evidence_boundaries(self):
         report = capabilities_report()
         self.assertEqual(report["schema"], "holyfitra.capabilities/v1")
+        self.assertEqual(report["language"]["native_scalar_integer_conversions"], "explicit_i32_u32_i64_u64_host_and_aarch64_object_validated")
         self.assertEqual(report["android"]["supported_abi"], "arm64-v8a")
         self.assertTrue(report["evidence_boundaries"]["host_regression"])
         self.assertFalse(report["evidence_boundaries"]["thermal_throttling_device_run"])
