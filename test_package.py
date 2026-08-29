@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import tempfile
+import tomllib
 import unittest
 from pathlib import Path
 
@@ -9,6 +10,12 @@ from hyperc_package import HyperPackageBuilder, PackageError
 
 
 class PackageTests(unittest.TestCase):
+    def test_declared_python_modules_exist(self):
+        metadata = tomllib.loads((Path(__file__).parent / "pyproject.toml").read_text(encoding="utf-8"))
+        modules = metadata["tool"]["setuptools"]["py-modules"]
+        missing = [name for name in modules if not (Path(__file__).parent / f"{name}.py").is_file()]
+        self.assertEqual(missing, [])
+
     def test_build_sign_and_verify(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

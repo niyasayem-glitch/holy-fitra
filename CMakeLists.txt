@@ -6,17 +6,39 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_library(holyfitra_runtime SHARED
+option(HOLYFITRA_ENABLE_JNI "Include the JNI bridge when headers are available" ON)
+
+set(HOLYFITRA_RUNTIME_SOURCES
     nibbleflow_kernel.c
     holy_fitra_streamed_neon.c
     nibbleflow_android.cpp
     holy_fitra_dispatch.cpp
     holy_fitra_android_topology.cpp
     holy_fitra_runtime.cpp
-    holy_fitra_jni.cpp
 )
 
+set(HOLYFITRA_RUNTIME_WITH_JNI OFF)
+if(ANDROID)
+    # The Android NDK toolchain provides JNI headers through its sysroot.
+    list(APPEND HOLYFITRA_RUNTIME_SOURCES holy_fitra_jni.cpp)
+    set(HOLYFITRA_RUNTIME_WITH_JNI ON)
+elseif(HOLYFITRA_ENABLE_JNI)
+    find_package(JNI QUIET)
+    if(JNI_FOUND)
+        list(APPEND HOLYFITRA_RUNTIME_SOURCES holy_fitra_jni.cpp)
+        set(HOLYFITRA_RUNTIME_WITH_JNI ON)
+    else()
+        message(STATUS "JNI headers not found; building the host runtime without the Android JNI bridge")
+    endif()
+endif()
+
+add_library(holyfitra_runtime SHARED ${HOLYFITRA_RUNTIME_SOURCES})
+
 target_include_directories(holyfitra_runtime PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(HOLYFITRA_RUNTIME_WITH_JNI AND NOT ANDROID)
+    target_include_directories(holyfitra_runtime PRIVATE ${JNI_INCLUDE_DIRS})
+    target_link_libraries(holyfitra_runtime PRIVATE ${JNI_LIBRARIES})
+endif()
 target_compile_options(holyfitra_runtime PRIVATE
     -O3
     -ffunction-sections

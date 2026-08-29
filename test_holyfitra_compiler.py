@@ -11,7 +11,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, check_file, compile_native_file, emit_llvm, init_project, inspect_file, load_project, mobile_inspect_package, package_file, parse_native, test_project, validate_native
+from holyfitra_compiler import HolyFitraError, _MEMORY_COMPILE_CACHE, build, capabilities_report, check_file, compile_native_file, emit_llvm, init_project, inspect_file, load_project, mobile_inspect_package, package_file, parse_native, test_project as run_project_tests, validate_native
 
 
 class HolyFitraCompilerTests(unittest.TestCase):
@@ -703,7 +703,7 @@ fn main() -> i32 effects [io] {
             source = (root / "src" / "main.hf").read_text(encoding="utf-8")
             self.assertIn("effects [model, memory]", source)
             self.assertTrue((root / "ai" / "README.md").is_file())
-            self.assertEqual(test_project(root), 0)
+            self.assertEqual(run_project_tests(root), 0)
 
     def test_capabilities_report_has_explicit_evidence_boundaries(self):
         report = capabilities_report()
@@ -724,14 +724,14 @@ fn main() -> i32 effects [io] {
             root = Path(temporary) / "empty_project"
             init_project(root, "empty_project")
             (root / "tests" / "smoke.hf").unlink()
-            self.assertEqual(test_project(root), 1)
+            self.assertEqual(run_project_tests(root), 1)
 
     def test_cross_target_project_tests_are_rejected_before_execution(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "arm_project"
             init_project(root, "arm_project")
             with self.assertRaisesRegex(HolyFitraError, "requires an executable host target"):
-                test_project(root, "aarch64-linux-android21")
+                run_project_tests(root, "aarch64-linux-android21")
 
     def test_cli_test_runs_project_smoke_suite(self):
         root = Path(__file__).parent

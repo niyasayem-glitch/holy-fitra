@@ -116,7 +116,6 @@ Run the demonstrations:
 
 ```bash
 python3 holy_fitra_runtime.py
-python3 holy_fitra_fabric.py
 python3 holy_fitra_execution_plan.py
 ```
 
@@ -216,7 +215,6 @@ python3 -m unittest -v \
   test_hyperir.py \
   test_package.py \
   test_holy_fitra_runtime.py \
-  test_holy_fitra_fabric.py \
   test_holy_fitra_execution_plan.py \
   test_holy_fitra_ragged.py \
   test_holy_fitra_dynamic_prefill.py
@@ -247,7 +245,6 @@ python3 hyperc_proof_quant.py
 python3 hyperc_adaptive_speculative.py
 
 # 4. Run safety/execution-contract demonstrations
-python3 holy_fitra_fabric.py
 python3 holy_fitra_execution_plan.py
 
 # 5. Validate the native int4 path

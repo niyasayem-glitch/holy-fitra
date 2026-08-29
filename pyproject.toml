@@ -48,7 +48,6 @@ py-modules = [
   "hyperc_speculative",
   "hyperc_adaptive_speculative",
   "holy_fitra_runtime",
-  "holy_fitra_fabric",
   "holy_fitra_execution_plan",
   "nibbleflow",
 ]
