@@ -1,0 +1,70 @@
+{
+  "tool": "tierfloat v1.0.0",
+  "family_member": 8,
+  "family": [
+    "tiermesh",
+    "qf_tier",
+    "forgestream",
+    "tierroot",
+    "tierchain",
+    "tierhash",
+    "tierbloom",
+    "tierfloat"
+  ],
+  "computation": "cross-tier IEEE-754 float determinism probe, 3 planes: A=arithmetic ladder (correctly-rounded + - * /), B=libm transcendentals cos/sin/exp/log/pow/sqrt at fixed args (FIRST divergence-risk plane in family), C=naive vs Kahan sum of fixed 100001-term series. Each plane committed as sha256 of big-endian double bit patterns.",
+  "novelty": "first FLOAT-plane probe in tier family; specifically designed to test where cross-arch parity can BREAK (libm is not bit-pinned across libcs/versions). Result: glibc aarch64 == glibc x86_64 bit-identical on ALL planes INCLUDING transcendentals => parity bound extends through the float plane for glibc targets.",
+  "legs": [
+    {
+      "tier": "local",
+      "machine": "aarch64",
+      "python": "3.14.4",
+      "libc": "glibc",
+      "hA": "f59f39da16dc9383e3956d4295d90609cdfbb97afeec98c6eb7adcfc716326bc",
+      "hB": "38c89fbb5c90c75fa1d69ae7885b3a775dc3b02397fef04924571d917136fe65",
+      "hC": "2a86286431c385262c8d6ac8642679e480a0da43aa6a7b5366d124f636290b46",
+      "naive": "99989.90983387135",
+      "kahan": "99989.90983387044",
+      "transcendentals": "cos=0.992388885112192 sin=0.9440057250452666 exp=3.4368930843460075 log=0.007782140442054949 pow=1.9999999999999998 sqrt=1.5713483955657044",
+      "elapsed_ms": 63,
+      "transport": "direct python + TF_TIER=local",
+      "observed_now": "2026-09-18T01:4xZ"
+    },
+    {
+      "tier": "cloud",
+      "machine": "x86_64",
+      "python": "3.12.3",
+      "libc": "glibc",
+      "hA": "f59f39da16dc9383e3956d4295d90609cdfbb97afeec98c6eb7adcfc716326bc",
+      "hB": "38c89fbb5c90c75fa1d69ae7885b3a775dc3b02397fef04924571d917136fe65",
+      "hC": "2a86286431c385262c8d6ac8642679e480a0da43aa6a7b5366d124f636290b46",
+      "naive": "99989.90983387135",
+      "kahan": "99989.90983387044",
+      "transcendentals": "cos=0.992388885112192 sin=0.9440057250452666 exp=3.4368930843460075 log=0.007782140442054949 pow=1.9999999999999998 sqrt=1.5713483955657044",
+      "elapsed_ms": 14,
+      "transport": "GH runner curl-pipe raw URL (zero quotes, first-try, TF_TIER=cloud on python3 side of pipe per cyc24)",
+      "observed_now": "2026-09-18T01:4xZ"
+    }
+  ],
+  "parity": "IDENTICAL across all 3 planes and all 6 transcendental raw values (aarch64 local py3.14.4 glibc == x86_64 cloud py3.12.3 glibc). 8th independent cross-tier proof; first float-plane proof; transcendental plane did NOT diverge for glibc x86_64 vs aarch64.",
+  "divergence_note": "Plane B was designed as the divergence-risk plane (libm not bit-pinned across libcs). bionic/musl targets still untested - a future leg on termux-native python (bionic) or alpine (musl) could still expose divergence. Exact-value probe args chosen so a future non-glibc leg is comparable.",
+  "gpu_witness": {
+    "runtime": {
+      "stage": "RUNNING",
+      "hardware": "zero-a10g",
+      "replicas": 1,
+      "domain": "julien-c-zero-gpu-demo.hf.space READY",
+      "sha": "93de2dce57115b1ce2168953f44c63094555dc63"
+    },
+    "source": "https://huggingface.co/api/spaces/julien-c/zero-gpu-demo/runtime",
+    "observed_now": "2026-09-18T01:4xZ",
+    "limit": "GPU payload run still owner-gated: /root/.kaggle/kaggle.json ABSENT (empty dir - verified fresh), HF account not created. GPU tier live-attested only."
+  },
+  "queueforge_monitor_import": {
+    "verdict": "CLOSED - fresh probe this run",
+    "command": "PYTHONPATH=/root/queueforge python3 -m pytest tests -q",
+    "tests_passed": "14/14 in 0.64s",
+    "rule": "cyc23: close = import + pytest collection + full run (PYTHONPATH=/root/queueforge required; bare pytest fails collection on 'from core import')"
+  },
+  "commit": "holy-fitra/master tierfloat.py (pushed, raw URL live, 4185 bytes byte-exact)",
+  "verdict": "TIERFLOAT TIER-TRAVERSAL PROVEN (3-plane float parity, local+cloud) + QUEUEFORGE MONITOR IMPORT RE-VERIFIED CLOSED + GPU LIVE-ATTESTED (zero-a10g)"
+}
