@@ -1,0 +1,18 @@
+{
+  "tool": "tiercodec",
+  "version": "1.0.0",
+  "family_member": 11,
+  "plane": "compression-codec determinism (zlib levels 1/6/9, bz2 levels 1/9, lzma XZ presets 0/6 + FORMAT_ALONE) + integrity round-trip sub-plane (rt=1)",
+  "date": "2026-09-18",
+  "commits": ["c4687b4 tiercodec v1.0.0 (11th tier-family member)", "evidence commit: see git log"],
+  "raw_url_gate": {"sha256": "42d677744c48e773f8fe402f6ba8e486435a74c40c33df04155764135472127a", "local": "42d677744c48e773f8fe402f6ba8e486435a74c40c33df04155764135472127a", "raw": "42d677744c48e773f8fe402f6ba8e486435a74c40c33df04155764135472127a", "match": true},
+  "legs": {
+    "local": {"line": "TC|local|aarch64|3.14.4|glibc|95feab61c8da047f7f83d67adc684b0b5f069e27d3be6772314a13d222d7d33e|74bc8a5e98e23eb86a3e480c41b4cd575543a6614bb82e2ce46bd63db45cc31b|720b00627f44e15f2bb5c6184f1784a657b50529b42e21626073c1d5d51bcf2d|1|840", "hA": "95feab61c8da047f7f83d67adc684b0b5f069e27d3be6772314a13d222d7d33e", "hB": "74bc8a5e98e23eb86a3e480c41b4cd575543a6614bb82e2ce46bd63db45cc31b", "hC": "720b00627f44e15f2bb5c6184f1784a657b50529b42e21626073c1d5d51bcf2d", "rt": 1, "elapsed_ms": 840},
+    "cloud": {"line": "TC|cloud|x86_64|3.12.3|glibc|95feab61c8da047f7f83d67adc684b0b5f069e27d3be6772314a13d222d7d33e|74bc8a5e98e23eb86a3e480c41b4cd575543a6614bb82e2ce46bd63db45cc31b|720b00627f44e15f2bb5c6184f1784a657b50529b42e21626073c1d5d51bcf2d|1|232", "hA": "95feab61c8da047f7f83d67adc684b0b5f069e27d3be6772314a13d222d7d33e", "hB": "74bc8a5e98e23eb86a3e480c41b4cd575543a6614bb82e2ce46bd63db45cc31b", "hC": "720b00627f44e15f2bb5c6184f1784a657b50529b42e21626073c1d5d51bcf2d", "rt": 1, "elapsed_ms": 232},
+    "parity": {"result": "FULL 3-PLANE CROSS-ARCH PARITY FIRST-TRY (divergence-risk codec plane holds byte-identical: zlib/bz2/lzma linked C libs aligned)", "hA_equal": true, "hB_equal": true, "hC_equal": true, "rt_equal": true, "root": "40a803b9570201a3fec96d5bcebfad16c7897cb7ac9a291673371002e75f8957"},
+    "gpu": {"attestation": "ZeroGPU julien-c/zero-gpu-demo runtime RUNNING hardware zero-a10g replicas 1 domain READY [observed-now 2026-09-18 ~11:2xZ]", "full_code_run": "owner-gated (no kaggle.json - dir empty, VERIFY-BEFORE-DECIDE)"}
+  },
+  "queueforge": {"import": "rc=0 IMPORT-OK", "pytest": "14 passed in 1.61s", "closure": "CLOSED fresh [observed] via PYTHONPATH=/root/queueforge"},
+  "transport": {"method": "raw-URL curl-pipe (zero quotes, env on python3 side of pipe per cyc24)", "leg_label": "TC_TIER=cloud applied to python3, dispatched via cloud run (cyc26: pipe must cross dispatch boundary)"},
+  "notes": {"resolv.conf": "8.8.8.8 silent DNS death -> 1.1.1.1 fixed (cycG2 known), raw runtime probe then HTTP 200"}
+}
