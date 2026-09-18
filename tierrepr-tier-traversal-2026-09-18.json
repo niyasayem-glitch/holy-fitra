@@ -1,0 +1,17 @@
+{
+  "tool": "tierrepr",
+  "version": "1.0.0",
+  "family_member": 10,
+  "plane": "representation/canonical-encoding determinism (float repr, canonical JSON, Decimal/Fraction/struct/base64/itertools/unicode_escape)",
+  "date": "2026-09-18",
+  "commits": ["c23aff7 tierrepr v1.0.0 (script)", "evidence commit: see git log"],
+  "raw_url_gate": {"sha256": "05249ce29b5ff1762a0646f0f691618aee8a94e03a32f33b18833da3e7ec0204", "local": "05249ce29b5ff1762a0646f0f691618aee8a94e03a32f33b18833da3e7ec0204", "raw": "05249ce29b5ff1762a0646f0f691618aee8a94e03a32f33b18833da3e7ec0204", "match": true},
+  "legs": {
+    "local": {"line": "89|local|aarch64|3.14.4|glibc|f1716914ba1ad81e33e2201b5d31a5ac3e8eb7d98d8df0ceda68f1dbc063c9f8|eddf6789f638082b3d0512f2b6d23a5560867f71f7a300a54ae9ffe0bb941dfd|539f2e9c6ab104201436111df1fb29fefa941712cde001762861f18cc41faa1a|b67917204f7412ac5cbb7fd403511d20469d0d6edeb2377ac5d137e8bcad1250|18", "hA": "f1716914ba1ad81e33e2201b5d31a5ac3e8eb7d98d8df0ceda68f1dbc063c9f8", "hB": "eddf6789f638082b3d0512f2b6d23a5560867f71f7a300a54ae9ffe0bb941dfd", "hC": "539f2e9c6ab104201436111df1fb29fefa941712cde001762861f18cc41faa1a", "root": "b67917204f7412ac5cbb7fd403511d20469d0d6edeb2377ac5d137e8bcad1250", "elapsed_ms": 18},
+    "cloud": {"line": "89|cloud|x86_64|3.12.3|glibc|f1716914ba1ad81e33e2201b5d31a5ac3e8eb7d98d8df0ceda68f1dbc063c9f8|eddf6789f638082b3d0512f2b6d23a5560867f71f7a300a54ae9ffe0bb941dfd|539f2e9c6ab104201436111df1fb29fefa941712cde001762861f18cc41faa1a|b67917204f7412ac5cbb7fd403511d20469d0d6edeb2377ac5d137e8bcad1250|6", "hA": "f1716914ba1ad81e33e2201b5d31a5ac3e8eb7d98d8df0ceda68f1dbc063c9f8", "hB": "eddf6789f638082b3d0512f2b6d23a5560867f71f7a300a54ae9ffe0bb941dfd", "hC": "539f2e9c6ab104201436111df1fb29fefa941712cde001762861f18cc41faa1a", "root": "b67917204f7412ac5cbb7fd403511d20469d0d6edeb2377ac5d137e8bcad1250", "elapsed_ms": 6},
+    "parity": {"result": "FULL 3-PLANE CROSS-ARCH PARITY FIRST-TRY", "hA_equal": true, "hB_equal": true, "hC_equal": true, "root_equal": true},
+    "gpu": {"attestation": "ZeroGPU julien-c/zero-gpu-demo runtime RUNNING hardware zero-a10g [observed 2026-09-18]", "full_code_run": "owner-gated (no kaggle.json)"}
+  },
+  "queueforge": {"import": "rc=0", "pytest": "14 passed in 0.36s", "closure": "CLOSED fresh [observed]", "delegate": "attempted delegate-first, worker slots full (capacity) -> solo fallback"},
+  "registry": {"tool": "tierrepr", "registered": true, "sandbox": "patch: forged() env-late fix (TIER read inside main), labels verified local+cloud"}
+}
