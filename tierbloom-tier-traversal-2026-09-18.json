@@ -1,0 +1,61 @@
+{
+  "tool": "tierbloom v1.0.0",
+  "family_member": 7,
+  "family": [
+    "tiermesh",
+    "qf_tier",
+    "forgestream",
+    "tierroot",
+    "tierchain",
+    "tierhash",
+    "tierbloom"
+  ],
+  "computation": "deterministic Bloom filter (m=131072 bits, k=7 sha256 double-hash funcs, 2000 items, seed=20260918) -> entire bit array sha256 root",
+  "novelty": "first DATA-STRUCTURE (membership plane) cross-tier parity probe; complements stream probe (forgestream) + commitment probes (tierroot/tierchain/tierhash)",
+  "legs": [
+    {
+      "tier": "local",
+      "machine": "aarch64",
+      "python": "3.14.4",
+      "root": "a07811c3069c8c263517b99b67e0d819b571f5989c1c566eb3e554d37499ad52",
+      "bits_set": 13304,
+      "items": 2000,
+      "m_bits": 131072,
+      "k": 7,
+      "elapsed_ms": 32,
+      "transport": "direct python",
+      "observed_now": "2026-09-18"
+    },
+    {
+      "tier": "cloud",
+      "machine": "x86_64",
+      "python": "3.12.3",
+      "root": "a07811c3069c8c263517b99b67e0d819b571f5989c1c566eb3e554d37499ad52",
+      "bits_set": 13304,
+      "items": 2000,
+      "m_bits": 131072,
+      "k": 7,
+      "elapsed_ms": 15,
+      "transport": "GH runner curl-pipe raw URL, TB_TIER=cloud on python3 side of pipe (zero quotes, zero backslashes, first-try)",
+      "observed_now": "2026-09-18"
+    }
+  ],
+  "parity": "IDENTICAL root a07811c3069c8c263517b99b67e0d819b571f5989c1c566eb3e554d37499ad52 + bits_set 13304 across archs (aarch64 local == x86_64 cloud) - 7th independent cross-tier proof",
+  "gpu_witness": {
+    "runtime": {
+      "stage": "RUNNING",
+      "hardware": "zero-a10g",
+      "replicas_current": 1,
+      "domain": "julien-c-zero-gpu-demo.hf.space READY",
+      "sha": "93de2dce57115b1ce2168953f44c63094555dc63",
+      "observed_now": "2026-09-18"
+    }
+  },
+  "queueforge_pending_task": {
+    "status": "CLOSED - re-verified fresh",
+    "import": "import-ok (core+monitor)",
+    "pytest": "14 passed in 0.50s with PYTHONPATH=/root/queueforge",
+    "observed_now": "2026-09-18"
+  },
+  "note": "transport gotcha: env prefix TB_TIER=cloud curl|python3 only applied to curl (printed unknown); moved env to python3 side of pipe -> clean tag. Zero-quote curl-pipe reconfirmed as only reliable GH path."
+}
