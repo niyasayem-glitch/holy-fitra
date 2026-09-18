@@ -1,0 +1,51 @@
+{
+  "tool": "tierdigest",
+  "version": "v1.0.0",
+  "family_member": 9,
+  "date": "2026-09-18",
+  "planes": {
+    "A": "HMAC-SHA256 chain 300 iters",
+    "B": "PBKDF2-HMAC-SHA256 10000 iters dklen=64",
+    "C": "SHA-256 of 1MiB xorshift64 stream"
+  },
+  "legs": {
+    "local": {
+      "line": "TD|local|aarch64|3.14.4|glibc|95ad9e0e0fa3227b1756df52eab6b922e59c770e16bc4ad0754f9698b3dd8d08|b4e5b94f71f4ce623711b8746b58fca2ad18ff80300c9f3ed8353607b9f4e4ff95e42fe5ce42c9aa9f3d1542ffb47738154d7d6c62be444d28ef1878c3d9a957|f29fb072131fcfc725b5ec446ad19960b2b1b4fd78a3cbf5867009111fe602e0|203",
+      "hA": "95ad9e0e0fa3227b1756df52eab6b922e59c770e16bc4ad0754f9698b3dd8d08",
+      "hB": "b4e5b94f71f4ce623711b8746b58fca2ad18ff80300c9f3ed8353607b9f4e4ff95e42fe5ce42c9aa9f3d1542ffb47738154d7d6c62be444d28ef1878c3d9a957",
+      "hC": "f29fb072131fcfc725b5ec446ad19960b2b1b4fd78a3cbf5867009111fe602e0",
+      "elapsed_ms": 203
+    },
+    "cloud": {
+      "line": "TD|cloud|x86_64|3.12.3|glibc|95ad9e0e0fa3227b1756df52eab6b922e59c770e16bc4ad0754f9698b3dd8d08|b4e5b94f71f4ce623711b8746b58fca2ad18ff80300c9f3ed8353607b9f4e4ff95e42fe5ce42c9aa9f3d1542ffb47738154d7d6c62be444d28ef1878c3d9a957|f29fb072131fcfc725b5ec446ad19960b2b1b4fd78a3cbf5867009111fe602e0|71",
+      "hA": "95ad9e0e0fa3227b1756df52eab6b922e59c770e16bc4ad0754f9698b3dd8d08",
+      "hB": "b4e5b94f71f4ce623711b8746b58fca2ad18ff80300c9f3ed8353607b9f4e4ff95e42fe5ce42c9aa9f3d1542ffb47738154d7d6c62be444d28ef1878c3d9a957",
+      "hC": "f29fb072131fcfc725b5ec446ad19960b2b1b4fd78a3cbf5867009111fe602e0",
+      "elapsed_ms": 71
+    },
+    "gpu": {
+      "witness": "huggingface.co/api/spaces/julien-c/zero-gpu-demo/runtime",
+      "stage": "RUNNING",
+      "hardware_current": "zero-a10g",
+      "hardware_requested": "zero-a10g",
+      "replicas": 1,
+      "domain": "julien-c-zero-gpu-demo.hf.space",
+      "domain_stage": "READY",
+      "note": "live attestation only; full GPU code-run owner-gated (no kaggle key)"
+    }
+  },
+  "verdict": {
+    "parity": "FULL 3-PLANE CROSS-ARCH PARITY",
+    "hA_identical": true,
+    "hB_identical": true,
+    "hC_identical": true,
+    "byte_exact_gate_sha16": "5c7bff1b3835480b",
+    "archs": ["aarch64 (py3.14.4 glibc)", "x86_64 (py3.12.3 glibc)"],
+    "libc": "glibc both legs (OpenSSL-backed stdlib hashlib, RFC-standardized algorithms)"
+  },
+  "commit": "574dd45",
+  "queueforge_monitor": {
+    "import": "OK (PYTHONPATH=/root/queueforge)",
+    "pytest": "14 passed in 0.40s"
+  }
+}
