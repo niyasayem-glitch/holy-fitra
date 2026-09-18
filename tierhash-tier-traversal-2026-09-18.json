@@ -1,0 +1,59 @@
+{
+  "tool": "tierhash v1.0.0",
+  "family_member": 6,
+  "family": [
+    "tiermesh",
+    "qf_tier",
+    "forgestream",
+    "tierroot",
+    "tierchain",
+    "tierhash"
+  ],
+  "computation": "SHA-256 hash chain L=500 seed=20260918 (stdlib only)",
+  "legs": [
+    {
+      "tier": "local",
+      "machine": "aarch64",
+      "python": "3.14.4",
+      "root": "dfbdf6a8dd506ca4ef1499705d15d43ade897d0c727aa7bbf61ab71751aa0d80",
+      "elapsed_ms": 1,
+      "transport": "direct python",
+      "observed_now": "2026-09-18"
+    },
+    {
+      "tier": "cloud",
+      "machine": "x86_64",
+      "python": "3.12.3",
+      "root": "dfbdf6a8dd506ca4ef1499705d15d43ade897d0c727aa7bbf61ab71751aa0d80",
+      "elapsed_ms": 0,
+      "transport": "GH runner curl-pipe raw URL (zero quotes, first-try)",
+      "observed_now": "2026-09-18"
+    }
+  ],
+  "parity": "IDENTICAL root across archs (aarch64 local == x86_64 cloud) - 6th independent cross-tier proof",
+  "gpu_witness": {
+    "runtime": {
+      "stage": "RUNNING",
+      "hardware": "zero-a10g",
+      "replicas": 1,
+      "domain": "julien-c-zero-gpu-demo.hf.space READY",
+      "sha": "93de2dce57115b1ce2168953f44c63094555dc63"
+    },
+    "source": "https://huggingface.co/api/spaces/julien-c/zero-gpu-demo/runtime",
+    "observed_now": "2026-09-18",
+    "limit": "GPU full code-run still owner-gated (kaggle key / HF account)"
+  },
+  "queueforge_monitor_import": {
+    "import": "ok rc=0",
+    "tests_collected": 14,
+    "tests_passed": "14/14 in 1.50s",
+    "finding": "collection fails WITHOUT PYTHONPATH=/root/queueforge (tests do 'from core import'); with it: full pass. Pending HANDOFF task genuinely closed incl. pytest run"
+  },
+  "delegation": {
+    "strategy": "delegate-first",
+    "attempt": "forge_delegate_task slot-blocked (2 workers running - capacity, not flake)",
+    "fallback": "solo verify (30s)"
+  },
+  "commit": "4b0e3bc holy-fitra/master (tierhash.py)",
+  "verdict": "TIERHASH TIER-TRAVERSAL PROVEN + QUEUEFORGE MONITOR IMPORT FULLY CLOSED"
+}
